@@ -11,6 +11,7 @@ import { createServer, type IncomingMessage, type ServerResponse, type Server } 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,10 +60,22 @@ export interface HttpServerOptions {
    * plug in OAuth JWT expiry checks.
    */
   validateBearerToken?: (token: string) => boolean;
+  /**
+   * Factory for a fresh MCP server. When provided, /mcp runs statelessly:
+   * every POST gets its own server + transport pair, so any number of clients
+   * can connect and reconnect, and a redeploy never strands a session. GET and
+   * DELETE return 405 (no standalone SSE stream, no sessions to terminate).
+   *
+   * Without it, callers connect a single server to the returned `transport`,
+   * which accepts exactly one `initialize` for the lifetime of the process —
+   * every later client is rejected with "Server already initialized".
+   */
+  createMcpServer?: () => McpServer;
 }
 
 export interface HttpServerResult {
   server: Server;
+  /** Shared transport — only used when `createMcpServer` is not supplied */
   transport: StreamableHTTPServerTransport;
   /** Gracefully close the server and drain connections */
   close: () => Promise<void>;
@@ -196,6 +209,7 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     mcpRateLimit = { windowMs: 60_000, max: 100 },
     sseReauthIntervalMs = 5 * 60 * 1000,
     validateBearerToken,
+    createMcpServer,
   } = options;
 
   if (!authToken) {
@@ -252,11 +266,10 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     sseTimer.unref();
   }
 
- // Create the SDK transport (stateful with session IDs, plain JSON responses)
- const transport = new StreamableHTTPServerTransport({
-   sessionIdGenerator: () => randomUUID(),
-   enableJsonResponse: true,
- });
+  // Create the SDK transport (stateful with session IDs)
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+  });
 
   // Create HTTP server
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -318,6 +331,13 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
         return;
       }
 
+      // Stateless mode serves POST only
+      if (createMcpServer && req.method !== "POST") {
+        res.setHeader("Allow", "POST");
+        sendJson(res, 405, { error: "Method Not Allowed" });
+        return;
+      }
+
       // Connection limit check
       if (activeConnections >= maxConnections) {
         sendJson(res, 503, {
@@ -353,6 +373,19 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
 
       // Delegate to SDK transport
       try {
+        if (createMcpServer) {
+          const requestServer = createMcpServer();
+          const requestTransport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: undefined,
+            enableJsonResponse: true,
+          });
+          res.on("close", () => {
+            void requestServer.close();
+          });
+          await requestServer.connect(requestTransport);
+          await requestTransport.handleRequest(req, res, parsedBody);
+          return;
+        }
         await transport.handleRequest(req, res, parsedBody);
       } catch (error: unknown) {
         // If response hasn't been sent yet

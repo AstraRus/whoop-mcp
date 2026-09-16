@@ -457,8 +457,14 @@ describe("main() entry point", () => {
           port: 4001,
         })
       );
-      // server.connect was called with the http transport
-      expect(mockConnect).toHaveBeenCalledWith({ _http: true });
+      // HTTP builds a fresh server per request instead of connecting a shared one
+      expect(mockConnect).not.toHaveBeenCalled();
+      const [{ createMcpServer }] = mockCreateHttpServer.mock.calls[0] as [
+        { createMcpServer: () => unknown },
+      ];
+      const serversBefore = mockCreateWhoopServer.mock.calls.length;
+      expect(createMcpServer()).toEqual({ connect: mockConnect });
+      expect(mockCreateWhoopServer).toHaveBeenCalledTimes(serversBefore + 1);
     });
 
     it("MCP_TRANSPORT=both starts both stdio AND HTTP", async () => {
@@ -472,8 +478,8 @@ describe("main() entry point", () => {
 
       expect(MockStdioServerTransport).toHaveBeenCalledOnce();
       expect(mockCreateHttpServer).toHaveBeenCalledOnce();
-      // server.connect called for both transports
-      expect(mockConnect).toHaveBeenCalledTimes(2);
+      // server.connect called once for stdio; HTTP creates servers per request
+      expect(mockConnect).toHaveBeenCalledTimes(1);
     });
 
     it("uses default port 3000 when MCP_PORT is unset", async () => {

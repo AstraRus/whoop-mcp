@@ -143,4 +143,49 @@ describe("HTTP transport — MCP integration", () => {
     const body = (await r.json()) as { issuer: string };
     expect(body.issuer).toMatch(/^https:\/\/example\.com\/?$/);
   });
+
+  it("serves any number of clients and reconnects with createMcpServer", async () => {
+    const mockClient = makeMockWhoopClient();
+    const httpResult = await createHttpServer({
+      authToken: "test-bearer-token",
+      port: 0,
+      createMcpServer: () => createWhoopServer(mockClient).server,
+    });
+    const addr = httpResult.server.address();
+    if (!addr || typeof addr === "string") throw new Error("server has no port");
+    const url = new URL(`http://127.0.0.1:${addr.port}/mcp`);
+
+    const clients: Client[] = [];
+    cleanup = async (): Promise<void> => {
+      await Promise.all(clients.map((c) => c.close().catch(() => {})));
+      await httpResult.close();
+    };
+
+    async function connectClient(): Promise<Client> {
+      const client = new Client({ name: "test-client", version: "0.0.0" }, { capabilities: {} });
+      clients.push(client);
+      await client.connect(
+        new StreamableHTTPClientTransport(url, {
+          requestInit: { headers: { Authorization: "Bearer test-bearer-token" } },
+        })
+      );
+      return client;
+    }
+
+    // A shared transport rejects the second initialize with
+    // "Server already initialized" — every client here must succeed.
+    const first = await connectClient();
+    expect((await first.listTools()).tools.map((t) => t.name)).toContain("get_profile");
+    await first.close();
+
+    const [a, b] = await Promise.all([connectClient(), connectClient()]);
+    expect((await a.callTool({ name: "get_profile", arguments: {} })).isError).not.toBe(true);
+    expect((await b.listTools()).tools.length).toBeGreaterThanOrEqual(6);
+
+    // No standalone SSE stream in stateless mode
+    const get = await fetch(url, {
+      headers: { Authorization: "Bearer test-bearer-token", Accept: "text/event-stream" },
+    });
+    expect(get.status).toBe(405);
+  }, 15_000);
 });

@@ -224,8 +224,10 @@ export async function main(): Promise<void> {
       trustProxy,
       healthCheck,
       oauthHandler,
+      // A fresh server per request — a single shared server/transport can only
+      // ever be initialized once, which locks out every reconnecting client.
+      createMcpServer: () => createWhoopServer(client, { disableResources, privacyMode }).server,
     });
-    await server.connect(httpResult.transport);
     httpResults.push(httpResult);
 
     logger.info("http transport listening", {
