@@ -141,7 +141,7 @@ export async function getBaselines(
       timestamp: night.end,
       offset: night.timezone_offset,
     });
-    if (night.score?.respiratory_rate !== undefined)
+    if (typeof night.score?.respiratory_rate === "number")
       observations.respiratory_rate.push({
         value: night.score.respiratory_rate,
         timestamp: night.end,

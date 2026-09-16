@@ -8,7 +8,7 @@
 import type { WhoopClient } from "../api/client.js";
 import type { WorkoutCollection } from "../api/types.js";
 import { ENDPOINT_WORKOUT } from "../api/endpoints.js";
-import { buildCollectionQuery } from "./collection-utils.js";
+import { buildLocalCollectionQuery } from "./collection-utils.js";
 import type { CollectionParams } from "./collection-utils.js";
 
 /**
@@ -22,6 +22,6 @@ export async function getWorkoutCollection(
   client: WhoopClient,
   params: CollectionParams
 ): Promise<WorkoutCollection> {
-  const query = buildCollectionQuery(params);
+  const query = await buildLocalCollectionQuery(client, params);
   return client.get<WorkoutCollection>(`${ENDPOINT_WORKOUT}${query}`);
 }

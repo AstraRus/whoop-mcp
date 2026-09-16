@@ -16,8 +16,10 @@ const period = periodSchema.extend({ days: number });
 const direction = z.enum(["improving", "declining", "stable"]);
 const collection = <Schema extends z.ZodType>(
   record: Schema
-): z.ZodObject<{ records: z.ZodArray<Schema>; next_token: z.ZodOptional<z.ZodString> }> =>
-  z.object({ records: z.array(record), next_token: z.string().optional() });
+): z.ZodObject<{
+  records: z.ZodArray<Schema>;
+  next_token: z.ZodOptional<z.ZodNullable<z.ZodString>>;
+}> => z.object({ records: z.array(record), next_token: z.string().nullish() });
 const weekly = z.object({
   week_start: z.string(),
   week_end: z.string(),

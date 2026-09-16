@@ -168,7 +168,7 @@ export async function getToday(
     );
   }
 
-  function unpack<T>(result: PromiseSettledResult<{ records: T[]; next_token?: string }>): {
+  function unpack<T>(result: PromiseSettledResult<{ records: T[]; next_token?: string | null }>): {
     records: T[];
     quality: SourceQuality;
   } {

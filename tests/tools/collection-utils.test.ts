@@ -137,10 +137,17 @@ describe("buildCollectionQuery", () => {
       expect(params.get("start")).toBe("2026-05-21T00:00:00.000Z");
     });
 
-    it("passes through ISO 8601 strings unchanged", () => {
+    it("passes through ISO 8601 UTC timestamps unchanged", () => {
       const query = buildCollectionQuery({ start: "2026-04-01T00:00:00.000Z" });
       const params = new URLSearchParams(query.slice(1));
       expect(params.get("start")).toBe("2026-04-01T00:00:00.000Z");
+    });
+
+    it("expands date-only start/end to full timestamps covering both days", () => {
+      const query = buildCollectionQuery({ start: "2026-09-13", end: "2026-09-16" }, "+02:00");
+      const params = new URLSearchParams(query.slice(1));
+      expect(params.get("start")).toBe("2026-09-12T22:00:00.000Z");
+      expect(params.get("end")).toBe("2026-09-16T21:59:59.999Z");
     });
 
     it("throws InvalidDateExpression for unrecognized expressions", () => {

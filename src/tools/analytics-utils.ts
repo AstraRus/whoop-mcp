@@ -3,6 +3,7 @@ import { offsetSchema } from "../api/record-schemas.js";
 import type { Sleep } from "../api/types.js";
 import type { WhoopClient } from "../api/client.js";
 import { fetchAllPages, ABSOLUTE_MAX_RECORDS } from "../api/pagination.js";
+import { parseUtcOffset } from "./date-utils.js";
 
 export const DISCLAIMER = "Statistical observation from your data, not medical advice.";
 export const DAY_MS = 86_400_000;
@@ -57,9 +58,7 @@ export function exclude(quality: SourceQuality, reason: string): void {
 
 export function localTime(timestamp: string, offset: string): Date {
   offsetSchema.parse(offset);
-  const minutes =
-    (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6))) * (offset[0] === "-" ? -1 : 1);
-  return new Date(Date.parse(timestamp) + minutes * 60_000);
+  return new Date(Date.parse(timestamp) + parseUtcOffset(offset) * 60_000);
 }
 
 export function localDay(timestamp: string, offset: string): string {
@@ -107,7 +106,7 @@ export async function loadAnalyticsSource<T>(
   const query = new URLSearchParams({ ...period, limit: "25" });
   const pageSchema = z.object({
     records: z.array(z.unknown()),
-    next_token: z.string().max(4096).optional(),
+    next_token: z.string().max(4096).nullish(),
   });
   const validatedClient: WhoopClient = {
     get: async <Result>(path: string): Promise<Result> =>

@@ -213,10 +213,10 @@ export async function getWeeklySummary(
   const sleepDurations = scoredSleeps.map(sleepDurationHours);
   const sleepPerformances = scoredSleeps
     .map((s) => s.score!.sleep_performance_percentage)
-    .filter((v): v is number => v !== undefined);
+    .filter((v): v is number => typeof v === "number");
   const sleepEfficiencies = scoredSleeps
     .map((s) => s.score!.sleep_efficiency_percentage)
-    .filter((v): v is number => v !== undefined);
+    .filter((v): v is number => typeof v === "number");
 
   const sleep = {
     average_duration_hours: sleepDurations.length > 0 ? mean(sleepDurations) : 0,

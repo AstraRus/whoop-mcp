@@ -8,7 +8,7 @@
 import type { WhoopClient } from "../api/client.js";
 import type { CycleCollection } from "../api/types.js";
 import { ENDPOINT_CYCLE } from "../api/endpoints.js";
-import { buildCollectionQuery } from "./collection-utils.js";
+import { buildLocalCollectionQuery } from "./collection-utils.js";
 import type { CollectionParams } from "./collection-utils.js";
 
 /**
@@ -22,6 +22,6 @@ export async function getCycleCollection(
   client: WhoopClient,
   params: CollectionParams
 ): Promise<CycleCollection> {
-  const query = buildCollectionQuery(params);
+  const query = await buildLocalCollectionQuery(client, params);
   return client.get<CycleCollection>(`${ENDPOINT_CYCLE}${query}`);
 }

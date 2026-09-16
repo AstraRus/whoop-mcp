@@ -15,7 +15,7 @@ export type ScoreState = "SCORED" | "PENDING_SCORE" | "UNSCORABLE";
 /** Generic paginated response shape used by all collection endpoints */
 export interface PaginatedResponse<T> {
   records: T[];
-  next_token?: string;
+  next_token?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -47,8 +47,8 @@ export interface RecoveryScore {
   recovery_score: number;
   resting_heart_rate: number;
   hrv_rmssd_milli: number;
-  spo2_percentage?: number;
-  skin_temp_celsius?: number;
+  spo2_percentage?: number | null;
+  skin_temp_celsius?: number | null;
 }
 
 /** A single recovery record */
@@ -93,10 +93,10 @@ export interface SleepNeeded {
 export interface SleepScore {
   stage_summary: SleepStageSummary;
   sleep_needed: SleepNeeded;
-  respiratory_rate?: number;
-  sleep_performance_percentage?: number;
-  sleep_consistency_percentage?: number;
-  sleep_efficiency_percentage?: number;
+  respiratory_rate?: number | null;
+  sleep_performance_percentage?: number | null;
+  sleep_consistency_percentage?: number | null;
+  sleep_efficiency_percentage?: number | null;
 }
 
 /** A single sleep record */
@@ -111,7 +111,7 @@ export interface Sleep {
   timezone_offset: string;
   nap: boolean;
   score_state: ScoreState;
-  v1_id?: number;
+  v1_id?: number | null;
   score?: SleepScore | null;
 }
 
@@ -168,9 +168,9 @@ export interface WorkoutScore {
   kilojoule: number;
   percent_recorded: number;
   zone_durations: ZoneDurations;
-  distance_meter?: number;
-  altitude_gain_meter?: number;
-  altitude_change_meter?: number;
+  distance_meter?: number | null;
+  altitude_gain_meter?: number | null;
+  altitude_change_meter?: number | null;
 }
 
 /** A single workout record (maps to OpenAPI WorkoutV2) */
@@ -184,9 +184,9 @@ export interface Workout {
   timezone_offset: string;
   sport_name: string;
   score_state: ScoreState;
-  v1_id?: number;
+  v1_id?: number | null;
   score?: WorkoutScore | null;
-  sport_id?: number;
+  sport_id?: number | null;
 }
 
 /** GET /v2/activity/workout — paginated */

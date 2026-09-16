@@ -158,7 +158,7 @@ const METRIC_CONFIGS: Record<TrendMetric, MetricConfig> = {
       const scored = typed.filter(
         (s) =>
           s.score_state === "SCORED" &&
-          s.score?.sleep_performance_percentage !== undefined &&
+          typeof s.score?.sleep_performance_percentage === "number" &&
           !s.nap
       );
       return {

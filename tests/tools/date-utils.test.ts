@@ -61,16 +61,82 @@ describe("resolveDateExpression", () => {
     expect(result).toEqual({ start: iso, end: iso });
   });
 
-  it("passes through ISO 8601 date-only strings unchanged", () => {
-    const iso = "2026-01-15";
-    const result = resolveDateExpression(iso);
-    expect(result).toEqual({ start: iso, end: iso });
+  it("expands ISO 8601 date-only strings to the whole day (WHOOP 404s on bare dates)", () => {
+    const result = resolveDateExpression("2026-01-15");
+    expect(result).toEqual({
+      start: "2026-01-15T00:00:00.000Z",
+      end: "2026-01-15T23:59:59.999Z",
+    });
   });
 
-  it("passes through ISO 8601 with timezone offset", () => {
-    const iso = "2026-01-15T08:30:00+05:30";
-    const result = resolveDateExpression(iso);
-    expect(result).toEqual({ start: iso, end: iso });
+  it("normalizes ISO 8601 date-times with an offset to the same UTC instant", () => {
+    const result = resolveDateExpression("2026-01-15T08:30:00+05:30");
+    expect(result).toEqual({ start: "2026-01-15T03:00:00.000Z", end: "2026-01-15T03:00:00.000Z" });
+  });
+
+  it("accepts date-times without seconds", () => {
+    expect(resolveDateExpression("2026-01-15T08:30Z").start).toBe("2026-01-15T08:30:00.000Z");
+  });
+
+  it("rejects impossible calendar dates", () => {
+    expect(() => resolveDateExpression("2026-02-30")).toThrow(InvalidDateExpression);
+    expect(() => resolveDateExpression("2026-13-01T00:00:00Z")).toThrow(InvalidDateExpression);
+    expect(() => resolveDateExpression("2026-01-15T25:00:00Z")).toThrow(InvalidDateExpression);
+  });
+
+  // -------------------------------------------------------------------------
+  // Local calendar days (user UTC offset)
+  // -------------------------------------------------------------------------
+
+  describe("with the user's UTC offset", () => {
+    it("takes a date-only value as the whole local day", () => {
+      expect(resolveDateExpression("2026-09-13", FIXED_NOW, "+02:00")).toEqual({
+        start: "2026-09-12T22:00:00.000Z",
+        end: "2026-09-13T21:59:59.999Z",
+      });
+    });
+
+    it("reads a zone-less date-time as local time", () => {
+      expect(resolveDateExpression("2026-09-13T08:00:00", FIXED_NOW, "-05:00").start).toBe(
+        "2026-09-13T13:00:00.000Z"
+      );
+    });
+
+    it("keeps a zoned date-time's instant regardless of the user offset", () => {
+      expect(resolveDateExpression("2026-09-13T08:00:00Z", FIXED_NOW, "+02:00").start).toBe(
+        "2026-09-13T08:00:00.000Z"
+      );
+    });
+
+    it('resolves "today" to local midnight boundaries', () => {
+      expect(resolveDateExpression("today", FIXED_NOW, "+02:00")).toEqual({
+        start: "2026-03-14T22:00:00.000Z",
+        end: "2026-03-15T21:59:59.999Z",
+      });
+    });
+
+    it('rolls "today" over at local midnight, not UTC midnight', () => {
+      // 23:30Z on the 15th is already 01:30 on the 16th at +02:00
+      const lateEvening = new Date("2026-03-15T23:30:00.000Z");
+      expect(resolveDateExpression("today", lateEvening, "+02:00").start).toBe(
+        "2026-03-15T22:00:00.000Z"
+      );
+      expect(resolveDateExpression("yesterday", lateEvening, "+02:00").start).toBe(
+        "2026-03-14T22:00:00.000Z"
+      );
+    });
+
+    it('resolves "this week" from the local Monday', () => {
+      // Sunday 23:30 at -05:00 is Monday 04:30Z; the local week still started last Monday
+      const sundayNight = new Date("2026-03-16T04:30:00.000Z");
+      expect(resolveDateExpression("this week", sundayNight, "-05:00").start).toBe(
+        "2026-03-09T05:00:00.000Z"
+      );
+    });
+
+    it("rejects malformed offsets", () => {
+      expect(() => resolveDateExpression("today", FIXED_NOW, "+2")).toThrow(InvalidDateExpression);
+    });
   });
 
   // -------------------------------------------------------------------------

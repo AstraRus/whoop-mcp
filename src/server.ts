@@ -85,13 +85,13 @@ const collectionInputSchema = z.object({
     .string()
     .optional()
     .describe(
-      'Return records after this time (inclusive). ISO 8601 format or relative expression (e.g. "today", "last 7 days", "this week").'
+      'Return records that occurred at or after this time. A date (YYYY-MM-DD) or relative expression (e.g. "today", "yesterday", "last 7 days", "this week") starts at local midnight; a date-time may include an offset.'
     ),
   end: z
     .string()
     .optional()
     .describe(
-      "Return records before this time (exclusive). ISO 8601 format or relative expression. Defaults to now."
+      "Return records before this time. A date (YYYY-MM-DD) or relative expression includes that whole local day. Defaults to now."
     ),
   limit: z
     .number()
@@ -100,7 +100,12 @@ const collectionInputSchema = z.object({
     .max(25)
     .optional()
     .describe("Max records to return (1-25). Defaults to 10."),
-  nextToken: z.string().optional().describe("Pagination token from a previous response."),
+  nextToken: z
+    .string()
+    .optional()
+    .describe(
+      "The next_token from a previous response. A null or missing next_token means there are no more pages."
+    ),
 });
 
 // ---------------------------------------------------------------------------
@@ -142,6 +147,23 @@ function errorResponse(error: unknown): {
     isError: true,
     content: [{ type: "text" as const, text: message }],
   };
+}
+
+/** Maximum contract issues named in an error message */
+const MAX_CONTRACT_ISSUES = 5;
+
+/**
+ * Summarize output-contract failures by field path and zod's default message
+ * (which names types and limits, never input values) so failures can be
+ * diagnosed. Custom messages are reduced to their code.
+ */
+export function describeContractIssues(error: z.ZodError): string {
+  const described = error.issues.slice(0, MAX_CONTRACT_ISSUES).map((issue) => {
+    const path = issue.path.length ? issue.path.join(".") : "(root)";
+    return `${path}: ${issue.code === "custom" ? issue.code : issue.message}`;
+  });
+  const more = error.issues.length - described.length;
+  return more > 0 ? `${described.join("; ")}; +${more} more` : described.join("; ");
 }
 
 /** Wrap a tool handler with error-to-MCP-error conversion */
@@ -207,7 +229,10 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
           return {
             isError: true,
             content: [
-              { type: "text", text: "WHOOP data did not match the expected output contract." },
+              {
+                type: "text",
+                text: `WHOOP data did not match the expected output contract (${describeContractIssues(validated.error)}).`,
+              },
             ],
           };
         return jsonContent(
