@@ -434,7 +434,7 @@ function applyAuthorizePageHeaders(res: Response): void {
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader(
     "Content-Security-Policy",
-    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'"
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self' https://claude.ai; frame-ancestors 'none'; base-uri 'none'"
   );
   res.setHeader("Referrer-Policy", "no-referrer");
   res.setHeader("X-Content-Type-Options", "nosniff");
