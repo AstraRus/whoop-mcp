@@ -1,0 +1,160 @@
+{
+  "name": "get_recovery_collection",
+  "description": "Get recovery scores for a date range. Accepts ISO 8601 or relative dates (\"today\", \"last 7 days\", \"this week\"). Returns HRV, resting heart rate, SpO2, and skin temp per recovery. Records are raw WHOOP records, newest first, and can include neighbouring days: each recovery belongs to the morning of its cycle (cycle_id), and cycles begin the previous evening, so a window ending yesterday can still return today's recovery first. Check each record rather than taking the first; for one value per local day use get_calendar.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "start": {
+        "description": "Return records that began at or after this time or were still ongoing at it: WHOOP includes records overlapping the start, such as a cycle or sleep that began the previous evening. A date (YYYY-MM-DD) or relative expression (e.g. \"today\", \"yesterday\", \"last 7 days\", \"this week\") starts at local midnight of its first day; \"last N days\" is today plus the N previous days. A date-time may include an offset.",
+        "type": "string"
+      },
+      "end": {
+        "description": "Return records that began before this time (exclusive). A date (YYYY-MM-DD) or relative expression ends at the end of its last local day, so start and end \"yesterday\" (or \"last week\") cover that whole period. Defaults to now.",
+        "type": "string"
+      },
+      "limit": {
+        "description": "Max records to return (1-25). Defaults to 10.",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 25
+      },
+      "nextToken": {
+        "description": "The next_token from a previous response. A null or missing next_token means there are no more pages.",
+        "type": "string"
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "records": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "user_id": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "score_state": {
+              "type": "string",
+              "enum": [
+                "SCORED",
+                "PENDING_SCORE",
+                "UNSCORABLE"
+              ]
+            },
+            "cycle_id": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "sleep_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "user_calibrating": {
+                      "type": "boolean"
+                    },
+                    "recovery_score": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "resting_heart_rate": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "hrv_rmssd_milli": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "spo2_percentage": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "skin_temp_celsius": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "user_calibrating",
+                    "recovery_score",
+                    "resting_heart_rate",
+                    "hrv_rmssd_milli"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "user_id",
+            "created_at",
+            "updated_at",
+            "score_state",
+            "cycle_id",
+            "sleep_id"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      "next_token": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "records"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

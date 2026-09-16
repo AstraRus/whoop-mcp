@@ -1,0 +1,36 @@
+{
+  "name": "get_body_measurement",
+  "description": "Get the user's body measurements — height, weight, and max heart rate.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "height_meter": {
+        "type": "number"
+      },
+      "weight_kilogram": {
+        "type": "number"
+      },
+      "max_heart_rate": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "height_meter",
+      "weight_kilogram",
+      "max_heart_rate"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": {}
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

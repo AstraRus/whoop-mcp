@@ -30,6 +30,14 @@ import { fileURLToPath } from "node:url";
 import { resolve } from "node:path";
 import { realpathSync } from "node:fs";
 import { privacyModeSchema } from "./privacy.js";
+import {
+  createRateLimiter,
+  DEFAULT_RATE_LIMIT_PER_MINUTE,
+  MAX_RATE_LIMIT_PER_MINUTE,
+  MIN_RATE_LIMIT_PER_MINUTE,
+} from "./api/rate-limiter.js";
+import { HISTORY_CACHE_PREFIX } from "./api/history.js";
+import { createRuntimeStatus, packageVersion, readCommit } from "./runtime-status.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,6 +96,25 @@ function parseLogFormat(): "json" | "pretty" {
   throw new Error(`Invalid LOG_FORMAT: "${process.env.LOG_FORMAT}". Must be one of: json, pretty.`);
 }
 
+/**
+ * WHOOP_RATE_LIMIT_PER_MINUTE: WHOOP requests per minute the server allows
+ * itself (an integer 10-95; default 60, below WHOOP's limit of 100).
+ */
+export function parseRateLimitPerMinute(raw: string | undefined): number {
+  if (raw === undefined || raw.trim() === "") return DEFAULT_RATE_LIMIT_PER_MINUTE;
+  const value = raw.trim();
+  const n = /^\d+$/.test(value) ? Number(value) : Number.NaN;
+  if (!Number.isInteger(n) || n < MIN_RATE_LIMIT_PER_MINUTE || n > MAX_RATE_LIMIT_PER_MINUTE) {
+    throw new Error(
+      `Invalid WHOOP_RATE_LIMIT_PER_MINUTE: "${raw}". Must be an integer ${MIN_RATE_LIMIT_PER_MINUTE}-${MAX_RATE_LIMIT_PER_MINUTE}.`
+    );
+  }
+  return n;
+}
+
+/** Entries kept in the shared cache (API responses and history chunks). */
+const CACHE_MAX_ENTRIES = 500;
+
 function parseAllowedOrigins(): string[] {
   const raw = process.env.MCP_ALLOWED_ORIGINS;
   if (!raw) return [];
@@ -127,12 +154,24 @@ export function newestTokens(
 
 export async function main(): Promise<void> {
   const privacyMode = privacyModeSchema.parse(process.env.WHOOP_MCP_PRIVACY_MODE ?? "standard");
+  // Process-wide status (build, auth state, WHOOP request counters); never holds tokens.
+  const runtime = createRuntimeStatus({
+    version: packageVersion(),
+    commit: readCommit(process.env),
+    privacyMode,
+  });
   // 1. Parse transport + logging configuration
   const transportMode = parseTransport();
   const logger: Logger = createLogger({
     level: parseLogLevel(),
     format: parseLogFormat(),
   });
+  // Every WHOOP request of this process shares one limiter.
+  const rateLimiter = createRateLimiter({
+    perMinute: parseRateLimitPerMinute(process.env.WHOOP_RATE_LIMIT_PER_MINUTE),
+    logger,
+  });
+  runtime.attachLimiter(rateLimiter);
 
   // 2. Read WHOOP OAuth credentials (always required)
   const clientId = getRequiredEnv("WHOOP_CLIENT_ID");
@@ -149,15 +188,18 @@ export async function main(): Promise<void> {
   const accessToken = await authenticate(oauthConfig, {
     onTokens: (tokens) => {
       latestTokens = tokens;
+      runtime.setAccessTokenExpiry(tokens.expires_at);
     },
   });
   console.error("Authentication successful.");
   logger.info("whoop authentication complete");
 
   // 4. Create the WHOOP API client with automatic token refresh.
-  // A single process-wide cache is shared by the client (opt-in per request)
-  // and the MCP resources; it is cleared whenever tokens are refreshed.
-  const cache = new MemoryCache();
+  // A single process-wide cache is shared by the client (opt-in per request),
+  // the MCP resources and the history loader. A token refresh removes every
+  // entry except history chunks: it cannot change the WHOOP user (that takes a
+  // restart), and access tokens are refreshed about hourly.
+  const cache = new MemoryCache({ maxEntries: CACHE_MAX_ENTRIES });
 
   /**
    * WHOOP rejected `rejected`: make the stored tokens look expired so the next
@@ -199,7 +241,9 @@ export async function main(): Promise<void> {
       // Only a refusal of the refresh token itself means signing in again; a
       // network error or a transient 429/5xx leaves every token usable (and
       // the in-memory ones may be the only copy of a rotated refresh token).
-      if (error instanceof TokenRefreshError && error.rejected) {
+      const rejected = error instanceof TokenRefreshError && error.rejected;
+      runtime.recordRefresh(rejected ? "rejected" : "transient_failure");
+      if (rejected) {
         await markStoredTokensRejected(tokens);
       }
       throw error;
@@ -208,23 +252,32 @@ export async function main(): Promise<void> {
     // WHOOP has now invalidated the old refresh token: keep the new tokens in
     // memory first, so a failed save cannot lose them.
     latestTokens = newTokens;
+    runtime.setAccessTokenExpiry(newTokens.expires_at);
+    runtime.recordRefresh("ok");
     try {
       await saveTokens(newTokens);
     } catch (error: unknown) {
       logger.error("whoop token save failed", { code: errorCode(error) });
     }
 
-    cache.clear();
+    cache.deleteWhere((key) => !key.startsWith(HISTORY_CACHE_PREFIX));
     logger.info("whoop token refreshed");
 
     return newTokens.access_token;
   };
 
-  const client = createWhoopClient({ accessToken, onTokenRefresh, logger, cache });
+  const client = createWhoopClient({ accessToken, onTokenRefresh, logger, cache, rateLimiter });
 
   // 5. Create the MCP server with all WHOOP tools and resources
   const disableResources = process.env.WHOOP_MCP_DISABLE_RESOURCES === "1";
-  const { server } = createWhoopServer(client, { disableResources, privacyMode });
+  const serverOptions = {
+    disableResources,
+    privacyMode,
+    historyCache: cache,
+    runtimeStatus: runtime,
+    logger,
+  };
+  const { server } = createWhoopServer(client, serverOptions);
 
   // 6. Connect transports based on MCP_TRANSPORT mode
   const httpResults: HttpServerResult[] = [];
@@ -303,7 +356,7 @@ export async function main(): Promise<void> {
       oauthHandler,
       // A fresh server per request — a single shared server/transport can only
       // ever be initialized once, which locks out every reconnecting client.
-      createMcpServer: () => createWhoopServer(client, { disableResources, privacyMode }).server,
+      createMcpServer: () => createWhoopServer(client, serverOptions).server,
     });
     httpResults.push(httpResult);
 

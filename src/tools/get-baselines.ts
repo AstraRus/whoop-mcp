@@ -24,7 +24,7 @@ import {
   type SourceQuality,
 } from "./analytics-utils.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
-import { mean, median, percentile, standardDeviation } from "./stats-utils.js";
+import { mean, median, percentile, percentileRank, standardDeviation } from "./stats-utils.js";
 
 /** Earlier observations (besides the most recent one and today) a baseline needs. */
 export const BASELINE_MIN_SAMPLES = 14;
@@ -336,12 +336,7 @@ export async function getBaselines(
             p75: percentile(values, 75),
             p90: percentile(values, 90),
             latest: latest?.value ?? null,
-            latest_percentile: latest
-              ? (100 *
-                  (values.filter((value) => value < latest.value).length +
-                    0.5 * values.filter((value) => value === latest.value).length)) /
-                values.length
-              : null,
+            latest_percentile: latest ? percentileRank(values, latest.value) : null,
             constant_baseline: standardDeviation(values) === 0,
           };
   }

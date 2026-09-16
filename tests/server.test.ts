@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createWhoopServer } from "../src/server.js";
+import { ADDITIONAL_TOOLS, LEGACY_TOOL_NAMES } from "../src/tools/registry/index.js";
 import type { WhoopClient } from "../src/api/client.js";
 import { WhoopApiError, WhoopNetworkError, WhoopAuthError } from "../src/api/client.js";
 import type {
@@ -238,31 +239,34 @@ describe("createWhoopServer", () => {
     it("returns all registered tools", async () => {
       const result = await client.listTools();
 
-      expect(result.tools).toHaveLength(16);
+      expect(result.tools).toHaveLength(16 + ADDITIONAL_TOOLS.length);
     });
 
-    it("returns tools with the correct names", async () => {
+    it("returns the legacy tools with the correct names", async () => {
       const result = await client.listTools();
       const names = result.tools.map((t) => t.name).sort();
 
-      expect(names).toEqual([
-        "compare_periods",
-        "get_baselines",
-        "get_body_measurement",
-        "get_calendar",
-        "get_cycle_by_id",
-        "get_cycle_collection",
-        "get_profile",
-        "get_recovery_collection",
-        "get_sleep_by_id",
-        "get_sleep_collection",
-        "get_sleep_debt",
-        "get_today",
-        "get_trend",
-        "get_weekly_summary",
-        "get_workout_by_id",
-        "get_workout_collection",
-      ]);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "compare_periods",
+          "get_baselines",
+          "get_body_measurement",
+          "get_calendar",
+          "get_cycle_by_id",
+          "get_cycle_collection",
+          "get_profile",
+          "get_recovery_collection",
+          "get_sleep_by_id",
+          "get_sleep_collection",
+          "get_sleep_debt",
+          "get_today",
+          "get_trend",
+          "get_weekly_summary",
+          "get_workout_by_id",
+          "get_workout_collection",
+        ])
+      );
+      expect(names).toEqual(expect.arrayContaining([...LEGACY_TOOL_NAMES]));
     });
 
     it("every tool has a description", async () => {
@@ -997,21 +1001,18 @@ describe("createWhoopServer (resources)", () => {
     await cleanup();
   });
 
-  it("lists exactly 4 resources", async () => {
-    const result = await client.listResources();
-    expect(result.resources).toHaveLength(4);
-  });
-
-  it("lists resources with correct URIs", async () => {
+  it("lists the 4 legacy resources with correct URIs", async () => {
     const result = await client.listResources();
     const uris = result.resources.map((r) => r.uri).sort();
 
-    expect(uris).toEqual([
-      "whoop://v2/user/cycle/latest",
-      "whoop://v2/user/profile",
-      "whoop://v2/user/recovery/latest",
-      "whoop://v2/user/sleep/latest",
-    ]);
+    expect(uris).toEqual(
+      expect.arrayContaining([
+        "whoop://v2/user/cycle/latest",
+        "whoop://v2/user/profile",
+        "whoop://v2/user/recovery/latest",
+        "whoop://v2/user/sleep/latest",
+      ])
+    );
   });
 
   it("all resources have descriptions and mimeType", async () => {

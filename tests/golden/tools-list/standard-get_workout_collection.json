@@ -1,0 +1,254 @@
+{
+  "name": "get_workout_collection",
+  "description": "Get workout records for a date range. Accepts ISO 8601 or relative dates (\"today\", \"last 7 days\", \"this week\"). Returns strain, heart rate zones, calories (kilojoule), and sport type. score.percent_recorded is a 0-1 fraction (1 = fully recorded); distance and altitude are null for workouts without GPS. Records are raw WHOOP records, newest first, and include workouts still ongoing at the window start. For daily strain by local day use get_calendar.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "start": {
+        "description": "Return records that began at or after this time or were still ongoing at it: WHOOP includes records overlapping the start, such as a cycle or sleep that began the previous evening. A date (YYYY-MM-DD) or relative expression (e.g. \"today\", \"yesterday\", \"last 7 days\", \"this week\") starts at local midnight of its first day; \"last N days\" is today plus the N previous days. A date-time may include an offset.",
+        "type": "string"
+      },
+      "end": {
+        "description": "Return records that began before this time (exclusive). A date (YYYY-MM-DD) or relative expression ends at the end of its last local day, so start and end \"yesterday\" (or \"last week\") cover that whole period. Defaults to now.",
+        "type": "string"
+      },
+      "limit": {
+        "description": "Max records to return (1-25). Defaults to 10.",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 25
+      },
+      "nextToken": {
+        "description": "The next_token from a previous response. A null or missing next_token means there are no more pages.",
+        "type": "string"
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "records": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "user_id": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "score_state": {
+              "type": "string",
+              "enum": [
+                "SCORED",
+                "PENDING_SCORE",
+                "UNSCORABLE"
+              ]
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "timezone_offset": {
+              "type": "string",
+              "pattern": "^(?:Z|[+-](?:0\\d|1[0-4]):[0-5]\\d)$"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "sport_name": {
+              "type": "string",
+              "maxLength": 200
+            },
+            "sport_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "v1_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "strain": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 21
+                    },
+                    "average_heart_rate": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "max_heart_rate": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "kilojoule": {
+                      "type": "number",
+                      "minimum": 0
+                    },
+                    "percent_recorded": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 100
+                    },
+                    "zone_durations": {
+                      "type": "object",
+                      "properties": {
+                        "zone_zero_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "zone_one_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "zone_two_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "zone_three_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "zone_four_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "zone_five_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "zone_zero_milli",
+                        "zone_one_milli",
+                        "zone_two_milli",
+                        "zone_three_milli",
+                        "zone_four_milli",
+                        "zone_five_milli"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "distance_meter": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "altitude_gain_meter": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "altitude_change_meter": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "strain",
+                    "average_heart_rate",
+                    "max_heart_rate",
+                    "kilojoule",
+                    "percent_recorded",
+                    "zone_durations"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "user_id",
+            "created_at",
+            "updated_at",
+            "score_state",
+            "start",
+            "end",
+            "timezone_offset",
+            "id",
+            "sport_name"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      "next_token": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "records"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

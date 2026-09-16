@@ -13,6 +13,7 @@
 
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { PrivacyMode } from "../privacy.js";
 
 // ---------------------------------------------------------------------------
 // Shared text
@@ -80,10 +81,20 @@ function userMessage(text: string): {
 // Prompt definitions
 // ---------------------------------------------------------------------------
 
+/** Options for {@link registerPrompts}. */
+export interface RegisterPromptsOptions {
+  privacyMode: PrivacyMode;
+}
+
 /**
- * Register all MCP prompts on the server.
+ * Register all MCP prompts on the server. Aggregate mode has no prompts.
  */
-export function registerPrompts(server: McpServer): void {
+export function registerPrompts(
+  server: McpServer,
+  options: RegisterPromptsOptions = { privacyMode: "standard" }
+): void {
+  if (options.privacyMode !== "standard") return;
+
   // -------------------------------------------------------------------------
   // Prompt 1: weekly_health_review
   // -------------------------------------------------------------------------

@@ -1,0 +1,805 @@
+{
+  "tool": "get_sleep_debt",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "calibrating account",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-02T23:30:00.000+02:00",
+            "end": "2026-09-16T23:30:00.000+02:00"
+          },
+          "nights_analyzed": 2,
+          "status": "insufficient_data",
+          "nights_required": 3,
+          "total_debt_hours": null,
+          "avg_nightly_debt_hours": null,
+          "standing_debt_hours": 0.5856491666666667,
+          "standing_debt_date": "2026-09-16",
+          "consistency": {
+            "bedtime_std_dev_minutes": null,
+            "waketime_std_dev_minutes": null,
+            "social_jetlag_minutes": null
+          },
+          "nights": [
+            {
+              "date": "2026-09-16",
+              "needed_hours": 8.69628611111111,
+              "achieved_hours": 7.104303333333333,
+              "debt_hours": 1.591982777777777
+            },
+            {
+              "date": "2026-09-15",
+              "needed_hours": 8.1187175,
+              "achieved_hours": 6.1472911111111115,
+              "debt_hours": 1.9714263888888892
+            }
+          ],
+          "output_capped": false,
+          "truncated": false,
+          "summary": "Not enough data yet: 2 of 3 required scored main sleeps in this window, so deficit totals and bedtime/wake consistency are not calculated. Standing debt is WHOOP's own figure from the most recent night.",
+          "notes": [
+            "Not enough data yet: 2 of 3 required scored main sleeps in this window, so deficit totals and bedtime/wake consistency are not calculated."
+          ],
+          "disclaimer": "Statistical observation from your data, not medical advice.",
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-09-02T23:30:00.000+02:00",
+              "end": "2026-09-16T23:30:00.000+02:00"
+            },
+            "observed_period": {
+              "start": "2026-09-15T07:21:48.905+02:00",
+              "end": "2026-09-16T06:58:12.066+02:00"
+            },
+            "sources": {
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-16T05:01:40.207Z",
+                "cache_status": "unknown",
+                "records_fetched": 2,
+                "records_used": 2,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "sleep-debt-2",
+            "limitations": [
+              "One recorded offset cannot reconstruct within-sleep DST changes.",
+              "Deficit totals do not predict recovery or prescribe repayment."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "default window",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-02T22:30:00.000+01:00",
+            "end": "2026-09-16T22:30:00.000+01:00"
+          },
+          "nights_analyzed": 13,
+          "status": "available",
+          "nights_required": 3,
+          "total_debt_hours": 24.261688333333332,
+          "avg_nightly_debt_hours": 1.866283717948718,
+          "standing_debt_hours": 0.6984780555555555,
+          "standing_debt_date": "2026-09-15",
+          "consistency": {
+            "bedtime_std_dev_minutes": 49.77519504015352,
+            "waketime_std_dev_minutes": 36.250421612729276,
+            "social_jetlag_minutes": 32.018189233993326
+          },
+          "nights": [
+            {
+              "date": "2026-09-15",
+              "needed_hours": 8.371800833333333,
+              "achieved_hours": 7.049573333333333,
+              "debt_hours": 1.3222275000000003
+            },
+            {
+              "date": "2026-09-14",
+              "needed_hours": 8.15236611111111,
+              "achieved_hours": 8.0808275,
+              "debt_hours": 0.07153861111111048
+            },
+            {
+              "date": "2026-09-13",
+              "needed_hours": 8.582544444444444,
+              "achieved_hours": 5.842955555555555,
+              "debt_hours": 2.739588888888889
+            },
+            {
+              "date": "2026-09-12",
+              "needed_hours": 8.341759166666666,
+              "achieved_hours": 6.776175277777778,
+              "debt_hours": 1.565583888888888
+            },
+            {
+              "date": "2026-09-11",
+              "needed_hours": 8.029478611111111,
+              "achieved_hours": 6.617365833333333,
+              "debt_hours": 1.4121127777777778
+            },
+            {
+              "date": "2026-09-10",
+              "needed_hours": 8.217345833333333,
+              "achieved_hours": 6.460086111111111,
+              "debt_hours": 1.757259722222222
+            },
+            {
+              "date": "2026-09-09",
+              "needed_hours": 8.384919722222222,
+              "achieved_hours": 8.2320425,
+              "debt_hours": 0.15287722222222122
+            },
+            {
+              "date": "2026-09-08",
+              "needed_hours": 8.441099722222223,
+              "achieved_hours": 4.9578425,
+              "debt_hours": 3.483257222222223
+            },
+            {
+              "date": "2026-09-07",
+              "needed_hours": 8.2800725,
+              "achieved_hours": 6.512325833333334,
+              "debt_hours": 1.7677466666666657
+            },
+            {
+              "date": "2026-09-06",
+              "needed_hours": 8.359387222222223,
+              "achieved_hours": 4.445231944444444,
+              "debt_hours": 3.9141552777777786
+            },
+            {
+              "date": "2026-09-05",
+              "needed_hours": 8.05340611111111,
+              "achieved_hours": 6.683303888888889,
+              "debt_hours": 1.3701022222222212
+            },
+            {
+              "date": "2026-09-04",
+              "needed_hours": 8.320225555555556,
+              "achieved_hours": 5.569458611111111,
+              "debt_hours": 2.750766944444445
+            },
+            {
+              "date": "2026-09-03",
+              "needed_hours": 8.158145555555556,
+              "achieved_hours": 6.203674166666667,
+              "debt_hours": 1.9544713888888898
+            }
+          ],
+          "output_capped": false,
+          "truncated": false,
+          "summary": "Sum of observed nightly deficits, not outstanding debt. Social jetlag is a circular midpoint heuristic.",
+          "notes": [
+            "1 sleep is still being scored by WHOOP and not counted yet."
+          ],
+          "disclaimer": "Statistical observation from your data, not medical advice.",
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-09-02T22:30:00.000+01:00",
+              "end": "2026-09-16T22:30:00.000+01:00"
+            },
+            "observed_period": {
+              "start": "2026-09-03T05:59:12.017+01:00",
+              "end": "2026-09-15T06:24:04.918+01:00"
+            },
+            "sources": {
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 17,
+                "records_used": 13,
+                "exclusions": {
+                  "nap": 3,
+                  "pending": 1
+                },
+                "truncated": false
+              }
+            },
+            "method_version": "sleep-debt-2",
+            "limitations": [
+              "One recorded offset cannot reconstruct within-sleep DST changes.",
+              "Deficit totals do not predict recovery or prescribe repayment."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-08-17T22:30:00.000+01:00",
+            "end": "2026-09-16T22:30:00.000+01:00"
+          },
+          "nights_analyzed": 29,
+          "status": "available",
+          "nights_required": 3,
+          "total_debt_hours": 52.191998611111124,
+          "avg_nightly_debt_hours": 1.7997240900383147,
+          "standing_debt_hours": 0.6984780555555555,
+          "standing_debt_date": "2026-09-15",
+          "consistency": {
+            "bedtime_std_dev_minutes": 46.620941902459016,
+            "waketime_std_dev_minutes": 36.35402532081081,
+            "social_jetlag_minutes": 33.55554135168131
+          },
+          "nights": [
+            {
+              "date": "2026-09-15",
+              "needed_hours": 8.371800833333333,
+              "achieved_hours": 7.049573333333333,
+              "debt_hours": 1.3222275000000003
+            },
+            {
+              "date": "2026-09-14",
+              "needed_hours": 8.15236611111111,
+              "achieved_hours": 8.0808275,
+              "debt_hours": 0.07153861111111048
+            },
+            {
+              "date": "2026-09-13",
+              "needed_hours": 8.582544444444444,
+              "achieved_hours": 5.842955555555555,
+              "debt_hours": 2.739588888888889
+            },
+            {
+              "date": "2026-09-12",
+              "needed_hours": 8.341759166666666,
+              "achieved_hours": 6.776175277777778,
+              "debt_hours": 1.565583888888888
+            },
+            {
+              "date": "2026-09-11",
+              "needed_hours": 8.029478611111111,
+              "achieved_hours": 6.617365833333333,
+              "debt_hours": 1.4121127777777778
+            },
+            {
+              "date": "2026-09-10",
+              "needed_hours": 8.217345833333333,
+              "achieved_hours": 6.460086111111111,
+              "debt_hours": 1.757259722222222
+            },
+            {
+              "date": "2026-09-09",
+              "needed_hours": 8.384919722222222,
+              "achieved_hours": 8.2320425,
+              "debt_hours": 0.15287722222222122
+            },
+            {
+              "date": "2026-09-08",
+              "needed_hours": 8.441099722222223,
+              "achieved_hours": 4.9578425,
+              "debt_hours": 3.483257222222223
+            },
+            {
+              "date": "2026-09-07",
+              "needed_hours": 8.2800725,
+              "achieved_hours": 6.512325833333334,
+              "debt_hours": 1.7677466666666657
+            },
+            {
+              "date": "2026-09-06",
+              "needed_hours": 8.359387222222223,
+              "achieved_hours": 4.445231944444444,
+              "debt_hours": 3.9141552777777786
+            },
+            {
+              "date": "2026-09-05",
+              "needed_hours": 8.05340611111111,
+              "achieved_hours": 6.683303888888889,
+              "debt_hours": 1.3701022222222212
+            },
+            {
+              "date": "2026-09-04",
+              "needed_hours": 8.320225555555556,
+              "achieved_hours": 5.569458611111111,
+              "debt_hours": 2.750766944444445
+            },
+            {
+              "date": "2026-09-03",
+              "needed_hours": 8.158145555555556,
+              "achieved_hours": 6.203674166666667,
+              "debt_hours": 1.9544713888888898
+            },
+            {
+              "date": "2026-09-02",
+              "needed_hours": 8.376538055555555,
+              "achieved_hours": 7.713860555555556,
+              "debt_hours": 0.6626774999999991
+            },
+            {
+              "date": "2026-09-01",
+              "needed_hours": 8.300676666666666,
+              "achieved_hours": 6.3473580555555555,
+              "debt_hours": 1.9533186111111105
+            },
+            {
+              "date": "2026-08-31",
+              "needed_hours": 8.480565277777778,
+              "achieved_hours": 6.7788788888888885,
+              "debt_hours": 1.7016863888888896
+            },
+            {
+              "date": "2026-08-30",
+              "needed_hours": 7.8428869444444445,
+              "achieved_hours": 7.101818611111111,
+              "debt_hours": 0.7410683333333337
+            },
+            {
+              "date": "2026-08-29",
+              "needed_hours": 8.5138775,
+              "achieved_hours": 6.202460277777778,
+              "debt_hours": 2.3114172222222216
+            },
+            {
+              "date": "2026-08-28",
+              "needed_hours": 8.209580555555556,
+              "achieved_hours": 6.1934547222222225,
+              "debt_hours": 2.0161258333333336
+            },
+            {
+              "date": "2026-08-27",
+              "needed_hours": 8.456033611111112,
+              "achieved_hours": 6.4831658333333335,
+              "debt_hours": 1.972867777777778
+            },
+            {
+              "date": "2026-08-26",
+              "needed_hours": 8.32762138888889,
+              "achieved_hours": 3.7704722222222222,
+              "debt_hours": 4.557149166666667
+            },
+            {
+              "date": "2026-08-25",
+              "needed_hours": 8.209324444444444,
+              "achieved_hours": 6.070449166666666,
+              "debt_hours": 2.138875277777778
+            },
+            {
+              "date": "2026-08-24",
+              "needed_hours": 7.879949166666667,
+              "achieved_hours": 7.356578888888889,
+              "debt_hours": 0.5233702777777784
+            },
+            {
+              "date": "2026-08-23",
+              "needed_hours": 8.39780111111111,
+              "achieved_hours": 4.696285,
+              "debt_hours": 3.7015161111111112
+            },
+            {
+              "date": "2026-08-22",
+              "needed_hours": 8.270934722222222,
+              "achieved_hours": 6.833133888888889,
+              "debt_hours": 1.4378008333333332
+            },
+            {
+              "date": "2026-08-21",
+              "needed_hours": 8.409629444444445,
+              "achieved_hours": 7.949551111111111,
+              "debt_hours": 0.4600783333333336
+            },
+            {
+              "date": "2026-08-20",
+              "needed_hours": 8.433790555555555,
+              "achieved_hours": 7.293976944444444,
+              "debt_hours": 1.1398136111111112
+            },
+            {
+              "date": "2026-08-19",
+              "needed_hours": 8.46413,
+              "achieved_hours": 6.565865,
+              "debt_hours": 1.8982650000000012
+            },
+            {
+              "date": "2026-08-18",
+              "needed_hours": 7.907162222222222,
+              "achieved_hours": 7.192882222222222,
+              "debt_hours": 0.7142800000000005
+            }
+          ],
+          "output_capped": false,
+          "truncated": false,
+          "summary": "Sum of observed nightly deficits, not outstanding debt. Social jetlag is a circular midpoint heuristic.",
+          "notes": [
+            "1 sleep is still being scored by WHOOP and not counted yet."
+          ],
+          "disclaimer": "Statistical observation from your data, not medical advice.",
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-08-17T22:30:00.000+01:00",
+              "end": "2026-09-16T22:30:00.000+01:00"
+            },
+            "observed_period": {
+              "start": "2026-08-18T07:04:52.825+01:00",
+              "end": "2026-09-15T06:24:04.918+01:00"
+            },
+            "sources": {
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 35,
+                "records_used": 29,
+                "exclusions": {
+                  "nap": 5,
+                  "pending": 1
+                },
+                "truncated": false
+              }
+            },
+            "method_version": "sleep-debt-2",
+            "limitations": [
+              "One recorded offset cannot reconstruct within-sleep DST changes.",
+              "Deficit totals do not predict recovery or prescribe repayment."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "last week",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "last week"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-07T00:00:00.000+01:00",
+            "end": "2026-09-13T23:59:59.999+01:00"
+          },
+          "nights_analyzed": 7,
+          "status": "available",
+          "nights_required": 3,
+          "total_debt_hours": 12.878426388888887,
+          "avg_nightly_debt_hours": 1.839775198412698,
+          "standing_debt_hours": 0.05510944444444445,
+          "standing_debt_date": "2026-09-13",
+          "consistency": {
+            "bedtime_std_dev_minutes": 47.874379176935044,
+            "waketime_std_dev_minutes": 33.58183583588622,
+            "social_jetlag_minutes": 17.653602549388324
+          },
+          "nights": [
+            {
+              "date": "2026-09-13",
+              "needed_hours": 8.582544444444444,
+              "achieved_hours": 5.842955555555555,
+              "debt_hours": 2.739588888888889
+            },
+            {
+              "date": "2026-09-12",
+              "needed_hours": 8.341759166666666,
+              "achieved_hours": 6.776175277777778,
+              "debt_hours": 1.565583888888888
+            },
+            {
+              "date": "2026-09-11",
+              "needed_hours": 8.029478611111111,
+              "achieved_hours": 6.617365833333333,
+              "debt_hours": 1.4121127777777778
+            },
+            {
+              "date": "2026-09-10",
+              "needed_hours": 8.217345833333333,
+              "achieved_hours": 6.460086111111111,
+              "debt_hours": 1.757259722222222
+            },
+            {
+              "date": "2026-09-09",
+              "needed_hours": 8.384919722222222,
+              "achieved_hours": 8.2320425,
+              "debt_hours": 0.15287722222222122
+            },
+            {
+              "date": "2026-09-08",
+              "needed_hours": 8.441099722222223,
+              "achieved_hours": 4.9578425,
+              "debt_hours": 3.483257222222223
+            },
+            {
+              "date": "2026-09-07",
+              "needed_hours": 8.2800725,
+              "achieved_hours": 6.512325833333334,
+              "debt_hours": 1.7677466666666657
+            }
+          ],
+          "output_capped": false,
+          "truncated": false,
+          "summary": "Sum of observed nightly deficits, not outstanding debt. Social jetlag is a circular midpoint heuristic.",
+          "notes": [],
+          "disclaimer": "Statistical observation from your data, not medical advice.",
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-09-07T00:00:00.000+01:00",
+              "end": "2026-09-13T23:59:59.999+01:00"
+            },
+            "observed_period": {
+              "start": "2026-09-07T06:04:50.308+01:00",
+              "end": "2026-09-13T07:15:04.583+01:00"
+            },
+            "sources": {
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-13T06:19:49.213Z",
+                "cache_status": "unknown",
+                "records_fetched": 9,
+                "records_used": 7,
+                "exclusions": {
+                  "outside_window_or_invalid_duration": 1,
+                  "nap": 1
+                },
+                "truncated": false
+              }
+            },
+            "method_version": "sleep-debt-2",
+            "limitations": [
+              "One recorded offset cannot reconstruct within-sleep DST changes.",
+              "Deficit totals do not predict recovery or prescribe repayment."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "start with days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-08-01",
+        "days": 10
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-08-01T00:00:00.000+01:00",
+            "end": "2026-08-10T23:59:59.999+01:00"
+          },
+          "nights_analyzed": 10,
+          "status": "available",
+          "nights_required": 3,
+          "total_debt_hours": 24.852528055555553,
+          "avg_nightly_debt_hours": 2.485252805555555,
+          "standing_debt_hours": 0.0012355555555555555,
+          "standing_debt_date": "2026-08-10",
+          "consistency": {
+            "bedtime_std_dev_minutes": 35.02925164274503,
+            "waketime_std_dev_minutes": 33.99717343761069,
+            "social_jetlag_minutes": 14.698038681091475
+          },
+          "nights": [
+            {
+              "date": "2026-08-10",
+              "needed_hours": 8.3753275,
+              "achieved_hours": 7.3081958333333334,
+              "debt_hours": 1.0671316666666657
+            },
+            {
+              "date": "2026-08-09",
+              "needed_hours": 8.376556388888888,
+              "achieved_hours": 5.842416666666667,
+              "debt_hours": 2.5341397222222213
+            },
+            {
+              "date": "2026-08-08",
+              "needed_hours": 8.408176388888888,
+              "achieved_hours": 4.693154722222222,
+              "debt_hours": 3.715021666666666
+            },
+            {
+              "date": "2026-08-07",
+              "needed_hours": 8.450485833333333,
+              "achieved_hours": 6.2614302777777775,
+              "debt_hours": 2.189055555555556
+            },
+            {
+              "date": "2026-08-06",
+              "needed_hours": 8.116858888888888,
+              "achieved_hours": 5.472976388888889,
+              "debt_hours": 2.6438824999999992
+            },
+            {
+              "date": "2026-08-05",
+              "needed_hours": 8.44334,
+              "achieved_hours": 6.395598055555555,
+              "debt_hours": 2.047741944444444
+            },
+            {
+              "date": "2026-08-04",
+              "needed_hours": 8.239208055555556,
+              "achieved_hours": 4.738858888888889,
+              "debt_hours": 3.500349166666667
+            },
+            {
+              "date": "2026-08-03",
+              "needed_hours": 8.413330555555556,
+              "achieved_hours": 7.2096961111111115,
+              "debt_hours": 1.203634444444444
+            },
+            {
+              "date": "2026-08-02",
+              "needed_hours": 8.34207,
+              "achieved_hours": 6.062316388888889,
+              "debt_hours": 2.2797536111111105
+            },
+            {
+              "date": "2026-08-01",
+              "needed_hours": 8.418363888888889,
+              "achieved_hours": 4.746546111111111,
+              "debt_hours": 3.671817777777778
+            }
+          ],
+          "output_capped": false,
+          "truncated": false,
+          "summary": "Sum of observed nightly deficits, not outstanding debt. Social jetlag is a circular midpoint heuristic.",
+          "notes": [],
+          "disclaimer": "Statistical observation from your data, not medical advice.",
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-08-01T00:00:00.000+01:00",
+              "end": "2026-08-10T23:59:59.999+01:00"
+            },
+            "observed_period": {
+              "start": "2026-08-01T05:59:49.744+02:00",
+              "end": "2026-08-10T07:31:48.672+01:00"
+            },
+            "sources": {
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-08-10T06:33:56.210Z",
+                "cache_status": "unknown",
+                "records_fetched": 12,
+                "records_used": 10,
+                "exclusions": {
+                  "outside_window_or_invalid_duration": 1,
+                  "nap": 1
+                },
+                "truncated": false
+              }
+            },
+            "method_version": "sleep-debt-2",
+            "limitations": [
+              "One recorded offset cannot reconstruct within-sleep DST changes.",
+              "Deficit totals do not predict recovery or prescribe repayment."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-02T21:30:00.000Z",
+            "end": "2026-09-16T21:30:00.000Z"
+          },
+          "nights_analyzed": 0,
+          "status": "insufficient_data",
+          "nights_required": 3,
+          "total_debt_hours": null,
+          "avg_nightly_debt_hours": null,
+          "standing_debt_hours": null,
+          "standing_debt_date": null,
+          "consistency": {
+            "bedtime_std_dev_minutes": null,
+            "waketime_std_dev_minutes": null,
+            "social_jetlag_minutes": null
+          },
+          "nights": [],
+          "output_capped": false,
+          "truncated": false,
+          "summary": "Not enough data yet: 0 of 3 required scored main sleeps in this window, so deficit totals and bedtime/wake consistency are not calculated.",
+          "notes": [
+            "Not enough data yet: 0 of 3 required scored main sleeps in this window, so deficit totals and bedtime/wake consistency are not calculated."
+          ],
+          "disclaimer": "Statistical observation from your data, not medical advice.",
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-09-02T21:30:00.000Z",
+              "end": "2026-09-16T21:30:00.000Z"
+            },
+            "observed_period": null,
+            "sources": {
+              "sleep": {
+                "status": "missing",
+                "fetched_at": null,
+                "source_updated_at": null,
+                "cache_status": "unknown",
+                "records_fetched": 0,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "sleep-debt-2",
+            "limitations": [
+              "One recorded offset cannot reconstruct within-sleep DST changes.",
+              "Deficit totals do not predict recovery or prescribe repayment."
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "unrecognized start",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "banana"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "Unrecognized date expression: \"banana\". Supported: \"today\", \"yesterday\", \"last N days\", \"last N weeks\", \"last N months\", \"this week\", \"last week\", \"this month\", \"last month\", \"this quarter\", \"last quarter\", \"last year\", \"YYYY-MM\", or an ISO 8601 date (YYYY-MM-DD) or date-time.",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "sleep stream unavailable",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "failures": [
+        {
+          "path": "^/v2/activity/sleep",
+          "status": 503
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP API is temporarily unavailable (HTTP 503). Retry later.",
+        "structuredContent": null
+      }
+    }
+  ]
+}

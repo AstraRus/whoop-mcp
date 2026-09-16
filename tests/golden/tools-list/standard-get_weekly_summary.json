@@ -1,0 +1,292 @@
+{
+  "name": "get_weekly_summary",
+  "description": "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Each record counts in exactly one week by its local day; today's in-progress strain is excluded. Values that cannot be computed yet are null (never 0) and notes say why; workout count/strain/calories are also null for a week with no WHOOP data at all (strap not worn yet, or a week that has not started), while a worn week without workouts gives 0. The recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "week_start": {
+        "description": "Any day in the week to summarize; it is snapped to that local week's Monday. Prefer YYYY-MM-DD. Also accepts an ISO date-time (one written as midnight, e.g. 2026-09-14T00:00:00Z, means that date in any timezone; any other date-time means the user's local day it falls on), or \"today\", \"yesterday\", \"this week\", \"last week\". Defaults to the current week.",
+        "type": "string"
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "week_start": {
+        "type": "string"
+      },
+      "week_end": {
+        "type": "string"
+      },
+      "recovery": {
+        "type": "object",
+        "properties": {
+          "average_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "min_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "average_hrv": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "average_rhr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trend": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "improving",
+                  "declining",
+                  "stable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "average_score",
+          "min_score",
+          "max_score",
+          "average_hrv",
+          "average_rhr",
+          "trend"
+        ],
+        "additionalProperties": false
+      },
+      "sleep": {
+        "type": "object",
+        "properties": {
+          "average_duration_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Average hours asleep (light + slow-wave + REM) per main sleep; naps and time awake in bed excluded"
+          },
+          "average_performance_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "average_efficiency_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "average_duration_hours",
+          "average_performance_pct",
+          "average_efficiency_pct"
+        ],
+        "additionalProperties": false
+      },
+      "workouts": {
+        "type": "object",
+        "properties": {
+          "count": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Scored workouts in the week; null when workouts could not be loaded or the week has no WHOOP data at all (0 means a worn week without workouts)"
+          },
+          "total_strain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "total_calories_kj": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sport_breakdown": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "number"
+            }
+          }
+        },
+        "required": [
+          "count",
+          "total_strain",
+          "total_calories_kj",
+          "sport_breakdown"
+        ],
+        "additionalProperties": false
+      },
+      "strain": {
+        "type": "object",
+        "properties": {
+          "average_daily_strain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "max_daily_strain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "average_daily_strain",
+          "max_daily_strain"
+        ],
+        "additionalProperties": false
+      },
+      "sample_sizes": {
+        "type": "object",
+        "properties": {
+          "recovery_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "sleep_nights": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "completed_cycles": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "recovery_days",
+          "sleep_nights",
+          "completed_cycles"
+        ],
+        "additionalProperties": false
+      },
+      "calibrating": {
+        "type": "boolean"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "week_start",
+      "week_end",
+      "recovery",
+      "sleep",
+      "workouts",
+      "strain",
+      "sample_sizes",
+      "calibrating",
+      "truncated",
+      "notes"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

@@ -23,6 +23,7 @@ import type { WhoopClient } from "../api/client.js";
 import { describeWhoopError } from "../api/client.js";
 import { parseUtcOffset } from "../tools/date-utils.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Logger } from "../logging/logger.js";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -335,13 +336,22 @@ export const RESOURCE_DEFINITIONS: ResourceDefinition[] = [
 // Resource registration
 // ---------------------------------------------------------------------------
 
+/** Options for {@link registerResources}. */
+export interface RegisterResourcesOptions {
+  logger?: Logger;
+}
+
 /**
  * Register all WHOOP resources on the given MCP server.
  *
  * Caching is delegated to the client's shared `MemoryCache`; this function is
  * stateless and registers read handlers only.
  */
-export function registerResources(server: McpServer, client: WhoopClient): void {
+export function registerResources(
+  server: McpServer,
+  client: WhoopClient,
+  _options: RegisterResourcesOptions = {}
+): void {
   for (const def of RESOURCE_DEFINITIONS) {
     server.registerResource(
       def.name,

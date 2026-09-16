@@ -1,0 +1,122 @@
+{
+  "uri": "whoop://v2/user/profile",
+  "listing": {
+    "name": "User Profile",
+    "uri": "whoop://v2/user/profile",
+    "description": "Authenticated user's basic profile — name and email.",
+    "mimeType": "application/json"
+  },
+  "reads": [
+    {
+      "name": "evening with every record",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/profile",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "email": "live.shaped@example.com",
+            "first_name": "Live",
+            "last_name": "Shaped"
+          }
+        }
+      ]
+    },
+    {
+      "name": "cycle synced before sleep and recovery",
+      "fixture": "liveShapedUser@2026-09-16T07:01:37+02:00",
+      "now": "2026-09-16T05:01:37.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/profile",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "email": "live.shaped@example.com",
+            "first_name": "Live",
+            "last_name": "Shaped"
+          }
+        }
+      ]
+    },
+    {
+      "name": "after local midnight before the next sleep",
+      "fixture": "liveShapedUser@2026-09-17T00:30:00+02:00",
+      "now": "2026-09-16T22:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/profile",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "email": "live.shaped@example.com",
+            "first_name": "Live",
+            "last_name": "Shaped"
+          }
+        }
+      ]
+    },
+    {
+      "name": "pending last night after naps",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/profile",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 9001,
+            "email": "mature.user.1@example.com",
+            "first_name": "Mature",
+            "last_name": "User 1"
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/profile",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "email": "live.shaped@example.com",
+            "first_name": "Live",
+            "last_name": "Shaped"
+          }
+        }
+      ]
+    },
+    {
+      "name": "WHOOP unavailable",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "failures": [
+        {
+          "path": "^/v2/",
+          "status": 503
+        }
+      ],
+      "contents": [
+        {
+          "uri": "whoop://v2/user/profile",
+          "mimeType": "application/json",
+          "text_format": "compact_json",
+          "json": {
+            "error": "Resource unavailable. WHOOP API is temporarily unavailable (HTTP 503). Retry later."
+          }
+        }
+      ]
+    }
+  ]
+}

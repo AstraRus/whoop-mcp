@@ -26,9 +26,18 @@ import {
   recoveryRecordSchema,
   sleepRecordSchema,
 } from "../api/record-schemas.js";
-import { parseUtcOffset, resolveDateExpression } from "./date-utils.js";
+import { parseUtcOffset } from "./date-utils.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
-import { asleepHours, cycleDay, DAY_MS, localDay } from "./analytics-utils.js";
+import { asleepHours, cycleDay, localDay, recoveryZone } from "./analytics-utils.js";
+import {
+  addDays,
+  cycleStrain,
+  daysBetween,
+  isOpenCycle as isOpen,
+  localClock,
+  placeDays,
+  resolveDayWindow,
+} from "./day-model.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -79,13 +88,6 @@ export interface CalendarParams {
   start?: string;
 }
 
-/** The records that make up one row of the grid */
-interface DayRecords {
-  cycle?: Cycle;
-  sleep?: Sleep;
-  recovery?: Recovery;
-}
-
 /** A settled, validated stream */
 interface StreamData<T> {
   records: T[];
@@ -121,53 +123,13 @@ const MIN_RELIABLE_DAYS = 4;
 // Helpers
 // ---------------------------------------------------------------------------
 
-/** Shift a YYYY-MM-DD day by `count` days */
-function addDays(day: string, count: number): string {
-  return new Date(Date.parse(`${day}T00:00:00.000Z`) + count * DAY_MS).toISOString().slice(0, 10);
-}
-
 /** The UTC instant of local midnight at the start of `day` */
 function localMidnightUtc(day: string, offsetMinutes: number): string {
   return new Date(Date.parse(`${day}T00:00:00.000Z`) - offsetMinutes * 60_000).toISOString();
 }
 
-function daysBetween(start: string, end: string): number {
-  return Math.round((Date.parse(end) - Date.parse(start)) / DAY_MS);
-}
-
-/**
- * The local day a date-time bound starts: a local day counts when most of it
- * lies inside, so the bound snaps to the nearest local midnight.
- */
-function nearestLocalDay(timestamp: string, offsetMinutes: number): string {
-  const local = Date.parse(timestamp) + offsetMinutes * 60_000;
-  const floor = Math.floor(local / DAY_MS) * DAY_MS;
-  const snapped = local - floor >= DAY_MS / 2 ? floor + DAY_MS : floor;
-  return new Date(snapped).toISOString().slice(0, 10);
-}
-
-/** True when `timestamp` is exactly local midnight in `offset` */
-function isLocalMidnight(timestamp: string, offset: string): boolean {
-  const local = Date.parse(timestamp) + parseUtcOffset(offset) * 60_000;
-  return local % DAY_MS === 0;
-}
-
-/** "2026-09-15 23:13" in the record's own offset */
-function localClock(timestamp: string, offset: string): string {
-  return new Date(Date.parse(timestamp) + parseUtcOffset(offset) * 60_000)
-    .toISOString()
-    .slice(0, 16)
-    .replace("T", " ");
-}
-
 function round1(value: number): number {
   return Math.round(value * 10) / 10;
-}
-
-function recoveryZone(score: number): "green" | "yellow" | "red" {
-  if (score >= 67) return "green";
-  if (score >= 34) return "yellow";
-  return "red";
 }
 
 function average(values: number[]): number | null {
@@ -177,31 +139,6 @@ function average(values: number[]): number | null {
 
 function isNumber(value: number | null): value is number {
   return value !== null;
-}
-
-function duration(record: { start: string; end: string }): number {
-  return Date.parse(record.end) - Date.parse(record.start);
-}
-
-/** Prefer a scored sleep, then the longer one, then the later one */
-function isBetterSleep(candidate: Sleep, current: Sleep): boolean {
-  const candidateScored = candidate.score_state === "SCORED" && Boolean(candidate.score);
-  const currentScored = current.score_state === "SCORED" && Boolean(current.score);
-  if (candidateScored !== currentScored) return candidateScored;
-  if (duration(candidate) !== duration(current)) return duration(candidate) > duration(current);
-  return Date.parse(candidate.end) > Date.parse(current.end);
-}
-
-function isNewer(candidate: { updated_at: string }, current: { updated_at: string }): boolean {
-  return Date.parse(candidate.updated_at) > Date.parse(current.updated_at);
-}
-
-function cycleStrain(cycle: Cycle): number | null {
-  return cycle.score_state === "SCORED" && cycle.score ? cycle.score.strain : null;
-}
-
-function isOpen(cycle: Cycle): boolean {
-  return (cycle.end ?? null) === null;
 }
 
 /** Describe a stream failure by error type and HTTP status only (never bodies or URLs) */
@@ -261,80 +198,6 @@ function listDays(days: string[]): string {
   return [...days].sort().join(", ");
 }
 
-/** The grid's local days and any note about how `start` was read */
-interface GridWindow {
-  gridStart: string;
-  gridEnd: string;
-  ascending: boolean;
-  /** True when `start` was a date-time, snapped to its nearest local midnight */
-  fromDateTime: boolean;
-  notes: string[];
-}
-
-/**
- * Work out the grid's first and last local day.
- * - No `start`: the grid ends today and runs back `days` days.
- * - A range expression ("last 14 days", "this month", "last week", "2026-09"):
- *   the whole range, ending no later than today; with an explicit `days`,
- *   the range's first day plus `days` days.
- * - A single day ("yesterday", "2026-09-14") or a date-time: the grid starts
- *   there (a date-time at its nearest local midnight) and runs forward `days`
- *   days, clamped to today.
- */
-function resolveGridWindow(
-  params: CalendarParams,
-  now: Date,
-  utcOffset: string,
-  today: string
-): GridWindow {
-  const numDays = params.days ?? DEFAULT_DAYS;
-  const notes: string[] = [];
-  if (!params.start) {
-    return {
-      gridStart: addDays(today, -(numDays - 1)),
-      gridEnd: today,
-      ascending: false,
-      fromDateTime: false,
-      notes,
-    };
-  }
-
-  const resolved = resolveDateExpression(params.start, now, utcOffset);
-  const isInstant = resolved.start === resolved.end;
-  const gridStart = isInstant
-    ? nearestLocalDay(resolved.start, parseUtcOffset(utcOffset))
-    : localDay(resolved.start, utcOffset);
-  const rangeEnd = localDay(resolved.end, utcOffset);
-  const clampedRangeEnd = rangeEnd > today ? today : rangeEnd;
-
-  if (isInstant || rangeEnd <= gridStart || params.days !== undefined) {
-    const tentativeEnd = addDays(gridStart, numDays - 1);
-    const gridEnd = tentativeEnd > today ? today : tentativeEnd;
-    if (!isInstant && rangeEnd > gridStart && gridEnd < clampedRangeEnd) {
-      notes.push(
-        `"${params.start}" covers ${gridStart} to ${clampedRangeEnd}; with days ${numDays} the grid shows only ${gridStart} to ${gridEnd}. Leave out days to show the whole range.`
-      );
-    }
-    return { gridStart, gridEnd, ascending: true, fromDateTime: isInstant, notes };
-  }
-
-  // A multi-day range expression without `days`: the range sets both ends.
-  if (daysBetween(gridStart, clampedRangeEnd) + 1 > MAX_DAYS) {
-    const shortenedStart = addDays(clampedRangeEnd, -(MAX_DAYS - 1));
-    notes.push(
-      `"${params.start}" covers ${gridStart} to ${clampedRangeEnd}, more than the ${MAX_DAYS}-day maximum; the grid shows its last ${MAX_DAYS} days (${shortenedStart} to ${clampedRangeEnd}).`
-    );
-    return {
-      gridStart: shortenedStart,
-      gridEnd: clampedRangeEnd,
-      ascending: true,
-      fromDateTime: false,
-      notes,
-    };
-  }
-  return { gridStart, gridEnd: clampedRangeEnd, ascending: true, fromDateTime: false, notes };
-}
-
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -358,8 +221,11 @@ export async function getCalendar(
   const warnings: string[] = [];
 
   // Grid days are the user's local calendar days.
-  const window = resolveGridWindow(params, now, utcOffset, today);
-  const { gridStart, gridEnd, ascending } = window;
+  const window = resolveDayWindow(params, now, utcOffset, {
+    defaultDays: DEFAULT_DAYS,
+    maxDays: MAX_DAYS,
+  });
+  const { firstDay: gridStart, lastDay: gridEnd, ascending } = window;
   const notes: string[] = [...window.notes];
 
   if (gridStart > today) {
@@ -456,63 +322,19 @@ export async function getCalendar(
     }
   }
 
-  // --- Joins by cycle_id -----------------------------------------------------
+  // --- Place records on local days (shared day model) ---------------------------
 
-  const mainSleepByCycle = new Map<number, Sleep>();
-  for (const sleep of sleeps.records) {
-    if (sleep.nap) continue;
-    const current = mainSleepByCycle.get(sleep.cycle_id);
-    if (!current || isBetterSleep(sleep, current)) mainSleepByCycle.set(sleep.cycle_id, sleep);
-  }
-
-  const recoveryByCycle = new Map<number, Recovery>();
-  for (const recovery of recoveries.records) {
-    const current = recoveryByCycle.get(recovery.cycle_id);
-    if (!current || isNewer(recovery, current)) recoveryByCycle.set(recovery.cycle_id, recovery);
-  }
-
-  // --- Place each cycle on one local day ---------------------------------------
-  // A cycle's main day is the local day its main sleep ended (the morning it
-  // covers), or cycleDay() without a sleep. Every cycle is placed on its main
-  // day; when two cycles share one, the one with the better main sleep keeps
-  // it. The other may move to its start day only when no cycle has that day
-  // as its main day (e.g. a partial cycle before the first sleep), so one
-  // collision never shifts other days. A cycle that cannot be placed is
-  // named in a warning.
-
-  const mainDayOf = (cycle: Cycle): string => {
-    const sleep = mainSleepByCycle.get(cycle.id);
-    return sleep ? localDay(sleep.end, sleep.timezone_offset) : cycleDay(cycle);
-  };
-  const mainDays = new Set(cycles.records.map(mainDayOf));
-  const orderedCycles = [...cycles.records].sort((a, b) => {
-    const aSleep = mainSleepByCycle.get(a.id);
-    const bSleep = mainSleepByCycle.get(b.id);
-    if (aSleep && bSleep) {
-      if (isBetterSleep(aSleep, bSleep)) return -1;
-      if (isBetterSleep(bSleep, aSleep)) return 1;
-    } else if (aSleep || bSleep) {
-      return aSleep ? -1 : 1;
-    }
-    return Date.parse(b.start) - Date.parse(a.start);
+  const placement = placeDays({
+    cycles: cycles.records,
+    sleeps: sleeps.records,
+    recoveries: recoveries.records,
+    sleepsAvailable: sleeps.available,
+    today,
+    utcOffset,
   });
-
-  const cycleByDay = new Map<string, Cycle>();
-  const displaced: Cycle[] = [];
-  for (const cycle of orderedCycles) {
-    const day = mainDayOf(cycle);
-    if (cycleByDay.has(day)) displaced.push(cycle);
-    else cycleByDay.set(day, cycle);
-  }
-  for (const cycle of displaced) {
-    const startDay = localDay(cycle.start, cycle.timezone_offset);
-    if (!cycleByDay.has(startDay) && !mainDays.has(startDay)) {
-      cycleByDay.set(startDay, cycle);
-      continue;
-    }
-    const day = mainDayOf(cycle);
-    const shown = cycleByDay.get(day);
-    if (day < gridStart || day > gridEnd || !shown) continue;
+  const { byDay, cycleByDay, openCycleDay, partialDays: partialStrainDays } = placement;
+  for (const { day, shown, other: cycle } of placement.displaced) {
+    if (day < gridStart || day > gridEnd) continue;
     const strain = cycleStrain(cycle);
     const strainText =
       strain === null ? "" : ` (strain ${round1(strain)}${isOpen(cycle) ? " so far" : ""})`;
@@ -521,87 +343,6 @@ export async function getCalendar(
         `The row shows the cycle that started ${localClock(shown.start, shown.timezone_offset)}; ` +
         `the cycle that started ${localClock(cycle.start, cycle.timezone_offset)}${strainText} is left out of the grid and its averages.`
     );
-  }
-
-  // The first cycle WHOOP records starts at local midnight of the day the
-  // strap was put on, before any sleep: its strain covers only part of that day.
-  const mainSleepStarts = sleeps.records
-    .filter((sleep) => !sleep.nap)
-    .map((sleep) => Date.parse(sleep.start));
-  const firstMainSleepStart = mainSleepStarts.length > 0 ? Math.min(...mainSleepStarts) : Infinity;
-  const partialStrainDays = new Set<string>();
-  if (sleeps.available) {
-    for (const [day, cycle] of cycleByDay) {
-      if (
-        !mainSleepByCycle.has(cycle.id) &&
-        Date.parse(cycle.start) < firstMainSleepStart &&
-        isLocalMidnight(cycle.start, cycle.timezone_offset)
-      ) {
-        partialStrainDays.add(day);
-      }
-    }
-  }
-
-  // The newest cycle still open on an earlier day keeps covering the days
-  // after it until the next sleep syncs (e.g. after local midnight), so those
-  // days have no cycle of their own yet but are not missing data.
-  const newestCycle = [...cycles.records].sort(
-    (a, b) => Date.parse(b.start) - Date.parse(a.start)
-  )[0];
-  let openCycleDay: string | undefined;
-  if (newestCycle && isOpen(newestCycle)) {
-    for (const [day, cycle] of cycleByDay) {
-      if (cycle.id === newestCycle.id && day < today) openCycleDay = day;
-    }
-  }
-
-  const byDay = new Map<string, DayRecords>();
-  const entryFor = (day: string): DayRecords => {
-    let entry = byDay.get(day);
-    if (!entry) {
-      entry = {};
-      byDay.set(day, entry);
-    }
-    return entry;
-  };
-
-  const placedCycleIds = new Set<number>();
-  for (const [day, cycle] of cycleByDay) {
-    placedCycleIds.add(cycle.id);
-    const entry = entryFor(day);
-    entry.cycle = cycle;
-    entry.sleep = mainSleepByCycle.get(cycle.id);
-    entry.recovery = recoveryByCycle.get(cycle.id);
-  }
-
-  // Sleeps and recoveries whose cycle is unavailable (cycle stream failed,
-  // truncated or invalid) are placed by date instead.
-  const orphanSleepByDay = new Map<string, Sleep>();
-  for (const [cycleId, sleep] of mainSleepByCycle) {
-    if (placedCycleIds.has(cycleId)) continue;
-    const day = localDay(sleep.end, sleep.timezone_offset);
-    const current = orphanSleepByDay.get(day);
-    if (!current || isBetterSleep(sleep, current)) orphanSleepByDay.set(day, sleep);
-  }
-  for (const [day, sleep] of orphanSleepByDay) {
-    const entry = entryFor(day);
-    entry.sleep ??= sleep;
-  }
-
-  const sleepById = new Map(sleeps.records.map((sleep) => [sleep.id, sleep]));
-  const orphanRecoveryByDay = new Map<string, Recovery>();
-  for (const [cycleId, recovery] of recoveryByCycle) {
-    if (placedCycleIds.has(cycleId)) continue;
-    const sleep = sleepById.get(recovery.sleep_id);
-    const day = sleep
-      ? localDay(sleep.end, sleep.timezone_offset)
-      : localDay(recovery.created_at, utcOffset);
-    const current = orphanRecoveryByDay.get(day);
-    if (!current || isNewer(recovery, current)) orphanRecoveryByDay.set(day, recovery);
-  }
-  for (const [day, recovery] of orphanRecoveryByDay) {
-    const entry = entryFor(day);
-    entry.recovery ??= recovery;
   }
 
   // --- Build rows ----------------------------------------------------------------

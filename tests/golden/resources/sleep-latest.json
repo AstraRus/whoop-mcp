@@ -1,0 +1,221 @@
+{
+  "uri": "whoop://v2/user/sleep/latest",
+  "listing": {
+    "name": "Latest Sleep",
+    "uri": "whoop://v2/user/sleep/latest",
+    "description": "Most recent main (non-nap) sleep including stages, duration, and performance. Time asleep is light + slow-wave + REM stage time; total_in_bed_time_milli also includes time awake. Its cycle_id is the cycle whose morning it belongs to; notes say when it belongs to an earlier cycle than the current one (last night's sleep not available yet).",
+    "mimeType": "application/json"
+  },
+  "reads": [
+    {
+      "name": "evening with every record",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/sleep/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "created_at": "2026-09-16T05:01:40.207Z",
+            "updated_at": "2026-09-16T05:01:40.207Z",
+            "score_state": "SCORED",
+            "start": "2026-09-15T21:13:31.460Z",
+            "end": "2026-09-16T04:58:12.066Z",
+            "timezone_offset": "+02:00",
+            "id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02",
+            "cycle_id": 81003,
+            "nap": false,
+            "v1_id": null,
+            "score": {
+              "stage_summary": {
+                "total_in_bed_time_milli": 27880606,
+                "total_awake_time_milli": 2305114,
+                "total_no_data_time_milli": 0,
+                "total_light_sleep_time_milli": 12410833,
+                "total_slow_wave_sleep_time_milli": 4977291,
+                "total_rem_sleep_time_milli": 8187368,
+                "sleep_cycle_count": 5,
+                "disturbance_count": 14
+              },
+              "sleep_needed": {
+                "baseline_milli": 27904512,
+                "need_from_sleep_debt_milli": 2108337,
+                "need_from_recent_strain_milli": 3402118,
+                "need_from_recent_nap_milli": 0
+              },
+              "respiratory_rate": 15.234375,
+              "sleep_performance_percentage": 83,
+              "sleep_efficiency_percentage": 91.73,
+              "sleep_consistency_percentage": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "cycle synced before sleep and recovery",
+      "fixture": "liveShapedUser@2026-09-16T07:01:37+02:00",
+      "now": "2026-09-16T05:01:37.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/sleep/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "created_at": "2026-09-15T05:25:06.590Z",
+            "updated_at": "2026-09-15T05:25:06.590Z",
+            "score_state": "SCORED",
+            "start": "2026-09-14T22:39:27.317Z",
+            "end": "2026-09-15T05:21:48.905Z",
+            "timezone_offset": "+02:00",
+            "id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b01",
+            "cycle_id": 81002,
+            "nap": false,
+            "v1_id": null,
+            "score": {
+              "stage_summary": {
+                "total_in_bed_time_milli": 24141588,
+                "total_awake_time_milli": 2011340,
+                "total_no_data_time_milli": 0,
+                "total_light_sleep_time_milli": 11208407,
+                "total_slow_wave_sleep_time_milli": 4902115,
+                "total_rem_sleep_time_milli": 6019726,
+                "sleep_cycle_count": 4,
+                "disturbance_count": 11
+              },
+              "sleep_needed": {
+                "baseline_milli": 27904512,
+                "need_from_sleep_debt_milli": 0,
+                "need_from_recent_strain_milli": 1322871,
+                "need_from_recent_nap_milli": 0
+              },
+              "respiratory_rate": 14.765625,
+              "sleep_performance_percentage": 71,
+              "sleep_efficiency_percentage": 91.67,
+              "sleep_consistency_percentage": 0
+            },
+            "notes": [
+              "This sleep belongs to an earlier cycle (cycle_id 81002), not the current cycle (id 81003, started 2026-09-15T23:13+02:00). The sleep for that cycle (last night's) is not available yet; it may still be syncing or being scored. Don't present it as today's sleep."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "after local midnight before the next sleep",
+      "fixture": "liveShapedUser@2026-09-17T00:30:00+02:00",
+      "now": "2026-09-16T22:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/sleep/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "created_at": "2026-09-16T05:01:40.207Z",
+            "updated_at": "2026-09-16T05:01:40.207Z",
+            "score_state": "SCORED",
+            "start": "2026-09-15T21:13:31.460Z",
+            "end": "2026-09-16T04:58:12.066Z",
+            "timezone_offset": "+02:00",
+            "id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02",
+            "cycle_id": 81003,
+            "nap": false,
+            "v1_id": null,
+            "score": {
+              "stage_summary": {
+                "total_in_bed_time_milli": 27880606,
+                "total_awake_time_milli": 2305114,
+                "total_no_data_time_milli": 0,
+                "total_light_sleep_time_milli": 12410833,
+                "total_slow_wave_sleep_time_milli": 4977291,
+                "total_rem_sleep_time_milli": 8187368,
+                "sleep_cycle_count": 5,
+                "disturbance_count": 14
+              },
+              "sleep_needed": {
+                "baseline_milli": 27904512,
+                "need_from_sleep_debt_milli": 2108337,
+                "need_from_recent_strain_milli": 3402118,
+                "need_from_recent_nap_milli": 0
+              },
+              "respiratory_rate": 15.234375,
+              "sleep_performance_percentage": 83,
+              "sleep_efficiency_percentage": 91.73,
+              "sleep_consistency_percentage": 0
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "pending last night after naps",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/sleep/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 9001,
+            "created_at": "2026-09-16T06:14:52.663Z",
+            "updated_at": "2026-09-16T06:14:52.663Z",
+            "score_state": "PENDING_SCORE",
+            "start": "2026-09-15T21:42:29.574Z",
+            "end": "2026-09-16T06:11:32.297Z",
+            "timezone_offset": "+01:00",
+            "id": "5b2497e3-66b2-4d77-95f0-be713ba6bd75",
+            "cycle_id": 300118,
+            "nap": false,
+            "v1_id": null,
+            "score": null,
+            "notes": [
+              "More recent naps are not shown; this is the latest main sleep.",
+              "WHOOP has not scored this sleep yet (PENDING_SCORE); score values are missing until it does."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/sleep/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "message": "No sleep data available yet."
+          }
+        }
+      ]
+    },
+    {
+      "name": "WHOOP unavailable",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "failures": [
+        {
+          "path": "^/v2/",
+          "status": 503
+        }
+      ],
+      "contents": [
+        {
+          "uri": "whoop://v2/user/sleep/latest",
+          "mimeType": "application/json",
+          "text_format": "compact_json",
+          "json": {
+            "error": "Resource unavailable. WHOOP API is temporarily unavailable (HTTP 503). Retry later."
+          }
+        }
+      ]
+    }
+  ]
+}

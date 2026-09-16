@@ -2,7 +2,12 @@ import { z } from "zod";
 import { offsetSchema } from "../api/record-schemas.js";
 import type { Sleep } from "../api/types.js";
 import type { WhoopClient } from "../api/client.js";
-import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../api/client.js";
+import {
+  WhoopApiError,
+  WhoopAuthError,
+  WhoopNetworkError,
+  WhoopRateBudgetError,
+} from "../api/client.js";
 import { fetchAllPages, ABSOLUTE_MAX_RECORDS } from "../api/pagination.js";
 import { parseUtcOffset } from "./date-utils.js";
 
@@ -94,6 +99,22 @@ export function cycleDay(cycle: { start: string; timezone_offset: string }): str
   return localDay(midCycle, cycle.timezone_offset);
 }
 
+/** WHOOP's recovery colour bands */
+export type RecoveryZone = "green" | "yellow" | "red";
+
+/** Lowest recovery score in the green band */
+export const RECOVERY_GREEN_MIN = 67;
+
+/** Lowest recovery score in the yellow band */
+export const RECOVERY_YELLOW_MIN = 34;
+
+/** WHOOP's recovery zone for a score: green 67-100, yellow 34-66, red 0-33 */
+export function recoveryZone(score: number): RecoveryZone {
+  if (score >= RECOVERY_GREEN_MIN) return "green";
+  if (score >= RECOVERY_YELLOW_MIN) return "yellow";
+  return "red";
+}
+
 export function asleepHours(sleep: Sleep): number {
   const stages = sleep.score!.stage_summary;
   return (
@@ -134,13 +155,19 @@ function errorRank(error: unknown): number {
     if (error.statusCode === 429) return 2;
     return 3;
   }
-  if (error instanceof WhoopNetworkError) return 4;
+  // The server's own rate limiter (or the call's deadline) held the request back:
+  // as actionable as a 429 from WHOOP, and never a network problem.
+  if (error instanceof WhoopRateBudgetError) return 2;
+  if (error instanceof WhoopNetworkError) {
+    return error.cause instanceof WhoopRateBudgetError ? 2 : 4;
+  }
   return 5;
 }
 
 /**
- * Pick the most relevant of several upstream failures (auth, then rate limit,
- * then other API errors, then network) so the server can explain it accurately.
+ * Pick the most relevant of several upstream failures (auth, then rate limit
+ * including the server's own request budget, then other API errors, then
+ * network) so the server can explain it accurately.
  */
 export function mostRelevantError(reasons: unknown[]): Error {
   const reason = [...reasons].sort((left, right) => errorRank(left) - errorRank(right))[0];

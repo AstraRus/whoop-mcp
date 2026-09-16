@@ -1,0 +1,79 @@
+{
+  "liveShapedUser": {
+    "now": "2026-09-16T21:30:00.000Z",
+    "offset": "+02:00",
+    "records": {
+      "cycles": 3,
+      "sleeps": 2,
+      "recoveries": 2,
+      "workouts": 8
+    },
+    "sha256": "871dd9f7a6c4df31bf181e5523dee97d210cdb52ecfc1c5fdc2550834cf1053f"
+  },
+  "liveShapedUser@2026-09-16T07:01:37+02:00": {
+    "now": "2026-09-16T05:01:37.000Z",
+    "offset": "+02:00",
+    "records": {
+      "cycles": 3,
+      "sleeps": 1,
+      "recoveries": 1,
+      "workouts": 5
+    },
+    "sha256": "98a2b2132f6850d9fa3b58d9fda0eafc8739e500275434d8e83cff709c49c622"
+  },
+  "liveShapedUser@2026-09-17T00:30:00+02:00": {
+    "now": "2026-09-16T22:30:00.000Z",
+    "offset": "+02:00",
+    "records": {
+      "cycles": 3,
+      "sleeps": 2,
+      "recoveries": 2,
+      "workouts": 8
+    },
+    "sha256": "47654a365385e3a73027c43cc21febaeeda0742f59e206a250b6efe3e42e4620"
+  },
+  "matureUser": {
+    "now": "2026-09-16T21:30:00.000Z",
+    "offset": "+01:00",
+    "records": {
+      "cycles": 119,
+      "sleeps": 138,
+      "recoveries": 118,
+      "workouts": 113
+    },
+    "sha256": "52b47a0457341612d99a34734cf000f1d309cac12c56f4c66e644acd36d4fa3d"
+  },
+  "matureUser-rising-hrv": {
+    "now": "2026-09-16T21:30:00.000Z",
+    "offset": "+02:00",
+    "records": {
+      "cycles": 60,
+      "sleeps": 59,
+      "recoveries": 59,
+      "workouts": 46
+    },
+    "sha256": "7e431bd610343ab0144838a0ccc9148b8497b3231360773222df03021a8f459a"
+  },
+  "matureUser-falling-hrv": {
+    "now": "2026-09-16T21:30:00.000Z",
+    "offset": "+02:00",
+    "records": {
+      "cycles": 60,
+      "sleeps": 59,
+      "recoveries": 59,
+      "workouts": 46
+    },
+    "sha256": "d608dc578e1f194a2718dbe1c9620bdf0457526b0fc835b03e8f0f377e21a95d"
+  },
+  "emptyAccount": {
+    "now": "2026-09-16T21:30:00.000Z",
+    "offset": "+02:00",
+    "records": {
+      "cycles": 0,
+      "sleeps": 0,
+      "recoveries": 0,
+      "workouts": 0
+    },
+    "sha256": "b56bb5bf0f16f3209802f2fce2eb4306fcc6025aca751a6a08b3de45d8154763"
+  }
+}

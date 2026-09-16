@@ -41,8 +41,9 @@ import {
   detectAnomalies,
   isConstant,
   MIN_TREND_POINTS,
+  trendConfidence,
 } from "./stats-utils.js";
-import type { TrendDirectionResult } from "./stats-utils.js";
+import type { TrendConfidence, TrendDirectionResult } from "./stats-utils.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,7 +65,7 @@ export interface GetTrendParams {
 }
 
 /** Confidence level based on R² and the number of data points */
-export type TrendConfidence = "high" | "medium" | "low";
+export type { TrendConfidence };
 
 /** Raw numeric direction of a trend, independent of whether it is good or bad */
 export type TrendChange = "increasing" | "decreasing" | "stable";
@@ -141,12 +142,6 @@ interface TrendWindow {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_DAYS = 30;
-
-/** Fewer points than this cap confidence at "low" */
-const LOW_CONFIDENCE_BELOW = 7;
-
-/** Fewer points than this cap confidence at "medium" */
-const MEDIUM_CONFIDENCE_BELOW = 14;
 
 const MAX_PAGES = 20;
 
@@ -373,19 +368,6 @@ const METRICS: Record<TrendMetric, MetricDefinition> = {
 // ---------------------------------------------------------------------------
 // Trend classification
 // ---------------------------------------------------------------------------
-
-/**
- * Classify R² into a confidence level, capped by how many points there are.
- * Identical values have no variance for R² to explain (it is reported as 0),
- * yet a flat line fits them exactly, so they are rated on sample size alone.
- */
-function trendConfidence(r2: number, sampleSize: number, constant: boolean): TrendConfidence {
-  if (sampleSize < LOW_CONFIDENCE_BELOW) return "low";
-  const fit = constant ? 1 : r2;
-  const fromFit: TrendConfidence = fit > 0.7 ? "high" : fit > 0.4 ? "medium" : "low";
-  if (sampleSize < MEDIUM_CONFIDENCE_BELOW && fromFit === "high") return "medium";
-  return fromFit;
-}
 
 function toChange(direction: TrendDirectionResult): TrendChange {
   if (direction === "improving") return "increasing";

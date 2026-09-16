@@ -3,19 +3,18 @@ import type { WhoopClient } from "../api/client.js";
 import { ENDPOINT_SLEEP } from "../api/endpoints.js";
 import { sleepRecordSchema } from "../api/record-schemas.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
-import { InvalidDateExpression, resolveDateExpression } from "./date-utils.js";
-import { circularStats, mean } from "./stats-utils.js";
+import { mean } from "./stats-utils.js";
+import { resolveSleepWindow } from "./sleep-window.js";
+import { timingStats } from "./sleep-metrics.js";
 import {
   asleepHours,
   dataQualitySchema,
-  DAY_MS,
   DISCLAIMER,
   HOUR_MS,
   loadAnalyticsSource,
   mostRelevantError,
   mainSleeps,
   localDay,
-  localTime,
   periodSchema,
   finishQuality,
   exclude,
@@ -85,42 +84,6 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
-/**
- * The sleep window [startTime, endTime) in UTC milliseconds. A single day or
- * date-time `start` runs for `days`; a range expression covers its own range
- * unless `days` was given explicitly. The end is clamped to now.
- *
- * @throws InvalidDateExpression for unparseable or oversized windows
- * @throws RangeError when the window would begin at or after now
- */
-function resolveSleepWindow(
-  start: string | undefined,
-  requestedDays: number | undefined,
-  days: number,
-  now: Date,
-  utcOffset: string
-): { startTime: number; endTime: number } {
-  const nowMs = now.getTime();
-  if (start === undefined) return { startTime: nowMs - days * DAY_MS, endTime: nowMs };
-  const range = resolveDateExpression(start, now, utcOffset);
-  const startTime = Date.parse(range.start);
-  // A resolved range ends at 23:59:59.999 local: its exclusive end is one millisecond later.
-  const rangeEnd = Date.parse(range.end) + 1;
-  const isRange = rangeEnd - startTime > DAY_MS;
-  const endTime = Math.min(
-    isRange && requestedDays === undefined ? rangeEnd : startTime + days * DAY_MS,
-    nowMs
-  );
-  if (!Number.isFinite(startTime) || startTime >= endTime)
-    throw new RangeError("Sleep window must begin before the evaluation time.");
-  const spanDays = (endTime - startTime) / DAY_MS;
-  if (spanDays > SLEEP_DEBT_MAX_DAYS + 1)
-    throw new InvalidDateExpression(
-      `The sleep window "${start}" spans ${Math.ceil(spanDays)} days; get_sleep_debt covers at most ${SLEEP_DEBT_MAX_DAYS} days (plus today). Use a shorter range, or a start date with days.`
-    );
-  return { startTime, endTime };
-}
-
 export async function getSleepDebt(
   client: WhoopClient,
   params: z.infer<typeof sleepDebtInputSchema> = {},
@@ -130,7 +93,10 @@ export async function getSleepDebt(
   const days = requestedDays ?? 14;
   // The user's current offset resolves local days in `start` and labels the reported period.
   const { offset: utcOffset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
-  const { startTime, endTime } = resolveSleepWindow(start, requestedDays, days, now, utcOffset);
+  const { startTime, endTime } = resolveSleepWindow(start, requestedDays, days, now, utcOffset, {
+    toolName: "get_sleep_debt",
+    maxDays: SLEEP_DEBT_MAX_DAYS,
+  });
   // Fetching and night selection use UTC instants; the reported period uses the user's offset.
   const period = { start: new Date(startTime).toISOString(), end: new Date(endTime).toISOString() };
   const reportedPeriod = {
@@ -165,25 +131,7 @@ export async function getSleepDebt(
       debt_hours: Math.max(0, needed - achieved),
     };
   });
-  const bedtimes: number[] = [];
-  const waketimes: number[] = [];
-  const weekdays: number[] = [];
-  const weekends: number[] = [];
-  for (const night of selected) {
-    const bedtime = localTime(night.start, night.timezone_offset);
-    const wake = localTime(night.end, night.timezone_offset);
-    const bedMinutes =
-      bedtime.getUTCHours() * 60 + bedtime.getUTCMinutes() + bedtime.getUTCSeconds() / 60;
-    bedtimes.push(bedMinutes);
-    waketimes.push(wake.getUTCHours() * 60 + wake.getUTCMinutes() + wake.getUTCSeconds() / 60);
-    const midpoint =
-      (bedMinutes + (Date.parse(night.end) - Date.parse(night.start)) / 120_000) % 1440;
-    (wake.getUTCDay() === 0 || wake.getUTCDay() === 6 ? weekends : weekdays).push(midpoint);
-  }
-  const weekdayMean = circularStats(weekdays).mean;
-  const weekendMean = circularStats(weekends).mean;
-  const midpointDistance =
-    weekdayMean === null || weekendMean === null ? null : Math.abs(weekdayMean - weekendMean);
+  const timing = timingStats(selected);
   const sufficient = nights.length >= SLEEP_DEBT_MIN_NIGHTS;
   finishQuality(source.quality, selected);
   const newestNight = selected[0];
@@ -252,12 +200,9 @@ export async function getSleepDebt(
       : null,
     standing_debt_date: nights[0]?.date ?? null,
     consistency: {
-      bedtime_std_dev_minutes: sufficient ? circularStats(bedtimes).sd : null,
-      waketime_std_dev_minutes: sufficient ? circularStats(waketimes).sd : null,
-      social_jetlag_minutes:
-        sufficient && midpointDistance !== null
-          ? Math.min(midpointDistance, 1440 - midpointDistance)
-          : null,
+      bedtime_std_dev_minutes: sufficient ? timing.bedtime_sd_minutes : null,
+      waketime_std_dev_minutes: sufficient ? timing.waketime_sd_minutes : null,
+      social_jetlag_minutes: sufficient ? timing.social_jetlag_minutes : null,
     },
     nights: nights.slice(0, 30),
     output_capped: nights.length > 30,

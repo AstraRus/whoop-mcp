@@ -1,0 +1,403 @@
+{
+  "name": "compare_periods",
+  "description": "Compare average recovery, sleep and strain between two non-overlapping periods (up to 90 days each); change_pct is period B relative to period A. Dates are the user's local days and each day counts in exactly one period: with date-time bounds a local day counts when most of it lies inside the period (an end at or after now keeps today). period_a/period_b.first_day and last_day give the local days actually counted (null, with a note, when a period covers most of no day). Sleep hours are time asleep (light + deep + REM) on main sleeps, naps excluded; strain uses completed cycles only. With fewer than 3 scored days in either period (e.g. while WHOOP is still calibrating), existing averages are still returned but change_pct is null, direction is \"insufficient_data\" and notes explain why; warnings report data that could not be loaded or was truncated.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "period_a_start": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?(Z|[+-]\\d{2}:\\d{2})?)?$",
+        "description": "Start of the first (baseline) period: YYYY-MM-DD starts at local midnight; a date-time may include an offset."
+      },
+      "period_a_end": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?(Z|[+-]\\d{2}:\\d{2})?)?$",
+        "description": "End of the first period: YYYY-MM-DD includes that whole local day; a date-time is exclusive, and a local day counts only when most of it lies before it."
+      },
+      "period_b_start": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?(Z|[+-]\\d{2}:\\d{2})?)?$",
+        "description": "Start of the second period, compared against the first: YYYY-MM-DD starts at local midnight; a date-time may include an offset."
+      },
+      "period_b_end": {
+        "type": "string",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}(:\\d{2}(\\.\\d{1,3})?)?(Z|[+-]\\d{2}:\\d{2})?)?$",
+        "description": "End of the second period: YYYY-MM-DD includes that whole local day; a date-time is exclusive, and a local day counts only when most of it lies before it (an end at or after now keeps today)."
+      }
+    },
+    "required": [
+      "period_a_start",
+      "period_a_end",
+      "period_b_start",
+      "period_b_end"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "period_a": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First local day counted (YYYY-MM-DD); null when the period covers no local day"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last local day counted (YYYY-MM-DD, inclusive); null when it covers no local day"
+          },
+          "days": {
+            "type": "number",
+            "description": "Local days counted, start to end inclusive"
+          },
+          "first_day": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local day (YYYY-MM-DD) counted in the period; null when it covers no local day"
+          },
+          "last_day": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local day (YYYY-MM-DD) counted in the period; null when it covers no local day"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "days",
+          "first_day",
+          "last_day"
+        ],
+        "additionalProperties": false
+      },
+      "period_b": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "First local day counted (YYYY-MM-DD); null when the period covers no local day"
+          },
+          "end": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Last local day counted (YYYY-MM-DD, inclusive); null when it covers no local day"
+          },
+          "days": {
+            "type": "number",
+            "description": "Local days counted, start to end inclusive"
+          },
+          "first_day": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local day (YYYY-MM-DD) counted in the period; null when it covers no local day"
+          },
+          "last_day": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Local day (YYYY-MM-DD) counted in the period; null when it covers no local day"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "days",
+          "first_day",
+          "last_day"
+        ],
+        "additionalProperties": false
+      },
+      "recovery": {
+        "type": "object",
+        "properties": {
+          "period_a_avg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_b_avg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_a_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "period_b_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "improved",
+              "declined",
+              "unchanged",
+              "insufficient_data"
+            ]
+          },
+          "period_a_calibrating_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "period_b_calibrating_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "period_a_avg",
+          "period_b_avg",
+          "period_a_n",
+          "period_b_n",
+          "change_pct",
+          "direction",
+          "period_a_calibrating_n",
+          "period_b_calibrating_n"
+        ],
+        "additionalProperties": false
+      },
+      "sleep": {
+        "type": "object",
+        "properties": {
+          "period_a_avg_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Average time asleep per main sleep (naps excluded)"
+          },
+          "period_b_avg_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Average time asleep per main sleep (naps excluded)"
+          },
+          "period_a_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "period_b_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "improved",
+              "declined",
+              "unchanged",
+              "insufficient_data"
+            ]
+          }
+        },
+        "required": [
+          "period_a_avg_hours",
+          "period_b_avg_hours",
+          "period_a_n",
+          "period_b_n",
+          "change_pct",
+          "direction"
+        ],
+        "additionalProperties": false
+      },
+      "strain": {
+        "type": "object",
+        "properties": {
+          "period_a_avg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_b_avg": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "period_a_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "period_b_n": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          },
+          "change_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "increased",
+              "decreased",
+              "unchanged",
+              "insufficient_data"
+            ]
+          }
+        },
+        "required": [
+          "period_a_avg",
+          "period_b_avg",
+          "period_a_n",
+          "period_b_n",
+          "change_pct",
+          "direction"
+        ],
+        "additionalProperties": false
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "period_a",
+      "period_b",
+      "recovery",
+      "sleep",
+      "strain",
+      "truncated",
+      "notes",
+      "warnings"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

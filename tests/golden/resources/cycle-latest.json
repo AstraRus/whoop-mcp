@@ -1,0 +1,171 @@
+{
+  "uri": "whoop://v2/user/cycle/latest",
+  "listing": {
+    "name": "Latest Cycle",
+    "uri": "whoop://v2/user/cycle/latest",
+    "description": "Current or most recent physiological cycle including strain and calorie data. A cycle runs from one sleep onset to the next; end is null while it is still in progress.",
+    "mimeType": "application/json"
+  },
+  "reads": [
+    {
+      "name": "evening with every record",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/cycle/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "created_at": "2026-09-16T05:01:34.745Z",
+            "updated_at": "2026-09-16T18:16:02.337Z",
+            "score_state": "SCORED",
+            "start": "2026-09-15T21:13:31.460Z",
+            "end": null,
+            "timezone_offset": "+02:00",
+            "id": 81003,
+            "score": {
+              "strain": 13.0542,
+              "kilojoule": 10187.9,
+              "average_heart_rate": 73,
+              "max_heart_rate": 179
+            },
+            "notes": [
+              "This cycle is still in progress (end is null): strain and energy are totals so far, not final values."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "cycle synced before sleep and recovery",
+      "fixture": "liveShapedUser@2026-09-16T07:01:37+02:00",
+      "now": "2026-09-16T05:01:37.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/cycle/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "created_at": "2026-09-16T05:01:34.745Z",
+            "updated_at": "2026-09-16T05:01:34.745Z",
+            "score_state": "SCORED",
+            "start": "2026-09-15T21:13:31.460Z",
+            "end": null,
+            "timezone_offset": "+02:00",
+            "id": 81003,
+            "score": {
+              "strain": 13.0542,
+              "kilojoule": 10187.9,
+              "average_heart_rate": 73,
+              "max_heart_rate": 179
+            },
+            "notes": [
+              "This cycle is still in progress (end is null): strain and energy are totals so far, not final values."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "after local midnight before the next sleep",
+      "fixture": "liveShapedUser@2026-09-17T00:30:00+02:00",
+      "now": "2026-09-16T22:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/cycle/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 7001,
+            "created_at": "2026-09-16T05:01:34.745Z",
+            "updated_at": "2026-09-16T18:16:02.337Z",
+            "score_state": "SCORED",
+            "start": "2026-09-15T21:13:31.460Z",
+            "end": null,
+            "timezone_offset": "+02:00",
+            "id": 81003,
+            "score": {
+              "strain": 13.0542,
+              "kilojoule": 10187.9,
+              "average_heart_rate": 73,
+              "max_heart_rate": 179
+            },
+            "notes": [
+              "This cycle is still in progress (end is null): strain and energy are totals so far, not final values."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pending last night after naps",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/cycle/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "user_id": 9001,
+            "created_at": "2026-09-16T06:14:45.403Z",
+            "updated_at": "2026-09-16T14:03:37.306Z",
+            "score_state": "SCORED",
+            "start": "2026-09-15T21:42:29.574Z",
+            "end": null,
+            "timezone_offset": "+01:00",
+            "id": 300118,
+            "score": {
+              "strain": 5.2041,
+              "kilojoule": 7478.7,
+              "average_heart_rate": 62,
+              "max_heart_rate": 123
+            },
+            "notes": [
+              "This cycle is still in progress (end is null): strain and energy are totals so far, not final values."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/cycle/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "message": "No cycle data available yet."
+          }
+        }
+      ]
+    },
+    {
+      "name": "WHOOP unavailable",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "failures": [
+        {
+          "path": "^/v2/",
+          "status": 503
+        }
+      ],
+      "contents": [
+        {
+          "uri": "whoop://v2/user/cycle/latest",
+          "mimeType": "application/json",
+          "text_format": "compact_json",
+          "json": {
+            "error": "Resource unavailable. WHOOP API is temporarily unavailable (HTTP 503). Retry later."
+          }
+        }
+      ]
+    }
+  ]
+}

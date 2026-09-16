@@ -1,0 +1,273 @@
+{
+  "name": "get_sleep_collection",
+  "description": "Get sleep records for a date range. Accepts ISO 8601 or relative dates (\"today\", \"last 7 days\", \"this week\"). Returns sleep stages, duration, respiratory rate, and performance scores. Records are raw WHOOP records, newest first, and include sleeps still ongoing at the window start: a night's sleep usually starts the previous evening and belongs to the next morning's cycle (cycle_id), so the first record may be last night's. Naps are separate records (nap true). Time asleep is light + slow-wave + REM; for per-night values by local day use get_calendar or get_sleep_debt.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "start": {
+        "description": "Return records that began at or after this time or were still ongoing at it: WHOOP includes records overlapping the start, such as a cycle or sleep that began the previous evening. A date (YYYY-MM-DD) or relative expression (e.g. \"today\", \"yesterday\", \"last 7 days\", \"this week\") starts at local midnight of its first day; \"last N days\" is today plus the N previous days. A date-time may include an offset.",
+        "type": "string"
+      },
+      "end": {
+        "description": "Return records that began before this time (exclusive). A date (YYYY-MM-DD) or relative expression ends at the end of its last local day, so start and end \"yesterday\" (or \"last week\") cover that whole period. Defaults to now.",
+        "type": "string"
+      },
+      "limit": {
+        "description": "Max records to return (1-25). Defaults to 10.",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 25
+      },
+      "nextToken": {
+        "description": "The next_token from a previous response. A null or missing next_token means there are no more pages.",
+        "type": "string"
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "records": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "user_id": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "created_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "updated_at": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "score_state": {
+              "type": "string",
+              "enum": [
+                "SCORED",
+                "PENDING_SCORE",
+                "UNSCORABLE"
+              ]
+            },
+            "start": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "end": {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+            },
+            "timezone_offset": {
+              "type": "string",
+              "pattern": "^(?:Z|[+-](?:0\\d|1[0-4]):[0-5]\\d)$"
+            },
+            "id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "cycle_id": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "nap": {
+              "type": "boolean"
+            },
+            "v1_id": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": -9007199254740991,
+                  "maximum": 9007199254740991
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "score": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "stage_summary": {
+                      "type": "object",
+                      "properties": {
+                        "total_in_bed_time_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "total_awake_time_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "total_no_data_time_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "total_light_sleep_time_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "total_slow_wave_sleep_time_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "total_rem_sleep_time_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "sleep_cycle_count": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "disturbance_count": {
+                          "type": "number",
+                          "minimum": 0
+                        }
+                      },
+                      "required": [
+                        "total_in_bed_time_milli",
+                        "total_awake_time_milli",
+                        "total_no_data_time_milli",
+                        "total_light_sleep_time_milli",
+                        "total_slow_wave_sleep_time_milli",
+                        "total_rem_sleep_time_milli",
+                        "sleep_cycle_count",
+                        "disturbance_count"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "sleep_needed": {
+                      "type": "object",
+                      "properties": {
+                        "baseline_milli": {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        "need_from_sleep_debt_milli": {
+                          "type": "number"
+                        },
+                        "need_from_recent_strain_milli": {
+                          "type": "number"
+                        },
+                        "need_from_recent_nap_milli": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "baseline_milli",
+                        "need_from_sleep_debt_milli",
+                        "need_from_recent_strain_milli",
+                        "need_from_recent_nap_milli"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "respiratory_rate": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sleep_performance_percentage": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sleep_efficiency_percentage": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "sleep_consistency_percentage": {
+                      "anyOf": [
+                        {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "stage_summary",
+                    "sleep_needed"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "user_id",
+            "created_at",
+            "updated_at",
+            "score_state",
+            "start",
+            "end",
+            "timezone_offset",
+            "id",
+            "cycle_id",
+            "nap"
+          ],
+          "additionalProperties": {}
+        }
+      },
+      "next_token": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "records"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

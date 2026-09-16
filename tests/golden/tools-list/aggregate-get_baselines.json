@@ -1,0 +1,287 @@
+{
+  "name": "get_baselines",
+  "description": "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time) and recovery. Excludes the latest observation and today from baselines, so it reads baseline_days + 2 days of history; not medical advice. `period` gives the local days the baselines cover. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data' or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "baseline_days": {
+        "description": "Earlier days to build baselines from (14-180). Default: 30. The most recent observation and today are not part of a baseline, so the window read reaches 2 days further back (baseline_days + 2 days, ending now). Each baseline needs at least 14 earlier days with data; until then its metric_status explains why (e.g. 'calibrating').",
+        "type": "integer",
+        "minimum": 14,
+        "maximum": 180
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "period": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "metrics": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "enum": [
+            "hrv",
+            "rhr",
+            "respiratory_rate",
+            "sleep_hours",
+            "recovery_score"
+          ]
+        },
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sample_size": {
+                  "type": "number"
+                },
+                "mean": {
+                  "type": "number"
+                },
+                "median": {
+                  "type": "number"
+                },
+                "std_dev": {
+                  "type": "number"
+                },
+                "p10": {
+                  "type": "number"
+                },
+                "p25": {
+                  "type": "number"
+                },
+                "p50": {
+                  "type": "number"
+                },
+                "p75": {
+                  "type": "number"
+                },
+                "p90": {
+                  "type": "number"
+                },
+                "constant_baseline": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "sample_size",
+                "mean",
+                "median",
+                "std_dev",
+                "p10",
+                "p25",
+                "p50",
+                "p75",
+                "p90",
+                "constant_baseline"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required": [
+          "hrv",
+          "rhr",
+          "respiratory_rate",
+          "sleep_hours",
+          "recovery_score"
+        ]
+      },
+      "metric_status": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string",
+          "enum": [
+            "hrv",
+            "rhr",
+            "respiratory_rate",
+            "sleep_hours",
+            "recovery_score"
+          ]
+        },
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "available",
+                "insufficient_data",
+                "calibrating",
+                "unavailable"
+              ]
+            },
+            "sample_size": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "required_sample_size": {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            "unit": {
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "status",
+            "sample_size",
+            "required_sample_size",
+            "unit",
+            "reason"
+          ],
+          "additionalProperties": false
+        },
+        "required": [
+          "hrv",
+          "rhr",
+          "respiratory_rate",
+          "sleep_hours",
+          "recovery_score"
+        ]
+      },
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "data_quality": {
+        "type": "object",
+        "properties": {
+          "evaluated_at": {
+            "type": "string"
+          },
+          "requested_period": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          },
+          "method_version": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "records_fetched": {
+                  "type": "number"
+                },
+                "records_used": {
+                  "type": "number"
+                },
+                "exclusions": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "status",
+                "records_fetched",
+                "records_used",
+                "exclusions",
+                "truncated"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "evaluated_at",
+          "requested_period",
+          "method_version",
+          "sources"
+        ],
+        "additionalProperties": false
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "disclaimer": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "period",
+      "metrics",
+      "metric_status",
+      "notes",
+      "data_quality",
+      "truncated",
+      "disclaimer"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

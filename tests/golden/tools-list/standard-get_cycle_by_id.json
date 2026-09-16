@@ -1,0 +1,126 @@
+{
+  "name": "get_cycle_by_id",
+  "description": "Get a single physiological cycle by its ID. Returns strain, calories, and heart rate data.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "integer",
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "description": "The record ID to look up."
+      }
+    },
+    "required": [
+      "id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "user_id": {
+        "type": "integer",
+        "minimum": -9007199254740991,
+        "maximum": 9007199254740991
+      },
+      "created_at": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      },
+      "updated_at": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      },
+      "score_state": {
+        "type": "string",
+        "enum": [
+          "SCORED",
+          "PENDING_SCORE",
+          "UNSCORABLE"
+        ]
+      },
+      "start": {
+        "type": "string",
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+      },
+      "end": {
+        "anyOf": [
+          {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "timezone_offset": {
+        "type": "string",
+        "pattern": "^(?:Z|[+-](?:0\\d|1[0-4]):[0-5]\\d)$"
+      },
+      "id": {
+        "type": "integer",
+        "minimum": -9007199254740991,
+        "maximum": 9007199254740991
+      },
+      "score": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "strain": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 21
+              },
+              "kilojoule": {
+                "type": "number",
+                "minimum": 0
+              },
+              "average_heart_rate": {
+                "type": "number",
+                "minimum": 0
+              },
+              "max_heart_rate": {
+                "type": "number",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "strain",
+              "kilojoule",
+              "average_heart_rate",
+              "max_heart_rate"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "user_id",
+      "created_at",
+      "updated_at",
+      "score_state",
+      "start",
+      "timezone_offset",
+      "id"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": {}
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

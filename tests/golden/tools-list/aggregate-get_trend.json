@@ -1,0 +1,221 @@
+{
+  "name": "get_trend",
+  "description": "Analyze one health metric over the last N local days (today included): values oldest first with their local dates, statistics, a linear-regression slope per day, and anomalies. trend.change is the raw direction (increasing/decreasing/stable); trend.direction says whether that is improving or declining for this metric (better_when: higher for recovery, HRV and sleep; lower for resting heart rate; strain has no better direction, so direction is null). Confidence rates how well a sloped line fits the values (R²), capped by sample size (low below 7 points, at most medium below 14). Identical values are stable and rated on sample size alone. A stable trend from values that vary usually has low confidence: no consistent upward or downward direction was found, which does not mean the stability finding is unreliable. With fewer than 4 data points (e.g. while WHOOP is still calibrating) status is insufficient_data, trend fields are null, anomalies are empty and notes say why; statistics are still given for the data that exists. sleep_duration is hours asleep on main sleeps (naps excluded); strain uses completed cycles only.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "metric": {
+        "type": "string",
+        "enum": [
+          "recovery",
+          "hrv",
+          "rhr",
+          "sleep_duration",
+          "sleep_performance",
+          "strain"
+        ],
+        "description": "The health metric to analyze."
+      },
+      "days": {
+        "description": "Number of local calendar days to analyze, today included (7–90). Default: 30.",
+        "type": "integer",
+        "minimum": 7,
+        "maximum": 90
+      }
+    },
+    "required": [
+      "metric"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "metric": {
+        "type": "string"
+      },
+      "period": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "days": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "days"
+        ],
+        "additionalProperties": false
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "available",
+          "insufficient_data"
+        ]
+      },
+      "sample_size": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 9007199254740991
+      },
+      "calibrating": {
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "statistics": {
+        "type": "object",
+        "properties": {
+          "mean": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "std_dev": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mean",
+          "std_dev"
+        ],
+        "additionalProperties": false
+      },
+      "trend": {
+        "type": "object",
+        "properties": {
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "improving",
+                  "declining",
+                  "stable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "change": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "increasing",
+                  "decreasing",
+                  "stable"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "better_when": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "higher",
+                  "lower"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "slope": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "direction",
+          "change",
+          "better_when",
+          "slope",
+          "confidence"
+        ],
+        "additionalProperties": false
+      },
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "metric",
+      "period",
+      "status",
+      "sample_size",
+      "calibrating",
+      "truncated",
+      "statistics",
+      "trend",
+      "notes"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

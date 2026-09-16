@@ -3,6 +3,8 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createWhoopServer } from "../src/server.js";
 import { analyticsClient } from "./helpers/analytics-fixtures.js";
+import { aggregateOutputSchemas } from "../src/tools/output-contracts.js";
+import { ADDITIONAL_TOOLS } from "../src/tools/registry/index.js";
 
 async function connected(
   aggregate: boolean,
@@ -26,7 +28,7 @@ describe("release MCP contracts", () => {
   it("advertises output schemas and returns equivalent structured/text results", async () => {
     await connected(false, async (client) => {
       const { tools } = await client.listTools();
-      expect(tools).toHaveLength(16);
+      expect(tools).toHaveLength(16 + ADDITIONAL_TOOLS.length);
       expect(tools.every((tool) => tool.outputSchema?.type === "object")).toBe(true);
       for (const name of ["get_baselines", "get_sleep_debt", "get_today"]) {
         const result = await client.callTool({ name, arguments: {} });
@@ -39,13 +41,23 @@ describe("release MCP contracts", () => {
   it("exposes only aggregate capabilities and projects both output channels", async () => {
     await connected(true, async (client) => {
       const { tools } = await client.listTools();
-      expect(tools.map((tool) => tool.name).sort()).toEqual([
-        "compare_periods",
-        "get_baselines",
-        "get_sleep_debt",
-        "get_trend",
-        "get_weekly_summary",
-      ]);
+      const names = tools.map((tool) => tool.name);
+      expect(names).toEqual(
+        expect.arrayContaining([
+          "compare_periods",
+          "get_baselines",
+          "get_sleep_debt",
+          "get_trend",
+          "get_weekly_summary",
+        ])
+      );
+      // Every tool listed in aggregate mode has an aggregate contract: a legacy
+      // aggregate output schema or a registry aggregate variant
+      const registryAggregate = new Set(
+        ADDITIONAL_TOOLS.filter((tool) => tool.aggregate !== undefined).map((tool) => tool.name)
+      );
+      for (const name of names)
+        expect(name in aggregateOutputSchemas || registryAggregate.has(name)).toBe(true);
       // Extremes are always one record's value, so aggregate contracts do not advertise them
       const advertised = JSON.stringify(
         tools.filter((tool) => ["get_trend", "get_weekly_summary"].includes(tool.name))

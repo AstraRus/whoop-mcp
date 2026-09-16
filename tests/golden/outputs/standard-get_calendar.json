@@ -1,0 +1,2289 @@
+{
+  "tool": "get_calendar",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "default week on a new account",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-10",
+            "end": "2026-09-16",
+            "days": 7,
+            "utc_offset": "+02:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-16",
+              "recovery_score": 67,
+              "recovery_zone": "green",
+              "recovery_calibrating": true,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 83,
+              "day_strain": 13.0542,
+              "day_strain_in_progress": true,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-15",
+              "recovery_score": 58,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": true,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 71,
+              "day_strain": 15.8836,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-14",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": 9.4217,
+              "day_strain_in_progress": false,
+              "day_strain_partial": true
+            },
+            {
+              "date": "2026-09-13",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-12",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-11",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-10",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 62.5,
+            "sleep_hours": 6.6,
+            "strain": 15.9,
+            "sample_sizes": {
+              "recovery": 2,
+              "sleep_hours": 2,
+              "strain": 1
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "WHOOP is still calibrating: recovery for 2026-09-15, 2026-09-16 is provisional (recovery_calibrating: true) and is included in averages.recovery.",
+            "Strain for 2026-09-16 is still accumulating (day_strain_in_progress: true) and is left out of averages.strain.",
+            "Strain for 2026-09-14 covers only part of the day (WHOOP was first worn partway through it; day_strain_partial: true) and is left out of averages.strain.",
+            "No WHOOP data before 2026-09-14 in this range; the 4 earlier day(s) are null.",
+            "Not enough data yet for reliable averages: recovery 2 of 7 days, sleep 2 of 7 days, strain 1 of 5 completed days. An average is null when no day has data."
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "three days",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "days": 3
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-14",
+            "end": "2026-09-16",
+            "days": 3,
+            "utc_offset": "+02:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-16",
+              "recovery_score": 67,
+              "recovery_zone": "green",
+              "recovery_calibrating": true,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 83,
+              "day_strain": 13.0542,
+              "day_strain_in_progress": true,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-15",
+              "recovery_score": 58,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": true,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 71,
+              "day_strain": 15.8836,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-14",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": 9.4217,
+              "day_strain_in_progress": false,
+              "day_strain_partial": true
+            }
+          ],
+          "averages": {
+            "recovery": 62.5,
+            "sleep_hours": 6.6,
+            "strain": 15.9,
+            "sample_sizes": {
+              "recovery": 2,
+              "sleep_hours": 2,
+              "strain": 1
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "WHOOP is still calibrating: recovery for 2026-09-15, 2026-09-16 is provisional (recovery_calibrating: true) and is included in averages.recovery.",
+            "Strain for 2026-09-16 is still accumulating (day_strain_in_progress: true) and is left out of averages.strain.",
+            "Strain for 2026-09-14 covers only part of the day (WHOOP was first worn partway through it; day_strain_partial: true) and is left out of averages.strain.",
+            "Not enough data yet for reliable averages: recovery 2 of 3 days, sleep 2 of 3 days, strain 1 of 1 completed days. An average is null when no day has data."
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "after local midnight before the next sleep",
+      "fixture": "liveShapedUser@2026-09-17T00:30:00+02:00",
+      "now": "2026-09-16T22:30:00.000Z",
+      "arguments": {
+        "days": 3
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-15",
+            "end": "2026-09-17",
+            "days": 3,
+            "utc_offset": "+02:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-17",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-16",
+              "recovery_score": 67,
+              "recovery_zone": "green",
+              "recovery_calibrating": true,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 83,
+              "day_strain": 13.0542,
+              "day_strain_in_progress": true,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-15",
+              "recovery_score": 58,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": true,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 71,
+              "day_strain": 15.8836,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 62.5,
+            "sleep_hours": 6.6,
+            "strain": 15.9,
+            "sample_sizes": {
+              "recovery": 2,
+              "sleep_hours": 2,
+              "strain": 1
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "WHOOP is still calibrating: recovery for 2026-09-15, 2026-09-16 is provisional (recovery_calibrating: true) and is included in averages.recovery.",
+            "Strain for 2026-09-16 is still accumulating (day_strain_in_progress: true) and is left out of averages.strain.",
+            "Today's (2026-09-17) WHOOP cycle has not started yet: a new cycle begins at your next sleep and appears once that sleep syncs. Until then, strain is still being added to the open cycle that started 2026-09-15 23:13, shown on 2026-09-16 (day_strain_in_progress: true). Its row stays null until then; this is not missing data."
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30,
+            "utc_offset": "+01:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-16",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": 5.2041,
+              "day_strain_in_progress": true,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-15",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7,
+              "sleep_performance_pct": 78,
+              "day_strain": 11.5363,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-14",
+              "recovery_score": 82,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 8.1,
+              "sleep_performance_pct": 96,
+              "day_strain": 9.6851,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-13",
+              "recovery_score": 68,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 68,
+              "day_strain": 5.5768,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-12",
+              "recovery_score": 77,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 76,
+              "day_strain": 14.3545,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-11",
+              "recovery_score": 87,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 77,
+              "day_strain": 9.227,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-10",
+              "recovery_score": 60,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 73,
+              "day_strain": 8.4377,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-09",
+              "recovery_score": 98,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 8.2,
+              "sleep_performance_pct": 94,
+              "day_strain": 7.033,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-08",
+              "recovery_score": 93,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5,
+              "sleep_performance_pct": 58,
+              "day_strain": 9.4651,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-07",
+              "recovery_score": 69,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 79,
+              "day_strain": 11.6942,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-06",
+              "recovery_score": 90,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.4,
+              "sleep_performance_pct": 49,
+              "day_strain": 7.2336,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-05",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.7,
+              "sleep_performance_pct": 80,
+              "day_strain": 10.4376,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-04",
+              "recovery_score": 85,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.6,
+              "sleep_performance_pct": 67,
+              "day_strain": 11.1919,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-03",
+              "recovery_score": 91,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 70,
+              "day_strain": 8.9588,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-02",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.7,
+              "sleep_performance_pct": 91,
+              "day_strain": 5.137,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-01",
+              "recovery_score": 93,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.3,
+              "sleep_performance_pct": 73,
+              "day_strain": 9.1719,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-31",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 75,
+              "day_strain": 8.0119,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-30",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 90,
+              "day_strain": 12.0662,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-29",
+              "recovery_score": 86,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 68,
+              "day_strain": 6.0538,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-28",
+              "recovery_score": 62,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 71,
+              "day_strain": 12.7304,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-27",
+              "recovery_score": 70,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 76,
+              "day_strain": 5.5889,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-26",
+              "recovery_score": 46,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 3.8,
+              "sleep_performance_pct": 43,
+              "day_strain": 11.0235,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-25",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 68,
+              "day_strain": 9.4518,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-24",
+              "recovery_score": 49,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.4,
+              "sleep_performance_pct": 86,
+              "day_strain": 7.0117,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-23",
+              "recovery_score": 65,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 55,
+              "day_strain": 7.8773,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-22",
+              "recovery_score": 45,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 76,
+              "day_strain": 10.3314,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-21",
+              "recovery_score": 76,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.9,
+              "sleep_performance_pct": 89,
+              "day_strain": 6.8553,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-20",
+              "recovery_score": 88,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.3,
+              "sleep_performance_pct": 85,
+              "day_strain": 11.6668,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-19",
+              "recovery_score": 62,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 76,
+              "day_strain": 11.2365,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-18",
+              "recovery_score": 85,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.2,
+              "sleep_performance_pct": 84,
+              "day_strain": 11.616,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 78.7,
+            "sleep_hours": 6.5,
+            "strain": 9.3,
+            "sample_sizes": {
+              "recovery": 29,
+              "sleep_hours": 29,
+              "strain": 29
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "Recovery for 2026-09-16 is still being scored by WHOOP; shown as null.",
+            "Sleep for 2026-09-16 is still being scored by WHOOP; shown as null.",
+            "Strain for 2026-09-16 is still accumulating (day_strain_in_progress: true) and is left out of averages.strain.",
+            "Averages use only days with data: recovery 29 of 30 days, sleep 29 of 30 days, strain 29 of 29 completed days. An average is null when no day has data."
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "90 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "days": 90
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-06-19",
+            "end": "2026-09-16",
+            "days": 90,
+            "utc_offset": "+01:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-16",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": 5.2041,
+              "day_strain_in_progress": true,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-15",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7,
+              "sleep_performance_pct": 78,
+              "day_strain": 11.5363,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-14",
+              "recovery_score": 82,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 8.1,
+              "sleep_performance_pct": 96,
+              "day_strain": 9.6851,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-13",
+              "recovery_score": 68,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 68,
+              "day_strain": 5.5768,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-12",
+              "recovery_score": 77,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 76,
+              "day_strain": 14.3545,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-11",
+              "recovery_score": 87,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 77,
+              "day_strain": 9.227,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-10",
+              "recovery_score": 60,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 73,
+              "day_strain": 8.4377,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-09",
+              "recovery_score": 98,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 8.2,
+              "sleep_performance_pct": 94,
+              "day_strain": 7.033,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-08",
+              "recovery_score": 93,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5,
+              "sleep_performance_pct": 58,
+              "day_strain": 9.4651,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-07",
+              "recovery_score": 69,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 79,
+              "day_strain": 11.6942,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-06",
+              "recovery_score": 90,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.4,
+              "sleep_performance_pct": 49,
+              "day_strain": 7.2336,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-05",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.7,
+              "sleep_performance_pct": 80,
+              "day_strain": 10.4376,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-04",
+              "recovery_score": 85,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.6,
+              "sleep_performance_pct": 67,
+              "day_strain": 11.1919,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-03",
+              "recovery_score": 91,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 70,
+              "day_strain": 8.9588,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-02",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.7,
+              "sleep_performance_pct": 91,
+              "day_strain": 5.137,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-01",
+              "recovery_score": 93,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.3,
+              "sleep_performance_pct": 73,
+              "day_strain": 9.1719,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-31",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 75,
+              "day_strain": 8.0119,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-30",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 90,
+              "day_strain": 12.0662,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-29",
+              "recovery_score": 86,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 68,
+              "day_strain": 6.0538,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-28",
+              "recovery_score": 62,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 71,
+              "day_strain": 12.7304,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-27",
+              "recovery_score": 70,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 76,
+              "day_strain": 5.5889,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-26",
+              "recovery_score": 46,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 3.8,
+              "sleep_performance_pct": 43,
+              "day_strain": 11.0235,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-25",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 68,
+              "day_strain": 9.4518,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-24",
+              "recovery_score": 49,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.4,
+              "sleep_performance_pct": 86,
+              "day_strain": 7.0117,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-23",
+              "recovery_score": 65,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 55,
+              "day_strain": 7.8773,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-22",
+              "recovery_score": 45,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 76,
+              "day_strain": 10.3314,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-21",
+              "recovery_score": 76,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.9,
+              "sleep_performance_pct": 89,
+              "day_strain": 6.8553,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-20",
+              "recovery_score": 88,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.3,
+              "sleep_performance_pct": 85,
+              "day_strain": 11.6668,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-19",
+              "recovery_score": 62,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 76,
+              "day_strain": 11.2365,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-18",
+              "recovery_score": 85,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.2,
+              "sleep_performance_pct": 84,
+              "day_strain": 11.616,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-17",
+              "recovery_score": 96,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 64,
+              "day_strain": 9.0635,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-16",
+              "recovery_score": 90,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 72,
+              "day_strain": 9.8997,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-15",
+              "recovery_score": 65,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.5,
+              "sleep_performance_pct": 51,
+              "day_strain": 10.5685,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-14",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.6,
+              "sleep_performance_pct": 85,
+              "day_strain": 9.1305,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-13",
+              "recovery_score": 87,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 8.2,
+              "sleep_performance_pct": 97,
+              "day_strain": 10.6554,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-12",
+              "recovery_score": 71,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 80,
+              "day_strain": 10.9718,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-11",
+              "recovery_score": 81,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 67,
+              "day_strain": 9.755,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-10",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.3,
+              "sleep_performance_pct": 87,
+              "day_strain": 7.3843,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-09",
+              "recovery_score": 90,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 69,
+              "day_strain": 10.5358,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-08",
+              "recovery_score": 80,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 55,
+              "day_strain": 10.4747,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-07",
+              "recovery_score": 98,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.3,
+              "sleep_performance_pct": 68,
+              "day_strain": 10.2494,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-06",
+              "recovery_score": 60,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.5,
+              "sleep_performance_pct": 66,
+              "day_strain": 10.3983,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-05",
+              "recovery_score": 55,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.4,
+              "sleep_performance_pct": 75,
+              "day_strain": 11.9508,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-04",
+              "recovery_score": 52,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 56,
+              "day_strain": 11.6942,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-03",
+              "recovery_score": 56,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.2,
+              "sleep_performance_pct": 84,
+              "day_strain": 6.7497,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-02",
+              "recovery_score": 80,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 73,
+              "day_strain": 10.2797,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-01",
+              "recovery_score": 78,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 52,
+              "day_strain": 9.5805,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-31",
+              "recovery_score": 94,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 66,
+              "day_strain": 10.1972,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-30",
+              "recovery_score": 96,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.6,
+              "sleep_performance_pct": 51,
+              "day_strain": 10.0862,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-29",
+              "recovery_score": 73,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 75,
+              "day_strain": 7.5429,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-28",
+              "recovery_score": 86,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.5,
+              "sleep_performance_pct": 64,
+              "day_strain": 9.7392,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-27",
+              "recovery_score": 67,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.4,
+              "sleep_performance_pct": 69,
+              "day_strain": 11.3326,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-26",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.1,
+              "sleep_performance_pct": 59,
+              "day_strain": 12.6464,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-25",
+              "recovery_score": 68,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.6,
+              "sleep_performance_pct": 98,
+              "day_strain": 8.7844,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-24",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 3.3,
+              "sleep_performance_pct": 37,
+              "day_strain": 6.0543,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-23",
+              "recovery_score": 82,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.5,
+              "sleep_performance_pct": 65,
+              "day_strain": 5.161,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-22",
+              "recovery_score": 78,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.9,
+              "sleep_performance_pct": 74,
+              "day_strain": 8.0869,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-21",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.9,
+              "sleep_performance_pct": 57,
+              "day_strain": 12.6064,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-20",
+              "recovery_score": 46,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 8,
+              "sleep_performance_pct": 95,
+              "day_strain": 9.0684,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-19",
+              "recovery_score": 61,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.9,
+              "sleep_performance_pct": 86,
+              "day_strain": 8.767,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-18",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 71,
+              "day_strain": 5.0534,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-17",
+              "recovery_score": 81,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.7,
+              "sleep_performance_pct": 63,
+              "day_strain": 12.5717,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-16",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.4,
+              "sleep_performance_pct": 86,
+              "day_strain": 9.4152,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-15",
+              "recovery_score": 73,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 56,
+              "day_strain": 7.9694,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-14",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-13",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-12",
+              "recovery_score": 39,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 63,
+              "day_strain": 10.9138,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-11",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.2,
+              "sleep_performance_pct": 60,
+              "day_strain": 11.8288,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-10",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 72,
+              "day_strain": 12.2305,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-09",
+              "recovery_score": 62,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.1,
+              "sleep_performance_pct": 57,
+              "day_strain": 10.9191,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-08",
+              "recovery_score": 64,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.6,
+              "sleep_performance_pct": 87,
+              "day_strain": 11.3484,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-07",
+              "recovery_score": 78,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 86,
+              "day_strain": 11.5941,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-06",
+              "recovery_score": 86,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.3,
+              "sleep_performance_pct": 72,
+              "day_strain": 11.7964,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-05",
+              "recovery_score": 76,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.4,
+              "sleep_performance_pct": 81,
+              "day_strain": 10.1822,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-04",
+              "recovery_score": 60,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.2,
+              "sleep_performance_pct": 83,
+              "day_strain": 10.7609,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-03",
+              "recovery_score": 74,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.3,
+              "sleep_performance_pct": 61,
+              "day_strain": 10.1863,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-02",
+              "recovery_score": 61,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5,
+              "sleep_performance_pct": 59,
+              "day_strain": 12.9444,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-01",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.9,
+              "sleep_performance_pct": 69,
+              "day_strain": 9.2803,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-30",
+              "recovery_score": 72,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.4,
+              "sleep_performance_pct": 82,
+              "day_strain": 9.9516,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-29",
+              "recovery_score": 80,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.3,
+              "sleep_performance_pct": 59,
+              "day_strain": 6.4554,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-28",
+              "recovery_score": 42,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 77,
+              "day_strain": 8.0046,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-27",
+              "recovery_score": 54,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.9,
+              "sleep_performance_pct": 70,
+              "day_strain": 11.5236,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-26",
+              "recovery_score": 35,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7,
+              "sleep_performance_pct": 82,
+              "day_strain": 5.5344,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-25",
+              "recovery_score": 57,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 3.1,
+              "sleep_performance_pct": 36,
+              "day_strain": 8.943,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-24",
+              "recovery_score": 64,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5,
+              "sleep_performance_pct": 57,
+              "day_strain": 10.9463,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-23",
+              "recovery_score": 61,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 70,
+              "day_strain": 13.2305,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-22",
+              "recovery_score": 51,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 72,
+              "day_strain": 11.8465,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-21",
+              "recovery_score": 77,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.5,
+              "sleep_performance_pct": 64,
+              "day_strain": 12.3468,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-20",
+              "recovery_score": 43,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.9,
+              "sleep_performance_pct": 69,
+              "day_strain": 11.4199,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-19",
+              "recovery_score": 46,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 92,
+              "day_strain": 8.2516,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 72.5,
+            "sleep_hours": 6.2,
+            "strain": 9.7,
+            "sample_sizes": {
+              "recovery": 87,
+              "sleep_hours": 87,
+              "strain": 87
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "Recovery for 2026-09-16 is still being scored by WHOOP; shown as null.",
+            "Sleep for 2026-09-16 is still being scored by WHOOP; shown as null.",
+            "Strain for 2026-09-16 is still accumulating (day_strain_in_progress: true) and is left out of averages.strain.",
+            "No WHOOP data for 2 of 90 days (e.g. before you started wearing WHOOP or while it was off); their values are null.",
+            "Averages use only days with data: recovery 87 of 90 days, sleep 87 of 90 days, strain 87 of 89 completed days. An average is null when no day has data."
+          ],
+          "warnings": [
+            "Two WHOOP cycles belong to 2026-06-25 (for example, a second main sleep ended that day). The row shows the cycle that started 2026-06-25 02:46; the cycle that started 2026-06-24 22:55 (strain 1.7) is left out of the grid and its averages."
+          ]
+        }
+      }
+    },
+    {
+      "name": "last week",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "last week"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-07",
+            "end": "2026-09-13",
+            "days": 7,
+            "utc_offset": "+01:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-07",
+              "recovery_score": 69,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 79,
+              "day_strain": 11.6942,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-08",
+              "recovery_score": 93,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5,
+              "sleep_performance_pct": 58,
+              "day_strain": 9.4651,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-09",
+              "recovery_score": 98,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 8.2,
+              "sleep_performance_pct": 94,
+              "day_strain": 7.033,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-10",
+              "recovery_score": 60,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 73,
+              "day_strain": 8.4377,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-11",
+              "recovery_score": 87,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 77,
+              "day_strain": 9.227,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-12",
+              "recovery_score": 77,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.8,
+              "sleep_performance_pct": 76,
+              "day_strain": 14.3545,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-13",
+              "recovery_score": 68,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 68,
+              "day_strain": 5.5768,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 78.9,
+            "sleep_hours": 6.5,
+            "strain": 9.4,
+            "sample_sizes": {
+              "recovery": 7,
+              "sleep_hours": 7,
+              "strain": 7
+            }
+          },
+          "truncated": false,
+          "notes": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "strap-off gap",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-07-10",
+        "days": 10
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-07-10",
+            "end": "2026-07-19",
+            "days": 10,
+            "utc_offset": "+01:00"
+          },
+          "days": [
+            {
+              "date": "2026-07-10",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 72,
+              "day_strain": 12.2305,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-11",
+              "recovery_score": 53,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.2,
+              "sleep_performance_pct": 60,
+              "day_strain": 11.8288,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-12",
+              "recovery_score": 39,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 63,
+              "day_strain": 10.9138,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-13",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-14",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-15",
+              "recovery_score": 73,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 56,
+              "day_strain": 7.9694,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-16",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.4,
+              "sleep_performance_pct": 86,
+              "day_strain": 9.4152,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-17",
+              "recovery_score": 81,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.7,
+              "sleep_performance_pct": 63,
+              "day_strain": 12.5717,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-18",
+              "recovery_score": 79,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.6,
+              "sleep_performance_pct": 71,
+              "day_strain": 5.0534,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-07-19",
+              "recovery_score": 61,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.9,
+              "sleep_performance_pct": 86,
+              "day_strain": 8.767,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 64.8,
+            "sleep_hours": 6.1,
+            "strain": 9.8,
+            "sample_sizes": {
+              "recovery": 8,
+              "sleep_hours": 8,
+              "strain": 8
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "No WHOOP data for 2 of 10 days (e.g. before you started wearing WHOOP or while it was off); their values are null.",
+            "Averages use only days with data: recovery 8 of 10 days, sleep 8 of 10 days, strain 8 of 10 days. An average is null when no day has data."
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "split night",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-06-22",
+        "days": 7
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-06-22",
+            "end": "2026-06-28",
+            "days": 7,
+            "utc_offset": "+01:00"
+          },
+          "days": [
+            {
+              "date": "2026-06-22",
+              "recovery_score": 51,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.5,
+              "sleep_performance_pct": 72,
+              "day_strain": 11.8465,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-23",
+              "recovery_score": 61,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 70,
+              "day_strain": 13.2305,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-24",
+              "recovery_score": 64,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5,
+              "sleep_performance_pct": 57,
+              "day_strain": 10.9463,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-25",
+              "recovery_score": 57,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 3.1,
+              "sleep_performance_pct": 36,
+              "day_strain": 8.943,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-26",
+              "recovery_score": 35,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7,
+              "sleep_performance_pct": 82,
+              "day_strain": 5.5344,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-27",
+              "recovery_score": 54,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.9,
+              "sleep_performance_pct": 70,
+              "day_strain": 11.5236,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-06-28",
+              "recovery_score": 42,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 77,
+              "day_strain": 8.0046,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 52,
+            "sleep_hours": 5.8,
+            "strain": 10,
+            "sample_sizes": {
+              "recovery": 7,
+              "sleep_hours": 7,
+              "strain": 7
+            }
+          },
+          "truncated": false,
+          "notes": [],
+          "warnings": [
+            "Two WHOOP cycles belong to 2026-06-25 (for example, a second main sleep ended that day). The row shows the cycle that started 2026-06-25 02:46; the cycle that started 2026-06-24 22:55 (strain 1.7) is left out of the grid and its averages."
+          ]
+        }
+      }
+    },
+    {
+      "name": "offset change",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-08-05T09:00:00+02:00",
+        "days": 7
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-08-05",
+            "end": "2026-08-11",
+            "days": 7,
+            "utc_offset": "+01:00"
+          },
+          "days": [
+            {
+              "date": "2026-08-05",
+              "recovery_score": 55,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.4,
+              "sleep_performance_pct": 75,
+              "day_strain": 11.9508,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-06",
+              "recovery_score": 60,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.5,
+              "sleep_performance_pct": 66,
+              "day_strain": 10.3983,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-07",
+              "recovery_score": 98,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.3,
+              "sleep_performance_pct": 68,
+              "day_strain": 10.2494,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-08",
+              "recovery_score": 80,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 4.7,
+              "sleep_performance_pct": 55,
+              "day_strain": 10.4747,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-09",
+              "recovery_score": 90,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 5.8,
+              "sleep_performance_pct": 69,
+              "day_strain": 10.5358,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-10",
+              "recovery_score": 99,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 7.3,
+              "sleep_performance_pct": 87,
+              "day_strain": 7.3843,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-08-11",
+              "recovery_score": 81,
+              "recovery_zone": "green",
+              "recovery_calibrating": false,
+              "sleep_hours": 6.2,
+              "sleep_performance_pct": 67,
+              "day_strain": 9.755,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 80.4,
+            "sleep_hours": 6,
+            "strain": 10.1,
+            "sample_sizes": {
+              "recovery": 7,
+              "sleep_hours": 7,
+              "strain": 7
+            }
+          },
+          "truncated": false,
+          "notes": [],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "start after today",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-10-01"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-10-01",
+            "end": "2026-10-01",
+            "days": 0,
+            "utc_offset": "+02:00"
+          },
+          "days": [],
+          "averages": {
+            "recovery": null,
+            "sleep_hours": null,
+            "strain": null,
+            "sample_sizes": {
+              "recovery": 0,
+              "sleep_hours": 0,
+              "strain": 0
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "The start date 2026-10-01 is after today (2026-09-16); there are no days to show."
+          ],
+          "warnings": []
+        }
+      }
+    },
+    {
+      "name": "unrecognized start",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "whenever"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "Unrecognized date expression: \"whenever\". Supported: \"today\", \"yesterday\", \"last N days\", \"last N weeks\", \"last N months\", \"this week\", \"last week\", \"this month\", \"last month\", \"this quarter\", \"last quarter\", \"last year\", \"YYYY-MM\", or an ISO 8601 date (YYYY-MM-DD) or date-time.",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "cycle stream unavailable",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "days": 3
+      },
+      "failures": [
+        {
+          "path": "^/v2/cycle\\?start=",
+          "status": 500
+        }
+      ],
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-14",
+            "end": "2026-09-16",
+            "days": 3,
+            "utc_offset": "+02:00"
+          },
+          "days": [
+            {
+              "date": "2026-09-16",
+              "recovery_score": 67,
+              "recovery_zone": "green",
+              "recovery_calibrating": true,
+              "sleep_hours": 7.1,
+              "sleep_performance_pct": 83,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-15",
+              "recovery_score": 58,
+              "recovery_zone": "yellow",
+              "recovery_calibrating": true,
+              "sleep_hours": 6.1,
+              "sleep_performance_pct": 71,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            },
+            {
+              "date": "2026-09-14",
+              "recovery_score": null,
+              "recovery_zone": null,
+              "recovery_calibrating": null,
+              "sleep_hours": null,
+              "sleep_performance_pct": null,
+              "day_strain": null,
+              "day_strain_in_progress": false,
+              "day_strain_partial": false
+            }
+          ],
+          "averages": {
+            "recovery": 62.5,
+            "sleep_hours": 6.6,
+            "strain": null,
+            "sample_sizes": {
+              "recovery": 2,
+              "sleep_hours": 2,
+              "strain": 0
+            }
+          },
+          "truncated": false,
+          "notes": [
+            "WHOOP is still calibrating: recovery for 2026-09-15, 2026-09-16 is provisional (recovery_calibrating: true) and is included in averages.recovery.",
+            "No WHOOP data before 2026-09-15 in this range; the 1 earlier day(s) are null. Some data could not be loaded; see warnings.",
+            "Not enough data yet for reliable averages: recovery 2 of 3 days, sleep 2 of 3 days. An average is null when no day has data."
+          ],
+          "warnings": [
+            "Cycle data could not be loaded (WHOOP API returned HTTP 500), so these columns are null for every day: day_strain."
+          ]
+        }
+      }
+    }
+  ]
+}

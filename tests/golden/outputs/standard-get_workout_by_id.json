@@ -1,0 +1,209 @@
+{
+  "tool": "get_workout_by_id",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "GPS run with sport_id 0",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c02"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 7001,
+          "created_at": "2026-09-15T06:36:21.447Z",
+          "updated_at": "2026-09-15T06:36:24.902Z",
+          "score_state": "SCORED",
+          "start": "2026-09-15T05:52:10.084Z",
+          "end": "2026-09-15T06:33:55.690Z",
+          "timezone_offset": "+02:00",
+          "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c02",
+          "sport_name": "running",
+          "sport_id": 0,
+          "v1_id": null,
+          "score": {
+            "strain": 11.9384,
+            "average_heart_rate": 152,
+            "max_heart_rate": 177,
+            "kilojoule": 2011.42,
+            "percent_recorded": 1,
+            "zone_durations": {
+              "zone_zero_milli": 30112,
+              "zone_one_milli": 121904,
+              "zone_two_milli": 402221,
+              "zone_three_milli": 1110337,
+              "zone_four_milli": 701506,
+              "zone_five_milli": 139526
+            },
+            "distance_meter": 7412.6,
+            "altitude_gain_meter": 61.3,
+            "altitude_change_meter": 2.4
+          }
+        }
+      }
+    },
+    {
+      "name": "run with percent_recorded 0.99975777",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c08"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 7001,
+          "created_at": "2026-09-16T18:14:09.330Z",
+          "updated_at": "2026-09-16T18:16:02.337Z",
+          "score_state": "SCORED",
+          "start": "2026-09-16T17:26:03.118Z",
+          "end": "2026-09-16T18:11:47.905Z",
+          "timezone_offset": "+02:00",
+          "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c08",
+          "sport_name": "running",
+          "sport_id": 0,
+          "v1_id": null,
+          "score": {
+            "strain": 12.4467,
+            "average_heart_rate": 155,
+            "max_heart_rate": 179,
+            "kilojoule": 2203.79,
+            "percent_recorded": 0.99975777,
+            "zone_durations": {
+              "zone_zero_milli": 20004,
+              "zone_one_milli": 90315,
+              "zone_two_milli": 350227,
+              "zone_three_milli": 1202441,
+              "zone_four_milli": 902118,
+              "zone_five_milli": 179017
+            },
+            "distance_meter": 8103.4,
+            "altitude_gain_meter": 44.7,
+            "altitude_change_meter": -1.3
+          }
+        }
+      }
+    },
+    {
+      "name": "manual-shaped walk",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c06"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 7001,
+          "created_at": "2026-09-16T08:10:00.000Z",
+          "updated_at": "2026-09-16T11:48:05.000Z",
+          "score_state": "SCORED",
+          "start": "2026-09-16T07:30:00.000Z",
+          "end": "2026-09-16T08:10:00.000Z",
+          "timezone_offset": "+02:00",
+          "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c06",
+          "sport_name": "walking",
+          "sport_id": 63,
+          "v1_id": null,
+          "score": {
+            "strain": 4.9016,
+            "average_heart_rate": 105,
+            "max_heart_rate": 131,
+            "kilojoule": 702.04,
+            "percent_recorded": 1,
+            "zone_durations": {
+              "zone_zero_milli": 540000,
+              "zone_one_milli": 1380000,
+              "zone_two_milli": 480000,
+              "zone_three_milli": 0,
+              "zone_four_milli": 0,
+              "zone_five_milli": 0
+            },
+            "distance_meter": null,
+            "altitude_gain_meter": null,
+            "altitude_change_meter": null
+          }
+        }
+      }
+    },
+    {
+      "name": "malformed id rejected by the input schema",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "../user/profile"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_workout_by_id: ID must contain only alphanumeric characters, hyphens, and underscores at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "missing id",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_workout_by_id: Invalid input: expected string, received undefined at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "malformed id that passes the schema (404)",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "not-a-uuid"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "unknown id (404)",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "00000000-0000-4000-8000-000000000000"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "WHOOP authorization failure",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "00000000-0000-4000-8000-000000000000"
+      },
+      "failures": [
+        {
+          "path": "^/v2/activity/",
+          "status": 401
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP rejected the authorization (HTTP 401). To sign in again, delete tokens.json from the server's token folder (~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server).",
+        "structuredContent": null
+      }
+    }
+  ]
+}

@@ -1,0 +1,200 @@
+{
+  "tool": "get_sleep_by_id",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "scored main sleep",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 7001,
+          "created_at": "2026-09-16T05:01:40.207Z",
+          "updated_at": "2026-09-16T05:01:40.207Z",
+          "score_state": "SCORED",
+          "start": "2026-09-15T21:13:31.460Z",
+          "end": "2026-09-16T04:58:12.066Z",
+          "timezone_offset": "+02:00",
+          "id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02",
+          "cycle_id": 81003,
+          "nap": false,
+          "v1_id": null,
+          "score": {
+            "stage_summary": {
+              "total_in_bed_time_milli": 27880606,
+              "total_awake_time_milli": 2305114,
+              "total_no_data_time_milli": 0,
+              "total_light_sleep_time_milli": 12410833,
+              "total_slow_wave_sleep_time_milli": 4977291,
+              "total_rem_sleep_time_milli": 8187368,
+              "sleep_cycle_count": 5,
+              "disturbance_count": 14
+            },
+            "sleep_needed": {
+              "baseline_milli": 27904512,
+              "need_from_sleep_debt_milli": 2108337,
+              "need_from_recent_strain_milli": 3402118,
+              "need_from_recent_nap_milli": 0
+            },
+            "respiratory_rate": 15.234375,
+            "sleep_performance_percentage": 83,
+            "sleep_efficiency_percentage": 91.73,
+            "sleep_consistency_percentage": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "pending main sleep",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "5b2497e3-66b2-4d77-95f0-be713ba6bd75"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 9001,
+          "created_at": "2026-09-16T06:14:52.663Z",
+          "updated_at": "2026-09-16T06:14:52.663Z",
+          "score_state": "PENDING_SCORE",
+          "start": "2026-09-15T21:42:29.574Z",
+          "end": "2026-09-16T06:11:32.297Z",
+          "timezone_offset": "+01:00",
+          "id": "5b2497e3-66b2-4d77-95f0-be713ba6bd75",
+          "cycle_id": 300118,
+          "nap": false,
+          "v1_id": null,
+          "score": null
+        }
+      }
+    },
+    {
+      "name": "nap",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "ec7da0ee-7200-4be0-a537-cbb02ad5b943"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 9001,
+          "created_at": "2026-09-16T14:03:37.306Z",
+          "updated_at": "2026-09-16T14:03:37.306Z",
+          "score_state": "SCORED",
+          "start": "2026-09-16T13:20:09.170Z",
+          "end": "2026-09-16T14:00:23.579Z",
+          "timezone_offset": "+01:00",
+          "id": "ec7da0ee-7200-4be0-a537-cbb02ad5b943",
+          "cycle_id": 300118,
+          "nap": true,
+          "v1_id": null,
+          "score": {
+            "stage_summary": {
+              "total_in_bed_time_milli": 2414409,
+              "total_awake_time_milli": 249615,
+              "total_no_data_time_milli": 0,
+              "total_light_sleep_time_milli": 1515356,
+              "total_slow_wave_sleep_time_milli": 432959,
+              "total_rem_sleep_time_milli": 216479,
+              "sleep_cycle_count": 1,
+              "disturbance_count": 3
+            },
+            "sleep_needed": {
+              "baseline_milli": 0,
+              "need_from_sleep_debt_milli": 0,
+              "need_from_recent_strain_milli": 0,
+              "need_from_recent_nap_milli": 0
+            },
+            "respiratory_rate": 15.640625,
+            "sleep_performance_percentage": null,
+            "sleep_efficiency_percentage": 89.66,
+            "sleep_consistency_percentage": null
+          }
+        }
+      }
+    },
+    {
+      "name": "malformed id rejected by the input schema",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "../user/profile"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_sleep_by_id: ID must contain only alphanumeric characters, hyphens, and underscores at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "missing id",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_sleep_by_id: Invalid input: expected string, received undefined at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "malformed id that passes the schema (404)",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "not-a-uuid"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "unknown id (404)",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "00000000-0000-4000-8000-000000000000"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "WHOOP authorization failure",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "00000000-0000-4000-8000-000000000000"
+      },
+      "failures": [
+        {
+          "path": "^/v2/activity/",
+          "status": 401
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP rejected the authorization (HTTP 401). To sign in again, delete tokens.json from the server's token folder (~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server).",
+        "structuredContent": null
+      }
+    }
+  ]
+}

@@ -277,4 +277,171 @@ describe("MemoryCache", () => {
     expect(result).toEqual({ ok: true });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+
+  // -------------------------------------------------------------------------
+  // getOrFetchWithMeta
+  // -------------------------------------------------------------------------
+
+  describe("getOrFetchWithMeta", () => {
+    it("reports a miss with the fetch time, then a hit with the stored time", async () => {
+      vi.setSystemTime(new Date("2026-09-16T10:00:00Z"));
+      const cache = new MemoryCache();
+      const fetcher = vi.fn().mockResolvedValue({ v: 1 });
+
+      const first = await cache.getOrFetchWithMeta("k", 60_000, fetcher);
+      expect(first).toEqual({
+        value: { v: 1 },
+        storedAt: Date.parse("2026-09-16T10:00:00Z"),
+        hit: false,
+      });
+
+      vi.advanceTimersByTime(30_000);
+      const second = await cache.getOrFetchWithMeta("k", 60_000, fetcher);
+      expect(second).toEqual({
+        value: { v: 1 },
+        storedAt: Date.parse("2026-09-16T10:00:00Z"),
+        hit: true,
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not store a value the store predicate declines, but still returns it", async () => {
+      const cache = new MemoryCache();
+      const fetcher = vi
+        .fn()
+        .mockResolvedValueOnce({ complete: false })
+        .mockResolvedValueOnce({ complete: true });
+      const store = (value: { complete: boolean }): boolean => value.complete;
+
+      const first = await cache.getOrFetchWithMeta("k", 60_000, fetcher, { store });
+      expect(first.value).toEqual({ complete: false });
+      expect(cache.has("k")).toBe(false);
+
+      const second = await cache.getOrFetchWithMeta("k", 60_000, fetcher, { store });
+      expect(second).toMatchObject({ value: { complete: true }, hit: false });
+      const third = await cache.getOrFetchWithMeta("k", 60_000, fetcher, { store });
+      expect(third).toMatchObject({ value: { complete: true }, hit: true });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    it("shares an in-flight fetch with joiners, reported as a miss", async () => {
+      const cache = new MemoryCache();
+      let resolve!: (v: unknown) => void;
+      const fetcher = vi.fn().mockImplementation(() => new Promise((r) => (resolve = r)));
+
+      const p1 = cache.getOrFetchWithMeta("k", 5000, fetcher);
+      const p2 = cache.getOrFetchWithMeta("k", 5000, fetcher);
+      const p3 = cache.getOrFetch("k", 5000, fetcher);
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      resolve("x");
+
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+      expect(r1).toMatchObject({ value: "x", hit: false });
+      expect(r2).toMatchObject({ value: "x", hit: false, storedAt: r1.storedAt });
+      expect(r3).toBe("x");
+    });
+
+    it("settles a fetcher that throws synchronously and lets the next caller retry", async () => {
+      const cache = new MemoryCache();
+      const fetcher = vi
+        .fn()
+        .mockImplementationOnce(() => {
+          throw new Error("sync boom");
+        })
+        .mockResolvedValueOnce("ok");
+
+      await expect(cache.getOrFetchWithMeta("k", 5000, fetcher)).rejects.toThrow("sync boom");
+      await expect(cache.getOrFetchWithMeta("k", 5000, fetcher)).resolves.toMatchObject({
+        value: "ok",
+        hit: false,
+      });
+    });
+
+    it("a superseded in-flight fetch does not remove the newer in-flight entry", async () => {
+      const cache = new MemoryCache();
+      let resolveFirst!: (v: unknown) => void;
+      let resolveSecond!: (v: unknown) => void;
+      const fetcher = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((r) => (resolveFirst = r)))
+        .mockImplementationOnce(() => new Promise((r) => (resolveSecond = r)));
+
+      const p1 = cache.getOrFetch("k", 5000, fetcher);
+      cache.clear();
+      const p2 = cache.getOrFetch("k", 5000, fetcher);
+      resolveFirst("old");
+      await p1;
+      // A third caller still joins the second fetch
+      const p3 = cache.getOrFetch("k", 5000, fetcher);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+      resolveSecond("new");
+      await expect(Promise.all([p2, p3])).resolves.toEqual(["new", "new"]);
+      expect(cache.get("k")).toBe("new");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // deleteWhere
+  // -------------------------------------------------------------------------
+
+  describe("deleteWhere", () => {
+    it("deletes only matching stored entries and returns the count", () => {
+      const cache = new MemoryCache<number>();
+      cache.set("HIST:v1:/v2/cycle:0", 1);
+      cache.set("GET:/v2/cycle?limit=1", 2);
+      cache.set("GET:/v2/recovery?limit=1", 3);
+
+      const removed = cache.deleteWhere((key) => !key.startsWith("HIST:"));
+
+      expect(removed).toBe(2);
+      expect(cache.get("HIST:v1:/v2/cycle:0")).toBe(1);
+      expect(cache.has("GET:/v2/cycle?limit=1")).toBe(false);
+      expect(cache.has("GET:/v2/recovery?limit=1")).toBe(false);
+    });
+
+    it("stops a matching in-flight fetch from repopulating and drops it for new callers", async () => {
+      const cache = new MemoryCache();
+      let resolveFirst!: (v: unknown) => void;
+      const fetcher = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((r) => (resolveFirst = r)))
+        .mockResolvedValueOnce("fresh");
+
+      const p1 = cache.getOrFetch("GET:/v2/cycle", 5000, fetcher);
+      expect(cache.deleteWhere((key) => key.startsWith("GET:"))).toBe(1);
+      const p2 = cache.getOrFetch("GET:/v2/cycle", 5000, fetcher);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      resolveFirst("stale");
+      await expect(p1).resolves.toBe("stale");
+      await expect(p2).resolves.toBe("fresh");
+      expect(cache.get("GET:/v2/cycle")).toBe("fresh");
+    });
+
+    it("lets a non-matching in-flight fetch still store its value", async () => {
+      const cache = new MemoryCache();
+      let resolve!: (v: unknown) => void;
+      const fetcher = vi.fn().mockImplementation(() => new Promise((r) => (resolve = r)));
+
+      const pending = cache.getOrFetch("HIST:v1:/v2/cycle:0", 5000, fetcher);
+      cache.deleteWhere((key) => !key.startsWith("HIST:"));
+      resolve("chunk");
+      await pending;
+
+      expect(cache.get("HIST:v1:/v2/cycle:0")).toBe("chunk");
+    });
+
+    it("counts a key that is both stored and in flight once", async () => {
+      const cache = new MemoryCache();
+      cache.set("k", "old", 60_000);
+      cache.set("k2", "x");
+      vi.advanceTimersByTime(10_000);
+      // Older than this reader's TTL but not expired: stays stored while the refetch is in flight.
+      void cache.getOrFetch("k", 5000, () => new Promise(() => undefined));
+      void cache.getOrFetch("other", 5000, () => new Promise(() => undefined));
+
+      expect(cache.deleteWhere((key) => key.startsWith("k"))).toBe(2);
+      expect(cache.size).toBe(0);
+    });
+  });
 });

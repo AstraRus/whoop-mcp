@@ -1,0 +1,232 @@
+{
+  "name": "get_sleep_debt",
+  "description": "Observed nightly sleep deficits, standing debt and local clock consistency. A range expression in `start` (e.g. \"last week\", \"this month\") covers that whole range unless `days` is also given; `period` is written in the user's UTC offset. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data' and the nights that exist are still listed. status 'unavailable' means the sleep data could not be read. `notes` explains either case.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "days": {
+        "description": "Window length in days (3-90). Default: 14. Without `start` the window ends now. With `start` it runs forward from `start` for this many days, clamped to now; this also overrides the end of a range expression in `start`.",
+        "type": "integer",
+        "minimum": 3,
+        "maximum": 90
+      },
+      "start": {
+        "description": "Window start. A single day (YYYY-MM-DD from local midnight, \"today\", \"yesterday\") or a date-time with offset starts a window of `days` (default 14), clamped to now. A range expression (\"last 7 days\", \"last 2 weeks\", \"this week\", \"last week\", \"this month\", \"last month\", \"YYYY-MM\") covers exactly that range, ending at its end or now, unless `days` is also given, in which case the window is its first day plus `days`. Ranges longer than 90 days plus today are rejected. Default: `days` before now.",
+        "type": "string",
+        "maxLength": 100
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "period": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end"
+        ],
+        "additionalProperties": false
+      },
+      "nights_analyzed": {
+        "type": "integer",
+        "minimum": -9007199254740991,
+        "maximum": 9007199254740991
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "available",
+          "insufficient_data",
+          "unavailable"
+        ]
+      },
+      "nights_required": {
+        "type": "integer",
+        "minimum": -9007199254740991,
+        "maximum": 9007199254740991
+      },
+      "total_debt_hours": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "avg_nightly_debt_hours": {
+        "anyOf": [
+          {
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "consistency": {
+        "type": "object",
+        "properties": {
+          "bedtime_std_dev_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waketime_std_dev_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "social_jetlag_minutes": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "bedtime_std_dev_minutes",
+          "waketime_std_dev_minutes",
+          "social_jetlag_minutes"
+        ],
+        "additionalProperties": false
+      },
+      "output_capped": {
+        "type": "boolean"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "disclaimer": {
+        "type": "string"
+      },
+      "data_quality": {
+        "type": "object",
+        "properties": {
+          "evaluated_at": {
+            "type": "string"
+          },
+          "requested_period": {
+            "type": "object",
+            "properties": {
+              "start": {
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ],
+            "additionalProperties": false
+          },
+          "method_version": {
+            "type": "string"
+          },
+          "sources": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string"
+                },
+                "records_fetched": {
+                  "type": "number"
+                },
+                "records_used": {
+                  "type": "number"
+                },
+                "exclusions": {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                },
+                "truncated": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "status",
+                "records_fetched",
+                "records_used",
+                "exclusions",
+                "truncated"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "evaluated_at",
+          "requested_period",
+          "method_version",
+          "sources"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "required": [
+      "period",
+      "nights_analyzed",
+      "status",
+      "nights_required",
+      "total_debt_hours",
+      "avg_nightly_debt_hours",
+      "consistency",
+      "output_capped",
+      "truncated",
+      "notes",
+      "disclaimer",
+      "data_quality"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

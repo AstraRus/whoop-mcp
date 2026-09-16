@@ -1,0 +1,3 @@
+# Golden snapshots are written by tests/golden/golden-harness.ts (JSON.stringify
+# with 2-space indentation) and compared byte for byte; never reformat them.
+tests/golden/**/*.json

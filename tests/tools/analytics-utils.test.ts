@@ -1,6 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import { z } from "zod";
-import { WhoopApiError, WhoopNetworkError, type WhoopClient } from "../../src/api/client.js";
+import {
+  WhoopApiError,
+  WhoopAuthError,
+  WhoopNetworkError,
+  WhoopRateBudgetError,
+  type WhoopClient,
+} from "../../src/api/client.js";
 import { sleepRecordSchema } from "../../src/api/record-schemas.js";
 import { percentile, circularStats } from "../../src/tools/stats-utils.js";
 import {
@@ -9,6 +15,7 @@ import {
   loadAnalyticsSource,
   localDay,
   localMidnightMs,
+  mostRelevantError,
 } from "../../src/tools/analytics-utils.js";
 import { sleepFixture } from "../helpers/analytics-fixtures.js";
 
@@ -165,5 +172,35 @@ describe("loadAnalyticsSource", () => {
     );
     expect(malformed.records).toEqual([]);
     expect(malformed.quality.status).toBe("invalid");
+  });
+});
+
+describe("mostRelevantError", () => {
+  const auth = new WhoopAuthError(new Error("refresh failed"));
+  const unauthorized = new WhoopApiError(401, "Unauthorized", null);
+  const rateLimited = new WhoopApiError(429, "Too Many Requests", null);
+  const serverError = new WhoopApiError(500, "Internal Server Error", null);
+  const network = new WhoopNetworkError(new Error("socket hang up"));
+  const budget = new WhoopRateBudgetError();
+
+  it("prefers auth, then 401/403, then rate limits, then other API errors, then network", () => {
+    expect(mostRelevantError([network, serverError, rateLimited, unauthorized, auth])).toBe(auth);
+    expect(mostRelevantError([network, serverError, rateLimited, unauthorized])).toBe(unauthorized);
+    expect(mostRelevantError([network, serverError, rateLimited])).toBe(rateLimited);
+    expect(mostRelevantError([network, serverError])).toBe(serverError);
+  });
+
+  it("ranks the server's request budget like a WHOOP 429, ahead of other API and network errors", () => {
+    expect(mostRelevantError([network, budget])).toBe(budget);
+    expect(mostRelevantError([serverError, budget])).toBe(budget);
+    const wrapped = new WhoopNetworkError(budget);
+    expect(mostRelevantError([network, wrapped])).toBe(wrapped);
+    expect(mostRelevantError([budget, unauthorized])).toBe(unauthorized);
+  });
+
+  it("wraps a reason that is not an Error", () => {
+    const error = mostRelevantError(["boom"]);
+    expect(error.message).toBe("All WHOOP requests failed.");
+    expect(error.cause).toBe("boom");
   });
 });

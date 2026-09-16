@@ -10,8 +10,10 @@
  * - LRU order is tracked by `Map` insertion order; a "use" (get/set) moves the
  *   key to the most-recently-used position by delete-then-reinsert.
  * - `getOrFetch` adds stampede prevention (concurrent misses share one fetch)
- *   and a generation counter so a `clear()` mid-flight cannot repopulate the
- *   cache with stale data.
+ *   and a generation counter so a `clear()` (or a matching `deleteWhere()`)
+ *   mid-flight cannot repopulate the cache with stale data.
+ * - `getOrFetchWithMeta` also reports hit/miss and the stored-at time, and can
+ *   decline to store a value (e.g. an incomplete history chunk).
  * - `getOrFetch` honours the reading caller's TTL as well as the writer's: an
  *   entry older than the reader's `ttlMs` is a miss. Callers that share a key
  *   with different freshness needs (e.g. a 2-minute resource and a longer-lived
@@ -42,6 +44,27 @@ export interface MemoryCacheOptions {
   maxEntries?: number;
 }
 
+/** Options for {@link MemoryCache.getOrFetchWithMeta}. */
+export interface GetOrFetchOptions<R> {
+  /** Return false to skip storing a fetched value (it is still returned to the callers). */
+  store?: (value: R) => boolean;
+}
+
+/** A value served by {@link MemoryCache.getOrFetchWithMeta}. */
+export interface CacheFetchResult<R> {
+  value: R;
+  /** Epoch ms when the value was stored (hit) or fetched (miss). */
+  storedAt: number;
+  /** True when the value came from a stored entry rather than a fetch. */
+  hit: boolean;
+}
+
+interface InflightEntry {
+  /** Generation the fetch may store under; `deleteWhere` moves non-matching fetches forward. */
+  generation: number;
+  promise: Promise<{ value: unknown; storedAt: number }>;
+}
+
 interface CacheEntry {
   value: unknown;
   /** Epoch ms after which the entry is expired for every reader (the writer's TTL). */
@@ -63,7 +86,7 @@ interface CacheEntry {
  */
 export class MemoryCache<T = unknown> {
   private readonly store = new Map<string, CacheEntry>();
-  private readonly inflight = new Map<string, Promise<unknown>>();
+  private readonly inflight = new Map<string, InflightEntry>();
   private readonly defaultTtlMs: number;
   private readonly maxEntries: number;
   private generation = 0;
@@ -116,10 +139,7 @@ export class MemoryCache<T = unknown> {
    */
   set(key: string, value: T, ttlMs?: number): void {
     // Treat a write to an existing key as a use (move to MRU).
-    this.store.delete(key);
-    const now = Date.now();
-    this.store.set(key, { value, expiry: now + (ttlMs ?? this.defaultTtlMs), storedAt: now });
-    this.evictIfNeeded();
+    this.writeEntry(key, value, ttlMs ?? this.defaultTtlMs, Date.now());
   }
 
   /** Remove a single entry. Returns true if an entry was removed. */
@@ -143,6 +163,34 @@ export class MemoryCache<T = unknown> {
   }
 
   /**
+   * Remove every stored and in-flight entry whose key matches `predicate` and
+   * bump the generation, so a matching fetch that is still in flight cannot
+   * store its (possibly stale) result. In-flight fetches for keys that do not
+   * match keep their right to store.
+   *
+   * @returns The number of distinct keys removed (stored, in flight, or both).
+   */
+  deleteWhere(predicate: (key: string) => boolean): number {
+    const removed = new Set<string>();
+    for (const key of [...this.store.keys()]) {
+      if (predicate(key)) {
+        this.store.delete(key);
+        removed.add(key);
+      }
+    }
+    for (const [key, flight] of [...this.inflight.entries()]) {
+      if (predicate(key)) {
+        this.inflight.delete(key);
+        removed.add(key);
+      } else {
+        flight.generation = this.generation + 1;
+      }
+    }
+    this.generation++;
+    return removed.size;
+  }
+
+  /**
    * Return the cached value for `key`, or run `fetcher` to populate it.
    * Concurrent misses for the same key share a single in-flight request.
    *
@@ -151,6 +199,24 @@ export class MemoryCache<T = unknown> {
    * even when another caller stored it with a longer TTL.
    */
   async getOrFetch<R>(key: string, ttlMs: number, fetcher: () => Promise<R>): Promise<R> {
+    return (await this.getOrFetchWithMeta(key, ttlMs, fetcher)).value;
+  }
+
+  /**
+   * {@link getOrFetch} that also reports whether the value came from the cache
+   * (`hit`) and when it was stored or fetched (`storedAt`, epoch ms).
+   *
+   * A fetched value is stored only when no `clear`/matching `deleteWhere`
+   * happened while it was in flight and `options.store(value)` does not return
+   * false (e.g. an incomplete result that must not be served to later readers).
+   * Callers joining an in-flight fetch share its result with `hit: false`.
+   */
+  getOrFetchWithMeta<R>(
+    key: string,
+    ttlMs: number,
+    fetcher: () => Promise<R>,
+    options: GetOrFetchOptions<R> = {}
+  ): Promise<CacheFetchResult<R>> {
     const entry = this.store.get(key);
     if (entry !== undefined) {
       const now = Date.now();
@@ -160,31 +226,55 @@ export class MemoryCache<T = unknown> {
         // Fresh enough for this reader: refresh the LRU position and serve it.
         this.store.delete(key);
         this.store.set(key, entry);
-        return entry.value as R;
+        return Promise.resolve({ value: entry.value as R, storedAt: entry.storedAt, hit: true });
       }
     }
 
     const existing = this.inflight.get(key);
     if (existing !== undefined) {
-      return existing as Promise<R>;
+      return existing.promise.then((result) => ({
+        value: result.value as R,
+        storedAt: result.storedAt,
+        hit: false,
+      }));
     }
 
-    const gen = this.generation;
-    const promise = fetcher()
-      .then((data) => {
-        if (this.generation === gen) {
-          this.set(key, data as unknown as T, ttlMs);
+    const flight: InflightEntry = {
+      generation: this.generation,
+      promise: Promise.resolve({ value: undefined, storedAt: 0 }),
+    };
+    const settle = (): void => {
+      if (this.inflight.get(key) === flight) {
+        this.inflight.delete(key);
+      }
+    };
+    const run = async (): Promise<{ value: R; storedAt: number }> => {
+      try {
+        const value = await fetcher();
+        const storedAt = Date.now();
+        if (
+          flight.generation === this.generation &&
+          this.inflight.get(key) === flight &&
+          options.store?.(value) !== false
+        ) {
+          this.writeEntry(key, value, ttlMs, storedAt);
         }
-        this.inflight.delete(key);
-        return data;
-      })
-      .catch((error: unknown) => {
-        this.inflight.delete(key);
-        throw error;
-      });
+        return { value, storedAt };
+      } finally {
+        settle();
+      }
+    };
+    // Registered before the fetcher runs, so a synchronous throw still settles it.
+    this.inflight.set(key, flight);
+    const promise = run();
+    flight.promise = promise;
+    return promise.then(({ value, storedAt }) => ({ value, storedAt, hit: false }));
+  }
 
-    this.inflight.set(key, promise);
-    return promise;
+  private writeEntry(key: string, value: unknown, ttlMs: number, storedAt: number): void {
+    this.store.delete(key);
+    this.store.set(key, { value, expiry: storedAt + ttlMs, storedAt });
+    this.evictIfNeeded();
   }
 
   private evictIfNeeded(): void {

@@ -1,0 +1,554 @@
+{
+  "tool": "get_weekly_summary",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "current week (first week of wear)",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-14T00:00:00.000+02:00",
+          "week_end": "2026-09-20T23:59:59.999+02:00",
+          "recovery": {
+            "average_score": 62.5,
+            "min_score": 58,
+            "max_score": 67,
+            "average_hrv": 78.169,
+            "average_rhr": 59.5,
+            "trend": null
+          },
+          "sleep": {
+            "average_duration_hours": 6.625797222222222,
+            "average_performance_pct": 77,
+            "average_efficiency_pct": 91.7
+          },
+          "workouts": {
+            "count": 8,
+            "total_strain": 66.0205,
+            "total_calories_kj": 10807.8,
+            "sport_breakdown": {
+              "running": 2,
+              "weightlifting_msk": 2,
+              "walking": 3,
+              "padel": 1
+            }
+          },
+          "strain": {
+            "average_daily_strain": 12.65265,
+            "max_daily_strain": 15.8836
+          },
+          "sample_sizes": {
+            "recovery_days": 2,
+            "sleep_nights": 2,
+            "completed_cycles": 2
+          },
+          "calibrating": true,
+          "truncated": false,
+          "notes": [
+            "This week is still in progress (data through 2026-09-16).",
+            "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
+            "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
+            "Today's strain is still accumulating and is not included."
+          ]
+        }
+      }
+    },
+    {
+      "name": "last week before the strap was worn",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "last week"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-07T00:00:00.000+02:00",
+          "week_end": "2026-09-13T23:59:59.999+02:00",
+          "recovery": {
+            "average_score": null,
+            "min_score": null,
+            "max_score": null,
+            "average_hrv": null,
+            "average_rhr": null,
+            "trend": null
+          },
+          "sleep": {
+            "average_duration_hours": null,
+            "average_performance_pct": null,
+            "average_efficiency_pct": null
+          },
+          "workouts": {
+            "count": null,
+            "total_strain": null,
+            "total_calories_kj": null,
+            "sport_breakdown": {}
+          },
+          "strain": {
+            "average_daily_strain": null,
+            "max_daily_strain": null
+          },
+          "sample_sizes": {
+            "recovery_days": 0,
+            "sleep_nights": 0,
+            "completed_cycles": 0
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "No scored recovery recorded this week.",
+            "No scored main sleep recorded this week.",
+            "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0.",
+            "No completed, scored cycle this week, so daily strain is null."
+          ]
+        }
+      }
+    },
+    {
+      "name": "current week after local midnight",
+      "fixture": "liveShapedUser@2026-09-17T00:30:00+02:00",
+      "now": "2026-09-16T22:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-14T00:00:00.000+02:00",
+          "week_end": "2026-09-20T23:59:59.999+02:00",
+          "recovery": {
+            "average_score": 62.5,
+            "min_score": 58,
+            "max_score": 67,
+            "average_hrv": 78.169,
+            "average_rhr": 59.5,
+            "trend": null
+          },
+          "sleep": {
+            "average_duration_hours": 6.625797222222222,
+            "average_performance_pct": 77,
+            "average_efficiency_pct": 91.7
+          },
+          "workouts": {
+            "count": 8,
+            "total_strain": 66.0205,
+            "total_calories_kj": 10807.8,
+            "sport_breakdown": {
+              "running": 2,
+              "weightlifting_msk": 2,
+              "walking": 3,
+              "padel": 1
+            }
+          },
+          "strain": {
+            "average_daily_strain": 12.65265,
+            "max_daily_strain": 15.8836
+          },
+          "sample_sizes": {
+            "recovery_days": 2,
+            "sleep_nights": 2,
+            "completed_cycles": 2
+          },
+          "calibrating": true,
+          "truncated": false,
+          "notes": [
+            "This week is still in progress (data through 2026-09-17).",
+            "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
+            "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
+            "Today's strain is still accumulating and is not included."
+          ]
+        }
+      }
+    },
+    {
+      "name": "current week with a pending night",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-14T00:00:00.000+01:00",
+          "week_end": "2026-09-20T23:59:59.999+01:00",
+          "recovery": {
+            "average_score": 80.5,
+            "min_score": 79,
+            "max_score": 82,
+            "average_hrv": 93.52950000000001,
+            "average_rhr": 55.5,
+            "trend": null
+          },
+          "sleep": {
+            "average_duration_hours": 7.565200416666666,
+            "average_performance_pct": 87,
+            "average_efficiency_pct": 91.81
+          },
+          "workouts": {
+            "count": 2,
+            "total_strain": 22.7727,
+            "total_calories_kj": 762.46,
+            "sport_breakdown": {
+              "running": 1,
+              "weightlifting_msk": 1
+            }
+          },
+          "strain": {
+            "average_daily_strain": 10.610700000000001,
+            "max_daily_strain": 11.5363
+          },
+          "sample_sizes": {
+            "recovery_days": 2,
+            "sleep_nights": 2,
+            "completed_cycles": 2
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "This week is still in progress (data through 2026-09-16).",
+            "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
+            "Today's strain is still accumulating and is not included."
+          ]
+        }
+      }
+    },
+    {
+      "name": "last week",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "last week"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-07T00:00:00.000+01:00",
+          "week_end": "2026-09-13T23:59:59.999+01:00",
+          "recovery": {
+            "average_score": 78.85714285714286,
+            "min_score": 60,
+            "max_score": 98,
+            "average_hrv": 93.19814285714286,
+            "average_rhr": 54,
+            "trend": "stable"
+          },
+          "sleep": {
+            "average_duration_hours": 6.485541944444444,
+            "average_performance_pct": 75,
+            "average_efficiency_pct": 92.11714285714287
+          },
+          "workouts": {
+            "count": 7,
+            "total_strain": 53.474000000000004,
+            "total_calories_kj": 1957.69,
+            "sport_breakdown": {
+              "walking": 4,
+              "running": 2,
+              "weightlifting_msk": 1
+            }
+          },
+          "strain": {
+            "average_daily_strain": 9.398328571428573,
+            "max_daily_strain": 14.3545
+          },
+          "sample_sizes": {
+            "recovery_days": 7,
+            "sleep_nights": 7,
+            "completed_cycles": 7
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": []
+        }
+      }
+    },
+    {
+      "name": "week with a strap-off gap",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "2026-07-15"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-07-13T00:00:00.000+01:00",
+          "week_end": "2026-07-19T23:59:59.999+01:00",
+          "recovery": {
+            "average_score": 74.6,
+            "min_score": 61,
+            "max_score": 81,
+            "average_hrv": 79.641,
+            "average_rhr": 55,
+            "trend": "stable"
+          },
+          "sleep": {
+            "average_duration_hours": 6.252837777777779,
+            "average_performance_pct": 72.4,
+            "average_efficiency_pct": 91.294
+          },
+          "workouts": {
+            "count": 4,
+            "total_strain": 35.1199,
+            "total_calories_kj": 1838.1699999999998,
+            "sport_breakdown": {
+              "weightlifting_msk": 2,
+              "padel": 1,
+              "walking": 1
+            }
+          },
+          "strain": {
+            "average_daily_strain": 8.75534,
+            "max_daily_strain": 12.5717
+          },
+          "sample_sizes": {
+            "recovery_days": 5,
+            "sleep_nights": 5,
+            "completed_cycles": 5
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "2026-07-15 is a Wednesday; summarizing the week from Monday 2026-07-13 to Sunday 2026-07-19."
+          ]
+        }
+      }
+    },
+    {
+      "name": "week with the offset change",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "2026-08-08T12:00:00Z"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-08-03T00:00:00.000+01:00",
+          "week_end": "2026-08-09T23:59:59.999+01:00",
+          "recovery": {
+            "average_score": 70.14285714285714,
+            "min_score": 52,
+            "max_score": 98,
+            "average_hrv": 85.934,
+            "average_rhr": 55.57142857142857,
+            "trend": "improving"
+          },
+          "sleep": {
+            "average_duration_hours": 5.80201873015873,
+            "average_performance_pct": 67.57142857142857,
+            "average_efficiency_pct": 88.12714285714287
+          },
+          "workouts": {
+            "count": 7,
+            "total_strain": 63.4207,
+            "total_calories_kj": 2498.72,
+            "sport_breakdown": {
+              "weightlifting_msk": 5,
+              "walking": 1,
+              "cycling": 1
+            }
+          },
+          "strain": {
+            "average_daily_strain": 10.29327142857143,
+            "max_daily_strain": 11.9508
+          },
+          "sample_sizes": {
+            "recovery_days": 7,
+            "sleep_nights": 7,
+            "completed_cycles": 7
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "2026-08-08 is a Saturday; summarizing the week from Monday 2026-08-03 to Sunday 2026-08-09."
+          ]
+        }
+      }
+    },
+    {
+      "name": "week with a split night",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "2026-06-25"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-06-22T00:00:00.000+01:00",
+          "week_end": "2026-06-28T23:59:59.999+01:00",
+          "recovery": {
+            "average_score": 50.625,
+            "min_score": 35,
+            "max_score": 64,
+            "average_hrv": 71.1115,
+            "average_rhr": 56.125,
+            "trend": "stable"
+          },
+          "sleep": {
+            "average_duration_hours": 5.834135079365081,
+            "average_performance_pct": 66.28571428571429,
+            "average_efficiency_pct": 92.71
+          },
+          "workouts": {
+            "count": 7,
+            "total_strain": 61.80329999999999,
+            "total_calories_kj": 3389.51,
+            "sport_breakdown": {
+              "walking": 3,
+              "running": 1,
+              "cycling": 1,
+              "weightlifting_msk": 2
+            }
+          },
+          "strain": {
+            "average_daily_strain": 8.966925,
+            "max_daily_strain": 13.2305
+          },
+          "sample_sizes": {
+            "recovery_days": 8,
+            "sleep_nights": 7,
+            "completed_cycles": 8
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "2026-06-25 is a Thursday; summarizing the week from Monday 2026-06-22 to Sunday 2026-06-28."
+          ]
+        }
+      }
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-14T00:00:00.000Z",
+          "week_end": "2026-09-20T23:59:59.999Z",
+          "recovery": {
+            "average_score": null,
+            "min_score": null,
+            "max_score": null,
+            "average_hrv": null,
+            "average_rhr": null,
+            "trend": null
+          },
+          "sleep": {
+            "average_duration_hours": null,
+            "average_performance_pct": null,
+            "average_efficiency_pct": null
+          },
+          "workouts": {
+            "count": null,
+            "total_strain": null,
+            "total_calories_kj": null,
+            "sport_breakdown": {}
+          },
+          "strain": {
+            "average_daily_strain": null,
+            "max_daily_strain": null
+          },
+          "sample_sizes": {
+            "recovery_days": 0,
+            "sleep_nights": 0,
+            "completed_cycles": 0
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "This week is still in progress (data through 2026-09-16).",
+            "No scored recovery recorded this week.",
+            "No scored main sleep recorded this week.",
+            "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0.",
+            "No completed, scored cycle this week, so daily strain is null."
+          ]
+        }
+      }
+    },
+    {
+      "name": "unrecognized week_start",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "someday"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "Unrecognized date expression: \"someday\". Supported: \"today\", \"yesterday\", \"last N days\", \"last N weeks\", \"last N months\", \"this week\", \"last week\", \"this month\", \"last month\", \"this quarter\", \"last quarter\", \"last year\", \"YYYY-MM\", or an ISO 8601 date (YYYY-MM-DD) or date-time.",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "workout stream unavailable",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "week_start": "last week"
+      },
+      "failures": [
+        {
+          "path": "^/v2/activity/workout",
+          "status": 503
+        }
+      ],
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "week_start": "2026-09-07T00:00:00.000+01:00",
+          "week_end": "2026-09-13T23:59:59.999+01:00",
+          "recovery": {
+            "average_score": 78.85714285714286,
+            "min_score": 60,
+            "max_score": 98,
+            "average_hrv": 93.19814285714286,
+            "average_rhr": 54,
+            "trend": "stable"
+          },
+          "sleep": {
+            "average_duration_hours": 6.485541944444444,
+            "average_performance_pct": 75,
+            "average_efficiency_pct": 92.11714285714287
+          },
+          "workouts": {
+            "count": null,
+            "total_strain": null,
+            "total_calories_kj": null,
+            "sport_breakdown": {}
+          },
+          "strain": {
+            "average_daily_strain": 9.398328571428573,
+            "max_daily_strain": 14.3545
+          },
+          "sample_sizes": {
+            "recovery_days": 7,
+            "sleep_nights": 7,
+            "completed_cycles": 7
+          },
+          "calibrating": false,
+          "truncated": false,
+          "notes": [
+            "Workout data could not be loaded from WHOOP."
+          ],
+          "warnings": [
+            "workout: WHOOP API error: 503 Fixture failure"
+          ]
+        }
+      }
+    }
+  ]
+}

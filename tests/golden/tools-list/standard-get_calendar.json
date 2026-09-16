@@ -1,0 +1,242 @@
+{
+  "name": "get_calendar",
+  "description": "Get a day-by-day grid of recovery, sleep, and strain over the user's local days. Perfect for weekly/monthly overviews. Each row shows the WHOOP cycle covering that day: the recovery and main sleep from that morning (sleep_hours = time asleep, naps excluded) and that cycle's strain. Today's strain is still accumulating (day_strain_in_progress) and is left out of averages.strain. A new cycle starts only at the next sleep, so between local midnight and the next synced sleep today's row is empty and its strain is still added to the previous day's open cycle (a note says so). The first day WHOOP was worn has partial strain (day_strain_partial), also left out of averages.strain. If two cycles belong to one day (e.g. a second main sleep), the row keeps the better main sleep and a warning names the other. Calibrating recoveries are shown with recovery_calibrating: true. Missing or unscored data is null and explained in notes; averages cover only days with data (see sample_sizes). warnings report streams that failed to load or hit the record limit (truncated).",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "days": {
+        "description": "Number of days to show. Default: 7. Max: 90.",
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 90
+      },
+      "start": {
+        "description": "Where the grid starts. A range expression (\"last 14 days\" = today plus the previous 14 days, \"this week\", \"this month\", \"last week\", \"YYYY-MM\") shows that whole range, ending no later than today (at most its last 90 days); if `days` is also given, the grid is the range's first day plus `days` days instead. A single day (YYYY-MM-DD, \"today\", \"yesterday\") or a date-time (counted from its nearest local midnight) is the first day, and the grid runs forward `days` days (default 7), clamped to today. Without start, the grid ends today and runs back `days` days.",
+        "type": "string"
+      }
+    },
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "period": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "days": {
+            "type": "number"
+          },
+          "utc_offset": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "end",
+          "days",
+          "utc_offset"
+        ],
+        "additionalProperties": false
+      },
+      "days": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "date": {
+              "type": "string"
+            },
+            "recovery_score": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "recovery_zone": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "green",
+                    "yellow",
+                    "red"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "recovery_calibrating": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sleep_hours": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "sleep_performance_pct": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "day_strain": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "day_strain_in_progress": {
+              "type": "boolean"
+            },
+            "day_strain_partial": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "date",
+            "recovery_score",
+            "recovery_zone",
+            "recovery_calibrating",
+            "sleep_hours",
+            "sleep_performance_pct",
+            "day_strain",
+            "day_strain_in_progress",
+            "day_strain_partial"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "averages": {
+        "type": "object",
+        "properties": {
+          "recovery": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sleep_hours": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "strain": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "sample_sizes": {
+            "type": "object",
+            "properties": {
+              "recovery": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sleep_hours": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "strain": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              }
+            },
+            "required": [
+              "recovery",
+              "sleep_hours",
+              "strain"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "recovery",
+          "sleep_hours",
+          "strain",
+          "sample_sizes"
+        ],
+        "additionalProperties": false
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "notes": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "warnings": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      }
+    },
+    "required": [
+      "period",
+      "days",
+      "averages",
+      "truncated",
+      "notes",
+      "warnings"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "name": "get_profile",
+  "description": "Get the authenticated user's basic profile — name and email.",
+  "inputSchema": {
+    "type": "object",
+    "properties": {},
+    "$schema": "http://json-schema.org/draft-07/schema#"
+  },
+  "outputSchema": {
+    "type": "object",
+    "properties": {
+      "user_id": {
+        "type": "number"
+      },
+      "email": {
+        "type": "string"
+      },
+      "first_name": {
+        "type": "string"
+      },
+      "last_name": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "user_id",
+      "email",
+      "first_name",
+      "last_name"
+    ],
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": {}
+  },
+  "annotations": {
+    "readOnlyHint": true
+  },
+  "execution": {
+    "taskSupport": "forbidden"
+  }
+}

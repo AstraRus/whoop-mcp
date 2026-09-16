@@ -1,0 +1,31 @@
+{
+  "name": "health_check",
+  "listing": {
+    "name": "health_check",
+    "description": "Quick health status check — uses cached resource data for an instant snapshot of current recovery, sleep, and strain."
+  },
+  "default_arguments": {
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Give me a quick health status check. Use the following MCP resources for instant data (no tool calls needed for these):\n\n1. **resource: whoop://v2/user/recovery/latest** — Latest recovery score, HRV, resting heart rate\n2. **resource: whoop://v2/user/sleep/latest** — Latest main sleep\n3. **resource: whoop://v2/user/cycle/latest** — Current cycle and strain so far\n\nRead each resource's notes field when present (not scored yet, still calibrating, cycle in progress, belongs to an earlier cycle). The recovery and sleep are today's only when their cycle_id equals the cycle resource's id. If a note says one belongs to an earlier cycle, today's recovery or last night's sleep is not available yet: say so instead of reporting the older values as today's. If a resource is unavailable, or the cycle_ids differ without such a note, call **get_today**, which links sleep and recovery to the current cycle.\n\nProvide a brief status update:\n- Today's recovery level (green/yellow/red) and what it means, marked provisional while WHOOP is calibrating, or that it is not available yet\n- Last night's sleep quality, or that last night's sleep has not synced yet\n- Today's strain so far\n- One actionable recommendation for today\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses."
+        }
+      }
+    ]
+  },
+  "omitted_arguments": {
+    "result": {
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "Give me a quick health status check. Use the following MCP resources for instant data (no tool calls needed for these):\n\n1. **resource: whoop://v2/user/recovery/latest** — Latest recovery score, HRV, resting heart rate\n2. **resource: whoop://v2/user/sleep/latest** — Latest main sleep\n3. **resource: whoop://v2/user/cycle/latest** — Current cycle and strain so far\n\nRead each resource's notes field when present (not scored yet, still calibrating, cycle in progress, belongs to an earlier cycle). The recovery and sleep are today's only when their cycle_id equals the cycle resource's id. If a note says one belongs to an earlier cycle, today's recovery or last night's sleep is not available yet: say so instead of reporting the older values as today's. If a resource is unavailable, or the cycle_ids differ without such a note, call **get_today**, which links sleep and recovery to the current cycle.\n\nProvide a brief status update:\n- Today's recovery level (green/yellow/red) and what it means, marked provisional while WHOOP is calibrating, or that it is not available yet\n- Last night's sleep quality, or that last night's sleep has not synced yet\n- Today's strain so far\n- One actionable recommendation for today\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses."
+          }
+        }
+      ]
+    }
+  }
+}

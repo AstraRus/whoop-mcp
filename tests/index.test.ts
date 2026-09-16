@@ -66,7 +66,10 @@ vi.mock("../src/transport/http.js", () => ({
 // We dynamically import so vi.mock() hoists above the import.
 // Note: ESM import() caches — every call returns the same module.
 // This works because main() reads process.env at call time, not import time.
-async function importMain(): Promise<{ main: () => Promise<void> }> {
+async function importMain(): Promise<{
+  main: () => Promise<void>;
+  parseRateLimitPerMinute: (raw: string | undefined) => number;
+}> {
   const mod = await import("../src/index.js");
   return mod;
 }
@@ -111,6 +114,7 @@ describe("main() entry point", () => {
     delete process.env.MCP_ALLOWED_ORIGINS;
     delete process.env.LOG_FORMAT;
     delete process.env.WHOOP_MCP_PRIVACY_MODE;
+    delete process.env.WHOOP_RATE_LIMIT_PER_MINUTE;
   });
 
   afterEach(() => {
@@ -308,7 +312,7 @@ describe("main() entry point", () => {
       await expect(clientOptions.onTokenRefresh()).rejects.toThrow(/no stored tokens/i);
     });
 
-    it("clears the shared cache on token refresh", async () => {
+    it("removes every cache entry except history chunks on token refresh", async () => {
       setupHappyPath();
 
       const storedTokens = {
@@ -341,13 +345,81 @@ describe("main() entry point", () => {
       // The shared cache is constructed inside main() and passed to the client.
       const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
         onTokenRefresh: () => Promise<string>;
-        cache: { clear: () => void };
+        cache: import("../src/cache/memory-cache.js").MemoryCache;
       };
-      const clearSpy = vi.spyOn(clientOptions.cache, "clear");
+      const cache = clientOptions.cache;
+      cache.set("GET:/v2/cycle?limit=1", { records: [] });
+      cache.set("GET:/v2/user/profile/basic", { user_id: 1 });
+      cache.set("HIST:v1:/v2/cycle:1788480000000", { records: [], complete: true });
+      const clearSpy = vi.spyOn(cache, "clear");
 
       await clientOptions.onTokenRefresh();
 
-      expect(clearSpy).toHaveBeenCalledOnce();
+      expect(clearSpy).not.toHaveBeenCalled();
+      expect(cache.has("GET:/v2/cycle?limit=1")).toBe(false);
+      expect(cache.has("GET:/v2/user/profile/basic")).toBe(false);
+      expect(cache.has("HIST:v1:/v2/cycle:1788480000000")).toBe(true);
+    });
+
+    it("records refresh outcomes and the access token expiry in the runtime status", async () => {
+      setupHappyPath();
+      const expiresAt = Date.parse("2026-09-16T12:00:00Z");
+      mockAuthenticate.mockImplementation(async (...args: unknown[]): Promise<string> => {
+        const options = args[1] as { onTokens: (t: unknown) => void };
+        options.onTokens({
+          access_token: "A0",
+          refresh_token: "R0",
+          expires_at: expiresAt,
+          token_type: "Bearer",
+        });
+        return "A0";
+      });
+      mockLoadTokens.mockResolvedValue({
+        access_token: "A0",
+        refresh_token: "R0",
+        expires_at: Date.now() - 1000,
+        token_type: "Bearer",
+      });
+      const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+      mockRefreshAccessToken
+        .mockRejectedValueOnce(new TokenRefreshError(503, "unavailable"))
+        .mockResolvedValueOnce({ access_token: "A1", refresh_token: "R1", expires_in: 3600 })
+        .mockRejectedValueOnce(new TokenRefreshError(400, "invalid_grant"));
+      mockToOAuthTokens.mockReturnValue({
+        access_token: "A1",
+        refresh_token: "R1",
+        expires_at: expiresAt + 3_600_000,
+        token_type: "Bearer",
+      });
+      mockSaveTokens.mockResolvedValue(undefined);
+
+      const { main } = await importMain();
+      await main();
+
+      const { runtimeStatus } = mockCreateWhoopServer.mock.calls[0][1] as {
+        runtimeStatus: import("../src/runtime-status.js").RuntimeStatus;
+      };
+      const onTokenRefresh = (
+        mockCreateWhoopClient.mock.calls[0][0] as { onTokenRefresh: () => Promise<string> }
+      ).onTokenRefresh;
+      expect(runtimeStatus.snapshot().whoop_auth).toEqual({
+        access_token_expires_at: "2026-09-16T12:00:00.000Z",
+        last_refresh: null,
+      });
+
+      await expect(onTokenRefresh()).rejects.toThrow("(503)");
+      expect(runtimeStatus.snapshot().whoop_auth.last_refresh?.outcome).toBe("transient_failure");
+
+      await expect(onTokenRefresh()).resolves.toBe("A1");
+      expect(runtimeStatus.snapshot().whoop_auth).toMatchObject({
+        access_token_expires_at: "2026-09-16T13:00:00.000Z",
+        last_refresh: { outcome: "ok" },
+      });
+
+      await expect(onTokenRefresh()).rejects.toThrow("(400)");
+      expect(runtimeStatus.snapshot().whoop_auth.last_refresh?.outcome).toBe("rejected");
+      // Never token values
+      expect(JSON.stringify(runtimeStatus.snapshot())).not.toMatch(/"A\d"|"R\d"/);
     });
 
     // R20: WHOOP rotates refresh tokens, so tokens it issued must never be lost
@@ -569,7 +641,31 @@ describe("main() entry point", () => {
       expect(mockCreateWhoopServer).toHaveBeenCalledWith(mockClient, {
         disableResources: false,
         privacyMode: "standard",
+        historyCache: expect.any(Object),
+        runtimeStatus: expect.objectContaining({ snapshot: expect.any(Function) }),
+        logger: expect.objectContaining({ warn: expect.any(Function) }),
       });
+      // The history cache is the client's shared cache
+      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as { cache: unknown };
+      const serverOptions = mockCreateWhoopServer.mock.calls[0][1] as { historyCache: unknown };
+      expect(serverOptions.historyCache).toBe(clientOptions.cache);
+    });
+
+    it("gives the client a rate limiter whose counters the runtime status reports", async () => {
+      setupHappyPath();
+
+      const { main } = await importMain();
+      await main();
+
+      const { rateLimiter } = mockCreateWhoopClient.mock.calls[0][0] as {
+        rateLimiter: import("../src/api/rate-limiter.js").RateLimiter;
+      };
+      const { runtimeStatus } = mockCreateWhoopServer.mock.calls[0][1] as {
+        runtimeStatus: import("../src/runtime-status.js").RuntimeStatus;
+      };
+      (await rateLimiter.acquire())();
+      expect(runtimeStatus.snapshot().whoop_api.requests_last_minute).toBe(1);
+      expect(runtimeStatus.snapshot().privacy_mode).toBe("standard");
     });
 
     it("creates a StdioServerTransport", async () => {
@@ -668,6 +764,15 @@ describe("main() entry point", () => {
       const serversBefore = mockCreateWhoopServer.mock.calls.length;
       expect(createMcpServer()).toEqual({ connect: mockConnect });
       expect(mockCreateWhoopServer).toHaveBeenCalledTimes(serversBefore + 1);
+      // Every per-request server shares the process-wide cache, status and logger
+      const perRequest = mockCreateWhoopServer.mock.calls[serversBefore]![1] as Record<
+        string,
+        unknown
+      >;
+      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as { cache: unknown };
+      expect(perRequest.historyCache).toBe(clientOptions.cache);
+      expect(perRequest.runtimeStatus).toBeDefined();
+      expect(perRequest.logger).toBeDefined();
     });
 
     it("MCP_TRANSPORT=both starts both stdio AND HTTP", async () => {
@@ -789,6 +894,26 @@ describe("main() entry point", () => {
 
       const { main } = await importMain();
       await expect(main()).rejects.toThrow(/LOG_FORMAT/);
+    });
+
+    it("throws on an invalid WHOOP_RATE_LIMIT_PER_MINUTE before authenticating", async () => {
+      process.env.WHOOP_RATE_LIMIT_PER_MINUTE = "100";
+      setupHappyPath();
+
+      const { main } = await importMain();
+      await expect(main()).rejects.toThrow(/WHOOP_RATE_LIMIT_PER_MINUTE/);
+      expect(mockAuthenticate).not.toHaveBeenCalled();
+    });
+
+    it("parses WHOOP_RATE_LIMIT_PER_MINUTE as an integer 10-95, default 60", async () => {
+      const { parseRateLimitPerMinute } = await importMain();
+      expect(parseRateLimitPerMinute(undefined)).toBe(60);
+      expect(parseRateLimitPerMinute(" ")).toBe(60);
+      expect(parseRateLimitPerMinute("10")).toBe(10);
+      expect(parseRateLimitPerMinute(" 95 ")).toBe(95);
+      for (const invalid of ["9", "96", "60.5", "1e2", "-20", "abc", "0x3c"]) {
+        expect(() => parseRateLimitPerMinute(invalid)).toThrow(/WHOOP_RATE_LIMIT_PER_MINUTE/);
+      }
     });
 
     it("accepts LOG_LEVEL=debug", async () => {

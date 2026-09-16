@@ -1,0 +1,458 @@
+{
+  "tool": "get_recovery_collection",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "default arguments",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [
+            {
+              "user_id": 7001,
+              "created_at": "2026-09-16T05:01:40.207Z",
+              "updated_at": "2026-09-16T05:01:40.207Z",
+              "score_state": "SCORED",
+              "cycle_id": 81003,
+              "sleep_id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02",
+              "score": {
+                "user_calibrating": true,
+                "recovery_score": 67,
+                "resting_heart_rate": 58,
+                "hrv_rmssd_milli": 84.907,
+                "spo2_percentage": 95.8,
+                "skin_temp_celsius": 33.871
+              }
+            },
+            {
+              "user_id": 7001,
+              "created_at": "2026-09-15T05:25:06.590Z",
+              "updated_at": "2026-09-15T05:25:06.590Z",
+              "score_state": "SCORED",
+              "cycle_id": 81002,
+              "sleep_id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b01",
+              "score": {
+                "user_calibrating": true,
+                "recovery_score": 58,
+                "resting_heart_rate": 61,
+                "hrv_rmssd_milli": 71.431,
+                "spo2_percentage": 96.25,
+                "skin_temp_celsius": 33.618
+              }
+            }
+          ],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "yesterday as start and end",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "yesterday",
+        "end": "yesterday"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [
+            {
+              "user_id": 7001,
+              "created_at": "2026-09-16T05:01:40.207Z",
+              "updated_at": "2026-09-16T05:01:40.207Z",
+              "score_state": "SCORED",
+              "cycle_id": 81003,
+              "sleep_id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02",
+              "score": {
+                "user_calibrating": true,
+                "recovery_score": 67,
+                "resting_heart_rate": 58,
+                "hrv_rmssd_milli": 84.907,
+                "spo2_percentage": 95.8,
+                "skin_temp_celsius": 33.871
+              }
+            },
+            {
+              "user_id": 7001,
+              "created_at": "2026-09-15T05:25:06.590Z",
+              "updated_at": "2026-09-15T05:25:06.590Z",
+              "score_state": "SCORED",
+              "cycle_id": 81002,
+              "sleep_id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b01",
+              "score": {
+                "user_calibrating": true,
+                "recovery_score": 58,
+                "resting_heart_rate": 61,
+                "hrv_rmssd_milli": 71.431,
+                "spo2_percentage": 96.25,
+                "skin_temp_celsius": 33.618
+              }
+            }
+          ],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "first page of a local date range",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-09-14",
+        "end": "2026-09-16",
+        "limit": 2
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [
+            {
+              "user_id": 7001,
+              "created_at": "2026-09-16T05:01:40.207Z",
+              "updated_at": "2026-09-16T05:01:40.207Z",
+              "score_state": "SCORED",
+              "cycle_id": 81003,
+              "sleep_id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b02",
+              "score": {
+                "user_calibrating": true,
+                "recovery_score": 67,
+                "resting_heart_rate": 58,
+                "hrv_rmssd_milli": 84.907,
+                "spo2_percentage": 95.8,
+                "skin_temp_celsius": 33.871
+              }
+            },
+            {
+              "user_id": 7001,
+              "created_at": "2026-09-15T05:25:06.590Z",
+              "updated_at": "2026-09-15T05:25:06.590Z",
+              "score_state": "SCORED",
+              "cycle_id": 81002,
+              "sleep_id": "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b01",
+              "score": {
+                "user_calibrating": true,
+                "recovery_score": 58,
+                "resting_heart_rate": 61,
+                "hrv_rmssd_milli": 71.431,
+                "spo2_percentage": 96.25,
+                "skin_temp_celsius": 33.618
+              }
+            }
+          ],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "second page via nextToken",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-09-14",
+        "end": "2026-09-16",
+        "limit": 2,
+        "nextToken": "eyJvIjoyLCJwIjoyfQ"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "last 7 days on a mature account",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "last 7 days",
+        "limit": 25
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-16T06:14:52.663Z",
+              "updated_at": "2026-09-16T06:14:52.663Z",
+              "score_state": "PENDING_SCORE",
+              "cycle_id": 300118,
+              "sleep_id": "5b2497e3-66b2-4d77-95f0-be713ba6bd75",
+              "score": null
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-15T05:28:51.407Z",
+              "updated_at": "2026-09-15T05:28:51.407Z",
+              "score_state": "SCORED",
+              "cycle_id": 300117,
+              "sleep_id": "a7df2e60-d6a3-469c-b305-8581a01ce4e7",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 79,
+                "resting_heart_rate": 57,
+                "hrv_rmssd_milli": 92.403,
+                "spo2_percentage": 96.5,
+                "skin_temp_celsius": 34.165
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-14T06:46:49.205Z",
+              "updated_at": "2026-09-14T06:46:49.205Z",
+              "score_state": "SCORED",
+              "cycle_id": 300116,
+              "sleep_id": "b9010a05-b9eb-49bc-805d-5ca8226dd6d6",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 82,
+                "resting_heart_rate": 54,
+                "hrv_rmssd_milli": 94.656,
+                "spo2_percentage": 95.91,
+                "skin_temp_celsius": 33.806
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-13T06:19:49.213Z",
+              "updated_at": "2026-09-13T06:19:49.213Z",
+              "score_state": "SCORED",
+              "cycle_id": 300115,
+              "sleep_id": "314a65cc-4159-4e41-94bd-40468faf538c",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 68,
+                "resting_heart_rate": 53,
+                "hrv_rmssd_milli": 94.302,
+                "spo2_percentage": 97.75,
+                "skin_temp_celsius": 33.788
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-12T05:47:31.340Z",
+              "updated_at": "2026-09-12T05:47:31.340Z",
+              "score_state": "SCORED",
+              "cycle_id": 300114,
+              "sleep_id": "30443e40-37bf-43d0-a8b4-f7561c2ead68",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 77,
+                "resting_heart_rate": 52,
+                "hrv_rmssd_milli": 92.492,
+                "spo2_percentage": 97.91,
+                "skin_temp_celsius": 33.598
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-11T06:29:53.330Z",
+              "updated_at": "2026-09-11T06:29:53.330Z",
+              "score_state": "SCORED",
+              "cycle_id": 300113,
+              "sleep_id": "c9c1003e-3dab-4b9d-af31-097f92572948",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 87,
+                "resting_heart_rate": 55,
+                "hrv_rmssd_milli": 97.849,
+                "spo2_percentage": 97.78,
+                "skin_temp_celsius": 34.59
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-10T06:19:20.557Z",
+              "updated_at": "2026-09-10T06:19:20.557Z",
+              "score_state": "SCORED",
+              "cycle_id": 300112,
+              "sleep_id": "7e979033-6107-4e0e-a54b-ec92608e93a9",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 60,
+                "resting_heart_rate": 53,
+                "hrv_rmssd_milli": 85.089,
+                "spo2_percentage": 95.08,
+                "skin_temp_celsius": 33.993
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-09-09T06:42:31.017Z",
+              "updated_at": "2026-09-09T06:42:31.017Z",
+              "score_state": "SCORED",
+              "cycle_id": 300111,
+              "sleep_id": "fb380471-eaca-4ce1-bf29-24fdae5b37c0",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 98,
+                "resting_heart_rate": 55,
+                "hrv_rmssd_milli": 101.083,
+                "spo2_percentage": 96.15,
+                "skin_temp_celsius": 34.044
+              }
+            }
+          ],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "zoned date-times across a strap-off gap",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-07-12T18:00:00+02:00",
+        "end": "2026-07-16T12:00:00Z",
+        "limit": 25
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [
+            {
+              "user_id": 9001,
+              "created_at": "2026-07-16T05:09:55.748Z",
+              "updated_at": "2026-07-16T05:09:55.748Z",
+              "score_state": "SCORED",
+              "cycle_id": 300056,
+              "sleep_id": "4165c85b-f6da-4b97-9abf-8b53b184873a",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 79,
+                "resting_heart_rate": 55,
+                "hrv_rmssd_milli": 77.93,
+                "spo2_percentage": 98.36,
+                "skin_temp_celsius": 34.247
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-07-15T04:05:04.041Z",
+              "updated_at": "2026-07-15T04:05:04.041Z",
+              "score_state": "SCORED",
+              "cycle_id": 300055,
+              "sleep_id": "0d2f6726-00bc-411d-a4cb-493494e01030",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 73,
+                "resting_heart_rate": 55,
+                "hrv_rmssd_milli": 82.976,
+                "spo2_percentage": 97.98,
+                "skin_temp_celsius": 33.498
+              }
+            },
+            {
+              "user_id": 9001,
+              "created_at": "2026-07-12T05:19:49.553Z",
+              "updated_at": "2026-07-12T05:19:49.553Z",
+              "score_state": "SCORED",
+              "cycle_id": 300054,
+              "sleep_id": "26182966-5db9-4914-a6a9-db85f3fa72c7",
+              "score": {
+                "user_calibrating": false,
+                "recovery_score": 39,
+                "resting_heart_rate": 54,
+                "hrv_rmssd_milli": 69.464,
+                "spo2_percentage": 97.81,
+                "skin_temp_celsius": 33.458
+              }
+            }
+          ],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "last 7 days"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "records": [],
+          "next_token": null
+        }
+      }
+    },
+    {
+      "name": "end before start",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "2026-09-16",
+        "end": "2026-09-13"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "End (2026-09-13) is before start (2026-09-16). Swap them or widen the range.",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "unrecognized date expression",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "start": "the other day"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "Unrecognized date expression: \"the other day\". Supported: \"today\", \"yesterday\", \"last N days\", \"last N weeks\", \"last N months\", \"this week\", \"last week\", \"this month\", \"last month\", \"this quarter\", \"last quarter\", \"last year\", \"YYYY-MM\", or an ISO 8601 date (YYYY-MM-DD) or date-time.",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "limit above 25",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "limit": 26
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_recovery_collection: Too big: expected number to be <=25 at limit",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "WHOOP rate limit",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "limit": 5
+      },
+      "failures": [
+        {
+          "path": "^/v2/recovery",
+          "status": 429
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP rate limit reached (HTTP 429). Wait a minute, then retry.",
+        "structuredContent": null
+      }
+    }
+  ]
+}

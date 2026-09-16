@@ -1,0 +1,721 @@
+{
+  "tool": "get_trend",
+  "mode": "aggregate",
+  "cases": [
+    {
+      "name": "recovery over 30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "recovery",
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "recovery",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 78.65517241379311,
+            "std_dev": 16.065117194951142
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.5807881773399015,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "hrv over 30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "hrv",
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "hrv",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 91.925,
+            "std_dev": 8.63946477029922
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.43038275862068975,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "rhr over 30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "rhr",
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "rhr",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 54.58620689655172,
+            "std_dev": 2.1895872919155233
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "lower",
+            "slope": -0.05172413793103446,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "sleep_duration over 30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "sleep_duration",
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "sleep_duration",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": null,
+          "truncated": false,
+          "statistics": {
+            "mean": 6.482105325670499,
+            "std_dev": 1.0334295050546132
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.00283809140667762,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "sleep_performance over 30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "sleep_performance",
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "sleep_performance",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": null,
+          "truncated": false,
+          "statistics": {
+            "mean": 74.86206896551724,
+            "std_dev": 12.439437114250055
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.04187192118226606,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "strain over 30 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "strain",
+        "days": 30
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "strain",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": null,
+          "truncated": false,
+          "statistics": {
+            "mean": 9.333172413793102,
+            "std_dev": 2.3502070320977597
+          },
+          "trend": {
+            "direction": null,
+            "change": "stable",
+            "better_when": null,
+            "slope": -0.004043645320197034,
+            "confidence": "low"
+          },
+          "notes": [
+            "Today's strain is still accumulating and is not included.",
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values.",
+            "Strain is neither better nor worse when higher, so only trend.change is given."
+          ]
+        }
+      }
+    },
+    {
+      "name": "recovery over 90 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "recovery",
+        "days": 90
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "recovery",
+          "period": {
+            "start": "2026-06-19",
+            "end": "2026-09-16",
+            "days": 90
+          },
+          "status": "available",
+          "sample_size": 88,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 72.13636363636364,
+            "std_dev": 17.116035688381537
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.32574705649386154,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "strain with default days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "strain"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "strain",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "available",
+          "sample_size": 29,
+          "calibrating": null,
+          "truncated": false,
+          "statistics": {
+            "mean": 9.333172413793102,
+            "std_dev": 2.3502070320977597
+          },
+          "trend": {
+            "direction": null,
+            "change": "stable",
+            "better_when": null,
+            "slope": -0.004043645320197034,
+            "confidence": "low"
+          },
+          "notes": [
+            "Today's strain is still accumulating and is not included.",
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values.",
+            "Strain is neither better nor worse when higher, so only trend.change is given."
+          ]
+        }
+      }
+    },
+    {
+      "name": "sleep_duration over 7 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "sleep_duration",
+        "days": 7
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "sleep_duration",
+          "period": {
+            "start": "2026-09-10",
+            "end": "2026-09-16",
+            "days": 7
+          },
+          "status": "available",
+          "sample_size": 6,
+          "calibrating": null,
+          "truncated": false,
+          "statistics": {
+            "mean": 6.804497268518518,
+            "std_dev": 0.6792254114856535
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.18298861111111106,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "rising hrv over 60 days",
+      "fixture": "matureUser-rising-hrv",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "hrv",
+        "days": 60
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "hrv",
+          "period": {
+            "start": "2026-07-19",
+            "end": "2026-09-16",
+            "days": 60
+          },
+          "status": "available",
+          "sample_size": 59,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 76.31916949152544,
+            "std_dev": 12.490266669002631
+          },
+          "trend": {
+            "direction": "improving",
+            "change": "increasing",
+            "better_when": "higher",
+            "slope": 0.4930659263588547,
+            "confidence": "medium"
+          },
+          "notes": []
+        }
+      }
+    },
+    {
+      "name": "rising recovery over 60 days",
+      "fixture": "matureUser-rising-hrv",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "recovery",
+        "days": 60
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "recovery",
+          "period": {
+            "start": "2026-07-19",
+            "end": "2026-09-16",
+            "days": 60
+          },
+          "status": "available",
+          "sample_size": 59,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 72,
+            "std_dev": 17.604891462029254
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": 0.4745178258328463,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "rhr under rising hrv over 60 days",
+      "fixture": "matureUser-rising-hrv",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "rhr",
+        "days": 60
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "rhr",
+          "period": {
+            "start": "2026-07-19",
+            "end": "2026-09-16",
+            "days": 60
+          },
+          "status": "available",
+          "sample_size": 59,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 55.101694915254235,
+            "std_dev": 2.1993443957984558
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "lower",
+            "slope": -0.06212741087083576,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "falling hrv over 60 days",
+      "fixture": "matureUser-falling-hrv",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "hrv",
+        "days": 60
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "hrv",
+          "period": {
+            "start": "2026-07-19",
+            "end": "2026-09-16",
+            "days": 60
+          },
+          "status": "available",
+          "sample_size": 59,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 47.78101694915253,
+            "std_dev": 12.604968115909799
+          },
+          "trend": {
+            "direction": "declining",
+            "change": "decreasing",
+            "better_when": "higher",
+            "slope": -0.503315721800117,
+            "confidence": "medium"
+          },
+          "notes": []
+        }
+      }
+    },
+    {
+      "name": "falling recovery over 60 days",
+      "fixture": "matureUser-falling-hrv",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "recovery",
+        "days": 60
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "recovery",
+          "period": {
+            "start": "2026-07-19",
+            "end": "2026-09-16",
+            "days": 60
+          },
+          "status": "available",
+          "sample_size": 59,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": 36.69491525423729,
+            "std_dev": 21.088396871738176
+          },
+          "trend": {
+            "direction": "stable",
+            "change": "stable",
+            "better_when": "higher",
+            "slope": -0.7264172998246641,
+            "confidence": "low"
+          },
+          "notes": [
+            "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+          ]
+        }
+      }
+    },
+    {
+      "name": "calibrating account",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "recovery",
+        "days": 7
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "recovery",
+          "period": {
+            "start": "2026-09-10",
+            "end": "2026-09-16",
+            "days": 7
+          },
+          "status": "insufficient_data",
+          "sample_size": 2,
+          "calibrating": true,
+          "truncated": false,
+          "statistics": {
+            "mean": null,
+            "std_dev": null
+          },
+          "trend": {
+            "direction": null,
+            "change": null,
+            "better_when": "higher",
+            "slope": null,
+            "confidence": null
+          },
+          "notes": [
+            "Not enough data yet: 2 scored recoveries in the last 7 days; a trend needs at least 4.",
+            "WHOOP is still calibrating (2 of 2 scored recoveries flagged), so recovery, HRV and resting heart rate may shift.",
+            "Aggregate privacy mode withholds statistics until at least 4 data points exist (2 so far)."
+          ]
+        }
+      }
+    },
+    {
+      "name": "calibrating account strain",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "strain"
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "strain",
+          "period": {
+            "start": "2026-08-18",
+            "end": "2026-09-16",
+            "days": 30
+          },
+          "status": "insufficient_data",
+          "sample_size": 2,
+          "calibrating": null,
+          "truncated": false,
+          "statistics": {
+            "mean": null,
+            "std_dev": null
+          },
+          "trend": {
+            "direction": null,
+            "change": null,
+            "better_when": null,
+            "slope": null,
+            "confidence": null
+          },
+          "notes": [
+            "Not enough data yet: 2 completed cycles in the last 30 days; a trend needs at least 4.",
+            "Today's strain is still accumulating and is not included.",
+            "Aggregate privacy mode withholds statistics until at least 4 data points exist (2 so far)."
+          ]
+        }
+      }
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "hrv",
+        "days": 14
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "metric": "hrv",
+          "period": {
+            "start": "2026-09-03",
+            "end": "2026-09-16",
+            "days": 14
+          },
+          "status": "insufficient_data",
+          "sample_size": 0,
+          "calibrating": false,
+          "truncated": false,
+          "statistics": {
+            "mean": null,
+            "std_dev": null
+          },
+          "trend": {
+            "direction": null,
+            "change": null,
+            "better_when": "higher",
+            "slope": null,
+            "confidence": null
+          },
+          "notes": [
+            "Not enough data yet: no scored recoveries in the last 14 days; a trend needs at least 4."
+          ]
+        }
+      }
+    },
+    {
+      "name": "unknown metric",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "vo2max"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_trend: Invalid option: expected one of \"recovery\"|\"hrv\"|\"rhr\"|\"sleep_duration\"|\"sleep_performance\"|\"strain\" at metric",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "days below the minimum",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "hrv",
+        "days": 6
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_trend: Too small: expected number to be >=7 at days",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "recovery stream rate limited",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "metric": "hrv",
+        "days": 14
+      },
+      "failures": [
+        {
+          "path": "^/v2/recovery",
+          "status": 429
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP rate limit reached (HTTP 429). Wait a minute, then retry.",
+        "structuredContent": null
+      }
+    }
+  ]
+}

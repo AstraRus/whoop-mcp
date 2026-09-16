@@ -1,8 +1,9 @@
 /**
  * MCP server setup and tool registration.
  *
- * Creates an McpServer with all 6 WHOOP tools registered.
- * Each tool handler calls the WHOOP API via the provided WhoopClient.
+ * Creates an McpServer with the legacy WHOOP tools registered directly below,
+ * then every registry tool (src/tools/registry), resources and prompts. Each
+ * tool result is validated against its output contract before it is returned.
  */
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -27,7 +28,6 @@ import { getCalendar } from "./tools/get-calendar.js";
 import { registerResources } from "./resources/index.js";
 import { registerPrompts } from "./prompts/index.js";
 import { ISO_8601_REGEX } from "./tools/date-utils.js";
-import { readFileSync } from "node:fs";
 import type { CallToolResult, ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { getBaselines, baselinesInputSchema } from "./tools/get-baselines.js";
 import { getSleepDebt, sleepDebtInputSchema } from "./tools/get-sleep-debt.js";
@@ -38,22 +38,12 @@ import {
   projectAggregate,
   type PrivacyMode,
 } from "./tools/output-contracts.js";
-
-// ---------------------------------------------------------------------------
-// Package version
-// ---------------------------------------------------------------------------
-
-/** Read the version from package.json at startup */
-function getPackageVersion(): string {
-  try {
-    const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf-8")) as {
-      version: string;
-    };
-    return pkg.version;
-  } catch {
-    return "0.0.0";
-  }
-}
+import type { MemoryCache } from "./cache/memory-cache.js";
+import type { Logger } from "./logging/logger.js";
+import { packageVersion, type RuntimeStatus } from "./runtime-status.js";
+import { buildServerInstructions } from "./guide.js";
+import { ADDITIONAL_TOOLS } from "./tools/registry/index.js";
+import { MAX_TOOL_TEXT_CHARS, type ToolContext } from "./tools/tool-definition.js";
 
 // ---------------------------------------------------------------------------
 // Shared schemas
@@ -113,8 +103,9 @@ const collectionInputSchema = z.object({
 // JSON response helper
 // ---------------------------------------------------------------------------
 
-function jsonContent(data: unknown): CallToolResult {
-  const text = JSON.stringify(data, null, 2);
+/** Text plus structuredContent; legacy tools use pretty JSON text, registry tools compact JSON. */
+function jsonContent(data: unknown, compact = false): CallToolResult {
+  const text = compact ? JSON.stringify(data) : JSON.stringify(data, null, 2);
   return {
     content: [{ type: "text" as const, text }],
     structuredContent: JSON.parse(text) as Record<string, unknown>,
@@ -180,23 +171,68 @@ export function describeContractIssues(error: z.ZodError): string {
 }
 
 /** Wrap a tool handler with error-to-MCP-error conversion */
-async function safeTool<T>(fn: () => Promise<T>): Promise<CallToolResult> {
+async function safeTool<T>(fn: () => Promise<T>, compact = false): Promise<CallToolResult> {
   try {
-    return jsonContent(await fn());
+    return jsonContent(await fn(), compact);
   } catch (error: unknown) {
     return errorResponse(error);
   }
+}
+
+/** The isError result for a registry tool result above MAX_TOOL_TEXT_CHARS. */
+function tooLargeResponse(chars: number): CallToolResult {
+  return {
+    isError: true,
+    content: [
+      {
+        type: "text",
+        text: `The result is too large for the MCP client (${chars} characters); request fewer days, a lower limit or fewer datasets.`,
+      },
+    ],
+  };
+}
+
+/** Total characters of a result's text content. */
+function textLength(result: CallToolResult): number {
+  return result.content.reduce(
+    (sum, item) => sum + (item.type === "text" ? item.text.length : 0),
+    0
+  );
+}
+
+/** How registerContracted turns a validated result into the tool response. */
+interface ContractOptions {
+  /** Applied to the validated data before it is returned (aggregate projection). */
+  project?: (data: Record<string, unknown>) => Record<string, unknown>;
+  /** Compact JSON text instead of pretty JSON. */
+  compact?: boolean;
+  /** Return an isError result when the text exceeds MAX_TOOL_TEXT_CHARS. */
+  sizeGuard?: boolean;
 }
 
 // ---------------------------------------------------------------------------
 // Server factory
 // ---------------------------------------------------------------------------
 
+/** The request a server instance was created for (HTTP transport), for logging. */
+export interface ServerRequestContext {
+  requestId: string;
+  auth: "static" | "oauth" | "stdio";
+  clientId?: string;
+}
+
 /** Options for createWhoopServer */
 export interface CreateServerOptions {
   privacyMode?: PrivacyMode;
   /** Disable MCP resource registration (set via WHOOP_MCP_DISABLE_RESOURCES=1) */
   disableResources?: boolean;
+  /** Process-wide cache for history chunks, shared by registry tools. */
+  historyCache?: MemoryCache;
+  runtimeStatus?: RuntimeStatus;
+  logger?: Logger;
+  requestContext?: ServerRequestContext;
+  /** The logical current time for registry tools. Default: the system clock. */
+  now?: () => Date;
 }
 
 /** Return type for the configured MCP server. */
@@ -216,28 +252,40 @@ export interface WhoopServer {
  */
 export function createWhoopServer(client: WhoopClient, options?: CreateServerOptions): WhoopServer {
   const privacyMode = privacyModeSchema.parse(options?.privacyMode ?? "standard");
-  const server = new McpServer({
-    name: "whoop-mcp",
-    version: getPackageVersion(),
-  });
+  const logger = options?.logger;
+  const instructions = buildServerInstructions(privacyMode);
+  const server = new McpServer(
+    {
+      name: "whoop-mcp",
+      version: packageVersion(),
+    },
+    instructions !== undefined ? { instructions } : undefined
+  );
 
-  function registerTool<Shape extends z.ZodRawShape>(
+  /**
+   * Register a tool whose result is validated against `outputSchema` before it
+   * is returned. The handler's structuredContent is parsed with the schema; a
+   * mismatch becomes an isError result naming the failing fields.
+   */
+  function registerContracted<Shape extends z.ZodRawShape>(
     name: string,
-    config: { description: string; inputSchema?: z.ZodObject<Shape>; annotations: ToolAnnotations },
-    handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>
+    config: {
+      title?: string;
+      description: string;
+      inputSchema?: z.ZodObject<Shape>;
+      annotations: ToolAnnotations;
+    },
+    outputSchema: z.ZodObject,
+    handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>,
+    contract: ContractOptions = {}
   ): void {
-    const schema = (privacyMode === "aggregate" ? aggregateOutputSchemas : outputSchemas)[name];
-    if (!schema) {
-      if (privacyMode === "aggregate") return;
-      throw new Error("Missing tool output contract.");
-    }
     server.registerTool(
       name,
-      { ...config, inputSchema: config.inputSchema ?? z.object({}), outputSchema: schema },
+      { ...config, inputSchema: config.inputSchema ?? z.object({}), outputSchema },
       async (args) => {
         const result = await handler(args as z.infer<z.ZodObject<Shape>>);
         if (result.isError) return result;
-        const validated = schema.safeParse(result.structuredContent);
+        const validated = outputSchema.safeParse(result.structuredContent);
         if (!validated.success)
           return {
             isError: true,
@@ -248,11 +296,51 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
               },
             ],
           };
-        return jsonContent(
-          privacyMode === "aggregate" ? projectAggregate(name, validated.data) : validated.data
-        );
+        const data = contract.project ? contract.project(validated.data) : validated.data;
+        const response = jsonContent(data, contract.compact === true);
+        if (contract.sizeGuard === true) {
+          const chars = textLength(response);
+          if (chars > MAX_TOOL_TEXT_CHARS) {
+            logger?.warn("tool output too large", { tool: name, chars });
+            return tooLargeResponse(chars);
+          }
+        }
+        return response;
       }
     );
+  }
+
+  /** Register a legacy tool with its contract for the current privacy mode (pretty JSON text). */
+  function registerTool<Shape extends z.ZodRawShape>(
+    name: string,
+    config: { description: string; inputSchema?: z.ZodObject<Shape>; annotations: ToolAnnotations },
+    handler: (args: z.infer<z.ZodObject<Shape>>) => Promise<CallToolResult>
+  ): void {
+    const schema = (privacyMode === "aggregate" ? aggregateOutputSchemas : outputSchemas)[name];
+    if (!schema) {
+      if (privacyMode === "aggregate") return;
+      throw new Error("Missing tool output contract.");
+    }
+    registerContracted(
+      name,
+      config,
+      schema,
+      handler,
+      privacyMode === "aggregate" ? { project: (data) => projectAggregate(name, data) } : {}
+    );
+  }
+
+  /** A fresh context for one registry tool call. */
+  function toolContext(): ToolContext {
+    return {
+      client,
+      privacyMode,
+      ...(options?.historyCache !== undefined ? { historyCache: options.historyCache } : {}),
+      ...(options?.runtimeStatus !== undefined ? { runtime: options.runtimeStatus } : {}),
+      ...(logger !== undefined ? { logger } : {}),
+      now: options?.now ?? ((): Date => new Date()),
+      startedAtMs: Date.now(),
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -510,7 +598,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
   );
 
   // -------------------------------------------------------------------------
-  // MCP Resources
+  // Tools 15-16: get_baselines, get_sleep_debt
   // -------------------------------------------------------------------------
   registerTool(
     "get_baselines",
@@ -533,14 +621,38 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     async (args) => safeTool(() => getSleepDebt(client, args))
   );
 
-  if (!options?.disableResources && privacyMode === "standard") {
-    registerResources(server, client);
+  // -------------------------------------------------------------------------
+  // Registry tools: the standard variant, or in aggregate mode the aggregate
+  // variant when the tool has one. Compact JSON text within MAX_TOOL_TEXT_CHARS.
+  // -------------------------------------------------------------------------
+  for (const definition of ADDITIONAL_TOOLS) {
+    const variant = privacyMode === "aggregate" ? definition.aggregate : definition.standard;
+    if (variant === undefined) continue;
+    registerContracted(
+      definition.name,
+      {
+        title: variant.title,
+        description: variant.description,
+        inputSchema: variant.inputSchema,
+        annotations: definition.annotations,
+      },
+      variant.outputSchema,
+      async (args) => safeTool(() => variant.run(args, toolContext()), true),
+      { compact: true, sizeGuard: true }
+    );
   }
 
   // -------------------------------------------------------------------------
-  // MCP Prompts
+  // MCP Resources
   // -------------------------------------------------------------------------
-  if (privacyMode === "standard") registerPrompts(server);
+  if (!options?.disableResources && privacyMode === "standard") {
+    registerResources(server, client, logger !== undefined ? { logger } : {});
+  }
+
+  // -------------------------------------------------------------------------
+  // MCP Prompts (none in aggregate mode)
+  // -------------------------------------------------------------------------
+  registerPrompts(server, { privacyMode });
 
   return { server };
 }

@@ -10,6 +10,9 @@ import { WHOOP_API_BASE_URL } from "./endpoints.js";
 import type { Logger } from "../logging/logger.js";
 import { MemoryCache, DEFAULT_TTL_MS } from "../cache/memory-cache.js";
 import { TokenRefreshError } from "../auth/token-refresh-error.js";
+import { WhoopRateBudgetError, type RateLimiter } from "./rate-limiter.js";
+
+export { WhoopRateBudgetError } from "./rate-limiter.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -40,6 +43,13 @@ export interface WhoopClientOptions {
    * caching is a no-op and every GET hits the network.
    */
   cache?: MemoryCache;
+  /**
+   * Optional process-wide request pacing. When provided, every request attempt
+   * (first try, 429 retries and the retry after a token refresh) waits for a
+   * slot and releases it once the response headers arrive. Without it, requests
+   * are sent immediately.
+   */
+  rateLimiter?: RateLimiter;
 }
 
 /** Per-request options for {@link WhoopClient.get}. */
@@ -48,6 +58,12 @@ export interface WhoopGetOptions {
   cache?: boolean;
   /** TTL override in milliseconds for this cached entry. Defaults to the cache default. */
   ttlMs?: number;
+  /**
+   * Epoch ms after which no further request attempt is sent: waiting for the
+   * rate limiter, or a 429 retry delay, that would pass it rejects with
+   * {@link WhoopRateBudgetError} instead.
+   */
+  deadlineMs?: number;
 }
 
 /** WHOOP API client returned by createWhoopClient */
@@ -165,6 +181,9 @@ function describeWhoopErrorAt(error: unknown, depth: number): string | undefined
   if (depth > MAX_CAUSE_DEPTH) {
     return undefined;
   }
+  if (error instanceof WhoopRateBudgetError) {
+    return "The server paused WHOOP requests to stay within WHOOP's per-minute request limit; retry in a minute or request a shorter period.";
+  }
   if (error instanceof WhoopApiError) {
     return describeApiStatus(error.statusCode);
   }
@@ -181,7 +200,11 @@ function describeWhoopErrorAt(error: unknown, depth: number): string | undefined
   }
   if (error instanceof WhoopNetworkError) {
     const cause = error.cause;
-    if (cause instanceof WhoopApiError || cause instanceof WhoopAuthError) {
+    if (
+      cause instanceof WhoopApiError ||
+      cause instanceof WhoopAuthError ||
+      cause instanceof WhoopRateBudgetError
+    ) {
       return describeWhoopErrorAt(cause, depth + 1);
     }
     if (isTimeoutError(cause)) {
@@ -239,6 +262,16 @@ function parseRetryAfter(response: Response): number | null {
   return Math.min(seconds * 1000, MAX_RETRY_AFTER_MS);
 }
 
+/** A numeric response header, or null when missing or not a finite number. */
+function numericHeader(response: Response, name: string): number | null {
+  const header = response.headers?.get(name);
+  if (header === null || header === undefined || header.trim() === "") {
+    return null;
+  }
+  const value = Number(header);
+  return Number.isFinite(value) ? value : null;
+}
+
 /**
  * Build a deterministic cache key for a GET request.
  * Query parameters are sorted so that semantically identical paths collapse to
@@ -272,6 +305,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
   const logger = options.logger;
   const requestId = options.requestId;
   const cache = options.cache;
+  const rateLimiter = options.rateLimiter;
   /** Latest access token; replaced when a refresh succeeds. */
   let accessToken = options.accessToken;
   /** The token refresh currently in progress, shared by every request that hits a 401. */
@@ -322,6 +356,38 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
   }
 
   /**
+   * Send one request attempt: refuse it once the deadline has passed, wait for
+   * a rate-limiter slot (released as soon as the headers arrive) and report
+   * WHOOP's rate-limit signals back to the limiter.
+   */
+  async function sendAttempt(
+    url: string,
+    token: string,
+    deadlineMs: number | undefined
+  ): Promise<Response> {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
+      throw new WhoopRateBudgetError();
+    }
+    if (rateLimiter === undefined) {
+      return doFetch(url, token);
+    }
+    const release = await rateLimiter.acquire(deadlineMs);
+    try {
+      const response = await doFetch(url, token);
+      rateLimiter.noteHeaders(
+        numericHeader(response, "x-ratelimit-remaining"),
+        numericHeader(response, "x-ratelimit-reset")
+      );
+      if (response.status === 429) {
+        rateLimiter.note429(parseRetryAfter(response));
+      }
+      return response;
+    } finally {
+      release();
+    }
+  }
+
+  /**
    * Parse a successful response body. The request timeout also covers reading
    * the body, so a reset, a timeout mid-body or a non-JSON body (e.g. a proxy
    * page) is reported as a WhoopNetworkError like a failed fetch.
@@ -354,12 +420,13 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
 
   return {
     async get<T>(path: string, getOptions?: WhoopGetOptions): Promise<T> {
+      const deadlineMs = getOptions?.deadlineMs;
       if (getOptions?.cache && cache) {
         return cache.getOrFetch<T>(cacheKey(path), getOptions.ttlMs ?? DEFAULT_TTL_MS, () =>
-          doGet<T>(path)
+          doGet<T>(path, deadlineMs)
         );
       }
-      return doGet<T>(path);
+      return doGet<T>(path, deadlineMs);
     },
   };
 
@@ -394,7 +461,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
     return flight;
   }
 
-  async function doGet<T>(path: string): Promise<T> {
+  async function doGet<T>(path: string, deadlineMs?: number): Promise<T> {
     const url = `${baseUrl}${path}`;
     let lastError: WhoopApiError | undefined;
     let lastResponse: Response | undefined;
@@ -404,12 +471,16 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
       if (attempt > 0 && lastResponse) {
         const retryDelay =
           parseRetryAfter(lastResponse) ?? BASE_RETRY_DELAY_MS * Math.pow(2, attempt - 1);
+        if (deadlineMs !== undefined && Date.now() + retryDelay >= deadlineMs) {
+          // The retry could not be sent before the deadline: stop now.
+          throw new WhoopRateBudgetError({ cause: lastError });
+        }
         await delay(retryDelay);
       }
 
       // Always send the latest token: another request may have refreshed it.
       const sentToken = accessToken;
-      const response = await doFetch(url, sentToken);
+      const response = await sendAttempt(url, sentToken, deadlineMs);
 
       if (response.ok) {
         return await readJson<T>(response, url);
@@ -445,7 +516,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
         }
 
         // Retry with the new token
-        const retryResponse = await doFetch(url, newToken);
+        const retryResponse = await sendAttempt(url, newToken, deadlineMs);
         if (retryResponse.ok) {
           return await readJson<T>(retryResponse, url);
         }

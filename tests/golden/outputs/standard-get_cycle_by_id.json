@@ -1,0 +1,138 @@
+{
+  "tool": "get_cycle_by_id",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "open cycle",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": 81003
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 7001,
+          "created_at": "2026-09-16T05:01:34.745Z",
+          "updated_at": "2026-09-16T18:16:02.337Z",
+          "score_state": "SCORED",
+          "start": "2026-09-15T21:13:31.460Z",
+          "end": null,
+          "timezone_offset": "+02:00",
+          "id": 81003,
+          "score": {
+            "strain": 13.0542,
+            "kilojoule": 10187.9,
+            "average_heart_rate": 73,
+            "max_heart_rate": 179
+          }
+        }
+      }
+    },
+    {
+      "name": "partial first-day cycle",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": 81001
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "user_id": 7001,
+          "created_at": "2026-09-14T06:12:40.331Z",
+          "updated_at": "2026-09-15T05:25:01.113Z",
+          "score_state": "SCORED",
+          "start": "2026-09-13T22:00:00.000Z",
+          "end": "2026-09-14T22:39:27.317Z",
+          "timezone_offset": "+02:00",
+          "id": 81001,
+          "score": {
+            "strain": 9.4217,
+            "kilojoule": 8914.6,
+            "average_heart_rate": 69,
+            "max_heart_rate": 158
+          }
+        }
+      }
+    },
+    {
+      "name": "negative id rejected by the input schema",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": -1
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_cycle_by_id: Too small: expected number to be >0 at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "string id rejected by the input schema",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": "81002"
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_cycle_by_id: Invalid input: expected number, received string at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "fractional id rejected by the input schema",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": 81002.5
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_cycle_by_id: Invalid input: expected int, received number at id",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "unknown id (404)",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": 999999999
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "network failure",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "id": 81003
+      },
+      "failures": [
+        {
+          "path": "^/v2/cycle/",
+          "status": "network"
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "Network error: Unable to reach the WHOOP API. Check your internet connection.",
+        "structuredContent": null
+      }
+    }
+  ]
+}

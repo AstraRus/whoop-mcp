@@ -1,0 +1,826 @@
+{
+  "tool": "get_baselines",
+  "mode": "standard",
+  "cases": [
+    {
+      "name": "calibrating account",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-15T00:00:00.000+02:00",
+            "end": "2026-09-15T23:59:59.999+02:00"
+          },
+          "metrics": {
+            "hrv": null,
+            "rhr": null,
+            "respiratory_rate": null,
+            "sleep_hours": null,
+            "recovery_score": null
+          },
+          "metric_status": {
+            "hrv": {
+              "status": "calibrating",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "ms",
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+            },
+            "rhr": {
+              "status": "calibrating",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "bpm",
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+            },
+            "respiratory_rate": {
+              "status": "insufficient_data",
+              "sample_size": 1,
+              "required_sample_size": 14,
+              "unit": "breaths/min",
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+            },
+            "sleep_hours": {
+              "status": "insufficient_data",
+              "sample_size": 1,
+              "required_sample_size": 14,
+              "unit": "hours",
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+            },
+            "recovery_score": {
+              "status": "calibrating",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+            }
+          },
+          "notes": [
+            "HRV, resting heart rate and recovery score: WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted).",
+            "Sleep hours and respiratory rate: Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+          ],
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-08-15T23:30:00.000+02:00",
+              "end": "2026-09-16T23:30:00.000+02:00"
+            },
+            "observed_period": {
+              "start": "2026-09-15T00:00:00.000+02:00",
+              "end": "2026-09-15T23:59:59.999+02:00"
+            },
+            "sources": {
+              "recovery": {
+                "status": "calibrating",
+                "fetched_at": null,
+                "source_updated_at": null,
+                "cache_status": "unknown",
+                "records_fetched": 2,
+                "records_used": 0,
+                "exclusions": {
+                  "calibrating": 2
+                },
+                "truncated": false
+              },
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-16T05:01:40.207Z",
+                "cache_status": "unknown",
+                "records_fetched": 2,
+                "records_used": 2,
+                "exclusions": {},
+                "truncated": false
+              },
+              "cycle": {
+                "status": "calibrating",
+                "fetched_at": null,
+                "source_updated_at": null,
+                "cache_status": "unknown",
+                "records_fetched": 3,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "baselines-2",
+            "limitations": [
+              "Descriptive personal distributions, not population norms or diagnosis.",
+              "Latest observation and current local day are excluded from each baseline.",
+              "Recoveries WHOOP flags as calibrating are not used for baselines."
+            ]
+          },
+          "truncated": false,
+          "disclaimer": "Statistical observation from your data, not medical advice."
+        }
+      }
+    },
+    {
+      "name": "default window",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-08-16T00:00:00.000+01:00",
+            "end": "2026-09-14T23:59:59.999+01:00"
+          },
+          "metrics": {
+            "hrv": {
+              "sample_size": 30,
+              "mean": 91.77476666666666,
+              "median": 93.397,
+              "std_dev": 8.533459660588367,
+              "p10": 78.37270000000001,
+              "p25": 85.55625,
+              "p50": 93.397,
+              "p75": 97.653,
+              "p90": 101.2394,
+              "latest": 92.403,
+              "latest_percentile": 43.333333333333336,
+              "constant_baseline": false
+            },
+            "rhr": {
+              "sample_size": 30,
+              "mean": 54.43333333333333,
+              "median": 54,
+              "std_dev": 2.1241991955139756,
+              "p10": 52,
+              "p25": 53,
+              "p50": 54,
+              "p75": 55,
+              "p90": 58,
+              "latest": 57,
+              "latest_percentile": 81.66666666666667,
+              "constant_baseline": false
+            },
+            "respiratory_rate": {
+              "sample_size": 30,
+              "mean": 15.086979166666667,
+              "median": 15.15625,
+              "std_dev": 0.6835192915798394,
+              "p10": 14.165625,
+              "p25": 14.4921875,
+              "p50": 15.15625,
+              "p75": 15.6953125,
+              "p90": 15.9421875,
+              "latest": 15.0625,
+              "latest_percentile": 40,
+              "constant_baseline": false
+            },
+            "sleep_hours": {
+              "sample_size": 30,
+              "mean": 6.445477898148146,
+              "median": 6.539095416666667,
+              "std_dev": 1.0179087044023216,
+              "p10": 4.93168675,
+              "p25": 6.101200555555556,
+              "p50": 6.539095416666667,
+              "p75": 7.034647430555555,
+              "p90": 7.737429611111112,
+              "latest": 7.049573333333333,
+              "latest_percentile": 73.33333333333333,
+              "constant_baseline": false
+            },
+            "recovery_score": {
+              "sample_size": 30,
+              "mean": 79.6,
+              "median": 85,
+              "std_dev": 16.214396894940823,
+              "p10": 58.9,
+              "p25": 68.25,
+              "p50": 85,
+              "p75": 92.5,
+              "p90": 99,
+              "latest": 79,
+              "latest_percentile": 41.666666666666664,
+              "constant_baseline": false
+            }
+          },
+          "metric_status": {
+            "hrv": {
+              "status": "available",
+              "sample_size": 30,
+              "required_sample_size": 14,
+              "unit": "ms",
+              "reason": null
+            },
+            "rhr": {
+              "status": "available",
+              "sample_size": 30,
+              "required_sample_size": 14,
+              "unit": "bpm",
+              "reason": null
+            },
+            "respiratory_rate": {
+              "status": "available",
+              "sample_size": 30,
+              "required_sample_size": 14,
+              "unit": "breaths/min",
+              "reason": null
+            },
+            "sleep_hours": {
+              "status": "available",
+              "sample_size": 30,
+              "required_sample_size": 14,
+              "unit": "hours",
+              "reason": null
+            },
+            "recovery_score": {
+              "status": "available",
+              "sample_size": 30,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            }
+          },
+          "notes": [
+            "1 recovery is still being scored by WHOOP and not counted yet.",
+            "1 sleep is still being scored by WHOOP and not counted yet."
+          ],
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-08-15T22:30:00.000+01:00",
+              "end": "2026-09-16T22:30:00.000+01:00"
+            },
+            "observed_period": {
+              "start": "2026-08-16T00:00:00.000+01:00",
+              "end": "2026-09-14T23:59:59.999+01:00"
+            },
+            "sources": {
+              "recovery": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 33,
+                "records_used": 31,
+                "exclusions": {
+                  "pending": 1,
+                  "outside_window": 1
+                },
+                "truncated": false
+              },
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 38,
+                "records_used": 31,
+                "exclusions": {
+                  "nap": 6,
+                  "pending": 1
+                },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T21:47:29.574Z",
+                "cache_status": "unknown",
+                "records_fetched": 33,
+                "records_used": 31,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "baselines-2",
+            "limitations": [
+              "Descriptive personal distributions, not population norms or diagnosis.",
+              "Latest observation and current local day are excluded from each baseline.",
+              "Recoveries WHOOP flags as calibrating are not used for baselines."
+            ]
+          },
+          "truncated": false,
+          "disclaimer": "Statistical observation from your data, not medical advice."
+        }
+      }
+    },
+    {
+      "name": "60 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "baseline_days": 60
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-07-17T00:00:00.000+02:00",
+            "end": "2026-09-14T23:59:59.999+01:00"
+          },
+          "metrics": {
+            "hrv": {
+              "sample_size": 60,
+              "mean": 89.34376666666667,
+              "median": 87.8135,
+              "std_dev": 8.311494816150034,
+              "p10": 78.3331,
+              "p25": 83.78450000000001,
+              "p50": 87.8135,
+              "p75": 96.635,
+              "p90": 100.28790000000001,
+              "latest": 92.403,
+              "latest_percentile": 60,
+              "constant_baseline": false
+            },
+            "rhr": {
+              "sample_size": 60,
+              "mean": 54.86666666666667,
+              "median": 55,
+              "std_dev": 2.028683207293725,
+              "p10": 52.9,
+              "p25": 53,
+              "p50": 55,
+              "p75": 57,
+              "p90": 58,
+              "latest": 57,
+              "latest_percentile": 80,
+              "constant_baseline": false
+            },
+            "respiratory_rate": {
+              "sample_size": 60,
+              "mean": 15.127083333333333,
+              "median": 15.2109375,
+              "std_dev": 0.6559303950570686,
+              "p10": 14.140625,
+              "p25": 14.6640625,
+              "p50": 15.2109375,
+              "p75": 15.6015625,
+              "p90": 15.9859375,
+              "latest": 15.0625,
+              "latest_percentile": 37.5,
+              "constant_baseline": false
+            },
+            "sleep_hours": {
+              "sample_size": 60,
+              "mean": 6.246269990740741,
+              "median": 6.415500833333333,
+              "std_dev": 1.1034005676445802,
+              "p10": 4.695971972222222,
+              "p25": 5.5528772222222225,
+              "p50": 6.415500833333333,
+              "p75": 6.878770972222222,
+              "p90": 7.650601305555556,
+              "latest": 7.049573333333333,
+              "latest_percentile": 76.66666666666667,
+              "constant_baseline": false
+            },
+            "recovery_score": {
+              "sample_size": 60,
+              "mean": 77.25,
+              "median": 79.5,
+              "std_dev": 15.89824413784952,
+              "p10": 53,
+              "p25": 65,
+              "p50": 79.5,
+              "p75": 90,
+              "p90": 98.1,
+              "latest": 79,
+              "latest_percentile": 47.5,
+              "constant_baseline": false
+            }
+          },
+          "metric_status": {
+            "hrv": {
+              "status": "available",
+              "sample_size": 60,
+              "required_sample_size": 14,
+              "unit": "ms",
+              "reason": null
+            },
+            "rhr": {
+              "status": "available",
+              "sample_size": 60,
+              "required_sample_size": 14,
+              "unit": "bpm",
+              "reason": null
+            },
+            "respiratory_rate": {
+              "status": "available",
+              "sample_size": 60,
+              "required_sample_size": 14,
+              "unit": "breaths/min",
+              "reason": null
+            },
+            "sleep_hours": {
+              "status": "available",
+              "sample_size": 60,
+              "required_sample_size": 14,
+              "unit": "hours",
+              "reason": null
+            },
+            "recovery_score": {
+              "status": "available",
+              "sample_size": 60,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            }
+          },
+          "notes": [
+            "1 recovery is still being scored by WHOOP and not counted yet.",
+            "1 sleep is still being scored by WHOOP and not counted yet."
+          ],
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-07-16T22:30:00.000+01:00",
+              "end": "2026-09-16T22:30:00.000+01:00"
+            },
+            "observed_period": {
+              "start": "2026-07-17T00:00:00.000+02:00",
+              "end": "2026-09-14T23:59:59.999+01:00"
+            },
+            "sources": {
+              "recovery": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 63,
+                "records_used": 61,
+                "exclusions": {
+                  "pending": 1,
+                  "outside_window": 1
+                },
+                "truncated": false
+              },
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 73,
+                "records_used": 61,
+                "exclusions": {
+                  "nap": 11,
+                  "pending": 1
+                },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T21:47:29.574Z",
+                "cache_status": "unknown",
+                "records_fetched": 63,
+                "records_used": 61,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "baselines-2",
+            "limitations": [
+              "Descriptive personal distributions, not population norms or diagnosis.",
+              "Latest observation and current local day are excluded from each baseline.",
+              "Recoveries WHOOP flags as calibrating are not used for baselines."
+            ]
+          },
+          "truncated": false,
+          "disclaimer": "Statistical observation from your data, not medical advice."
+        }
+      }
+    },
+    {
+      "name": "14 days",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "baseline_days": 14
+      },
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": {
+            "start": "2026-09-01T00:00:00.000+01:00",
+            "end": "2026-09-14T23:59:59.999+01:00"
+          },
+          "metrics": {
+            "hrv": {
+              "sample_size": 14,
+              "mean": 96.7087857142857,
+              "median": 97.38900000000001,
+              "std_dev": 6.0000418234086546,
+              "p10": 87.3099,
+              "p25": 94.3905,
+              "p50": 97.38900000000001,
+              "p75": 100.86675,
+              "p90": 102.1778,
+              "latest": 92.403,
+              "latest_percentile": 14.285714285714286,
+              "constant_baseline": false
+            },
+            "rhr": {
+              "sample_size": 14,
+              "mean": 53.785714285714285,
+              "median": 54,
+              "std_dev": 1.4725377234348787,
+              "p10": 52,
+              "p25": 52.25,
+              "p50": 54,
+              "p75": 55,
+              "p90": 55,
+              "latest": 57,
+              "latest_percentile": 96.42857142857143,
+              "constant_baseline": false
+            },
+            "respiratory_rate": {
+              "sample_size": 14,
+              "mean": 15.209821428571429,
+              "median": 15.2421875,
+              "std_dev": 0.6719194930687874,
+              "p10": 14.2578125,
+              "p25": 14.79296875,
+              "p50": 15.2421875,
+              "p75": 15.8203125,
+              "p90": 15.9703125,
+              "latest": 15.0625,
+              "latest_percentile": 32.142857142857146,
+              "constant_baseline": false
+            },
+            "sleep_hours": {
+              "sample_size": 14,
+              "mean": 6.460179166666668,
+              "median": 6.486205972222223,
+              "std_dev": 1.0380160373613485,
+              "p10": 5.141327333333333,
+              "p25": 5.933135208333333,
+              "p50": 6.486205972222223,
+              "p75": 6.752957430555556,
+              "p90": 7.970737416666666,
+              "latest": 7.049573333333333,
+              "latest_percentile": 78.57142857142857,
+              "constant_baseline": false
+            },
+            "recovery_score": {
+              "sample_size": 14,
+              "mean": 85.07142857142857,
+              "median": 88.5,
+              "std_dev": 11.943104918824117,
+              "p10": 68.3,
+              "p25": 78.25,
+              "p50": 88.5,
+              "p75": 93,
+              "p90": 98.7,
+              "latest": 79,
+              "latest_percentile": 28.571428571428573,
+              "constant_baseline": false
+            }
+          },
+          "metric_status": {
+            "hrv": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "ms",
+              "reason": null
+            },
+            "rhr": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "bpm",
+              "reason": null
+            },
+            "respiratory_rate": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "breaths/min",
+              "reason": null
+            },
+            "sleep_hours": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "hours",
+              "reason": null
+            },
+            "recovery_score": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            }
+          },
+          "notes": [
+            "1 recovery is still being scored by WHOOP and not counted yet.",
+            "1 sleep is still being scored by WHOOP and not counted yet."
+          ],
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-08-31T22:30:00.000+01:00",
+              "end": "2026-09-16T22:30:00.000+01:00"
+            },
+            "observed_period": {
+              "start": "2026-09-01T00:00:00.000+01:00",
+              "end": "2026-09-14T23:59:59.999+01:00"
+            },
+            "sources": {
+              "recovery": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 17,
+                "records_used": 15,
+                "exclusions": {
+                  "pending": 1,
+                  "outside_window": 1
+                },
+                "truncated": false
+              },
+              "sleep": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T05:28:51.407Z",
+                "cache_status": "unknown",
+                "records_fetched": 19,
+                "records_used": 15,
+                "exclusions": {
+                  "nap": 3,
+                  "pending": 1
+                },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "fetched_at": null,
+                "source_updated_at": "2026-09-15T21:47:29.574Z",
+                "cache_status": "unknown",
+                "records_fetched": 17,
+                "records_used": 15,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "baselines-2",
+            "limitations": [
+              "Descriptive personal distributions, not population norms or diagnosis.",
+              "Latest observation and current local day are excluded from each baseline.",
+              "Recoveries WHOOP flags as calibrating are not used for baselines."
+            ]
+          },
+          "truncated": false,
+          "disclaimer": "Statistical observation from your data, not medical advice."
+        }
+      }
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "result": {
+        "isError": false,
+        "text_format": "pretty_json",
+        "structuredContent": {
+          "period": null,
+          "metrics": {
+            "hrv": null,
+            "rhr": null,
+            "respiratory_rate": null,
+            "sleep_hours": null,
+            "recovery_score": null
+          },
+          "metric_status": {
+            "hrv": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "ms",
+              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+            },
+            "rhr": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "bpm",
+              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+            },
+            "respiratory_rate": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "breaths/min",
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+            },
+            "sleep_hours": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "hours",
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+            },
+            "recovery_score": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+            }
+          },
+          "notes": [
+            "HRV, resting heart rate and recovery score: Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted).",
+            "Sleep hours and respiratory rate: Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+          ],
+          "data_quality": {
+            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "requested_period": {
+              "start": "2026-08-15T21:30:00.000Z",
+              "end": "2026-09-16T21:30:00.000Z"
+            },
+            "observed_period": null,
+            "sources": {
+              "recovery": {
+                "status": "missing",
+                "fetched_at": null,
+                "source_updated_at": null,
+                "cache_status": "unknown",
+                "records_fetched": 0,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              },
+              "sleep": {
+                "status": "missing",
+                "fetched_at": null,
+                "source_updated_at": null,
+                "cache_status": "unknown",
+                "records_fetched": 0,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              },
+              "cycle": {
+                "status": "missing",
+                "fetched_at": null,
+                "source_updated_at": null,
+                "cache_status": "unknown",
+                "records_fetched": 0,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              }
+            },
+            "method_version": "baselines-2",
+            "limitations": [
+              "Descriptive personal distributions, not population norms or diagnosis.",
+              "Latest observation and current local day are excluded from each baseline.",
+              "Recoveries WHOOP flags as calibrating are not used for baselines."
+            ]
+          },
+          "truncated": false,
+          "disclaimer": "Statistical observation from your data, not medical advice."
+        }
+      }
+    },
+    {
+      "name": "baseline_days above the maximum",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {
+        "baseline_days": 181
+      },
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_baselines: Too big: expected number to be <=180 at baseline_days",
+        "structuredContent": null
+      }
+    },
+    {
+      "name": "every stream rate limited",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "arguments": {},
+      "failures": [
+        {
+          "path": "^/v2/",
+          "status": 429
+        }
+      ],
+      "result": {
+        "isError": true,
+        "text_format": "text",
+        "text": "WHOOP rate limit reached (HTTP 429). Wait a minute, then retry.",
+        "structuredContent": null
+      }
+    }
+  ]
+}
