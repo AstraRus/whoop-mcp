@@ -8,7 +8,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import type { WhoopClient } from "./api/client.js";
-import { WhoopApiError, WhoopNetworkError, WhoopAuthError } from "./api/client.js";
+import { describeWhoopError } from "./api/client.js";
+import { InvalidDateExpression } from "./tools/date-utils.js";
 import { getProfile } from "./tools/get-profile.js";
 import { getBodyMeasurement } from "./tools/get-body-measurement.js";
 import { getRecoveryCollection } from "./tools/get-recovery.js";
@@ -129,15 +130,21 @@ function errorResponse(error: unknown): {
   isError: true;
   content: Array<{ type: "text"; text: string }>;
 } {
+  // WHOOP client errors are described by type and HTTP status only (never the
+  // response body, URL, tokens or health data).
+  const whoopMessage = describeWhoopError(error);
   let message: string;
 
-  if (error instanceof WhoopApiError) {
-    message = `WHOOP API returned ${error.statusCode}. Retry later or verify authorization.`;
-  } else if (error instanceof WhoopAuthError) {
-    message = "WHOOP authentication failed. Run setup --verify to reconnect.";
-  } else if (error instanceof WhoopNetworkError) {
-    message = "Network error: Unable to reach the WHOOP API. Check your internet connection.";
-  } else if (error instanceof z.ZodError || error instanceof RangeError) {
+  if (whoopMessage !== undefined) {
+    message = whoopMessage;
+  } else if (error instanceof InvalidDateExpression) {
+    // Describes only the caller's own date input: pass it through, bounded.
+    const maxLength = 600;
+    const text = error.message.replace(/\p{Cc}+/gu, " ").replace(/"([^"]{60})[^"]+"/g, '"$1…"');
+    message = text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+  } else if (error instanceof z.ZodError) {
+    message = `Invalid input or data (${describeContractIssues(error)}). Check the requested parameters and date range.`;
+  } else if (error instanceof RangeError) {
     message = "Invalid input or data. Check the requested parameters and date range.";
   } else {
     message = "An unexpected error occurred. Check configuration and retry.";
@@ -303,7 +310,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_workout_collection",
     {
       description:
-        'Get workout records for a date range. Accepts ISO 8601 or relative dates ("today", "last 7 days", "this week"). Returns strain, heart rate zones, calories, and sport type.',
+        'Get workout records for a date range. Accepts ISO 8601 or relative dates ("today", "last 7 days", "this week"). Returns strain, heart rate zones, calories (kilojoule), and sport type. score.percent_recorded is a 0-1 fraction (1 = fully recorded); distance and altitude are null for workouts without GPS.',
       inputSchema: collectionInputSchema,
       annotations: { readOnlyHint: true },
     },
@@ -347,7 +354,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_workout_by_id",
     {
       description:
-        "Get a single workout record by its ID. Returns strain, heart rate zones, calories, and sport type.",
+        "Get a single workout record by its ID. Returns strain, heart rate zones, calories (kilojoule), and sport type. score.percent_recorded is a 0-1 fraction (1 = fully recorded); distance and altitude are null for workouts without GPS.",
       inputSchema: stringIdSchema,
       annotations: { readOnlyHint: true },
     },
@@ -375,13 +382,13 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_weekly_summary",
     {
       description:
-        "Get a summarized health report for a given week — average recovery, HRV, RHR, sleep duration and quality, workout count and strain, plus recovery trend direction.",
+        "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Each record counts in exactly one week by its local day; today's in-progress strain is excluded. Values that cannot be computed yet are null (never 0) and notes say why; the recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average.",
       inputSchema: z.object({
         week_start: z
           .string()
           .optional()
           .describe(
-            'Start of the week to summarize. Accepts ISO 8601 or relative expressions like "last week", "this week". Defaults to most recent Monday.'
+            'Any day in the week to summarize; it is snapped to that local week\'s Monday. Accepts YYYY-MM-DD, an ISO date-time, or "today", "yesterday", "this week", "last week". Defaults to the current week.'
           ),
       }),
       annotations: { readOnlyHint: true },
@@ -396,12 +403,20 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "compare_periods",
     {
       description:
-        "Compare health metrics between two time periods — shows improvement or regression in recovery, sleep, and strain.",
+        'Compare average recovery, sleep and strain between two non-overlapping periods (up to 90 days each); change_pct is period B relative to period A. Dates are the user\'s local days and each day counts in exactly one period. Sleep hours are time asleep (light + deep + REM) on main sleeps, naps excluded; strain uses completed cycles only. With fewer than 3 scored days in either period (e.g. while WHOOP is still calibrating), existing averages are still returned but change_pct is null, direction is "insufficient_data" and notes explain why; warnings report data that could not be loaded or was truncated.',
       inputSchema: z.object({
-        period_a_start: isoDateString.describe("ISO 8601 start of the first period."),
-        period_a_end: isoDateString.describe("ISO 8601 end of the first period."),
-        period_b_start: isoDateString.describe("ISO 8601 start of the second period."),
-        period_b_end: isoDateString.describe("ISO 8601 end of the second period."),
+        period_a_start: isoDateString.describe(
+          "Start of the first (baseline) period: YYYY-MM-DD starts at local midnight; a date-time may include an offset."
+        ),
+        period_a_end: isoDateString.describe(
+          "End of the first period: YYYY-MM-DD includes that whole local day; a date-time is exclusive."
+        ),
+        period_b_start: isoDateString.describe(
+          "Start of the second period, compared against the first: YYYY-MM-DD starts at local midnight."
+        ),
+        period_b_end: isoDateString.describe(
+          "End of the second period: YYYY-MM-DD includes that whole local day; a date-time is exclusive."
+        ),
       }),
       annotations: { readOnlyHint: true },
     },
@@ -420,7 +435,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_trend",
     {
       description:
-        "Analyze a health metric trend over time — detects direction (improving/declining/stable), variability, and anomalies using linear regression.",
+        "Analyze one health metric over the last N local days (today included): values oldest first with their local dates, statistics, a linear-regression slope per day, and anomalies. trend.change is the raw direction (increasing/decreasing/stable); trend.direction says whether that is improving or declining for this metric (better_when: higher for recovery, HRV and sleep; lower for resting heart rate; strain has no better direction, so direction is null). Confidence reflects fit and sample size (low below 7 points, at most medium below 14). With fewer than 4 data points (e.g. while WHOOP is still calibrating) status is insufficient_data, trend fields are null, anomalies are empty and notes say why; statistics are still given for the data that exists. sleep_duration is hours asleep on main sleeps (naps excluded); strain uses completed cycles only.",
       inputSchema: z.object({
         metric: z
           .enum(["recovery", "hrv", "rhr", "sleep_duration", "sleep_performance", "strain"])
@@ -431,7 +446,9 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
           .min(7)
           .max(90)
           .optional()
-          .describe("Number of days to analyze (7–90). Default: 30."),
+          .describe(
+            "Number of local calendar days to analyze, today included (7–90). Default: 30."
+          ),
       }),
       annotations: { readOnlyHint: true },
     },
@@ -448,7 +465,10 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_today",
     {
       description:
-        "Get today's complete health snapshot — recovery score, last night's sleep, current strain, and last workout in one call.",
+        "Get today's complete health snapshot — recovery score, last night's sleep, current strain, and last workout in one call. " +
+        "Today is the current WHOOP cycle, which starts at last night's sleep onset; sleep and recovery are the ones linked to that cycle. " +
+        "Sleep hours are time asleep (time_in_bed_hours is separate). recovery.user_calibrating=true means WHOOP is still learning the user's baselines and the score is provisional. " +
+        "A section is null when its data is not available yet or could not be fetched; `notes` explains why in plain language and data_quality.sources gives each source's status.",
       annotations: { readOnlyHint: true },
     },
     async () => safeTool(() => getToday(client))
@@ -461,7 +481,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_calendar",
     {
       description:
-        "Get a day-by-day grid of recovery, sleep, and strain for a date range. Perfect for weekly/monthly overviews.",
+        "Get a day-by-day grid of recovery, sleep, and strain over the user's local days. Perfect for weekly/monthly overviews. Each row shows the WHOOP cycle covering that day: the recovery and main sleep from that morning (sleep_hours = time asleep, naps excluded) and that cycle's strain. Today's strain is still accumulating (day_strain_in_progress) and is left out of averages.strain. Calibrating recoveries are shown with recovery_calibrating: true. Missing or unscored data is null and explained in notes; averages cover only days with data (see sample_sizes). warnings report streams that failed to load or hit the record limit (truncated).",
       inputSchema: z.object({
         days: z
           .number()
@@ -474,7 +494,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
           .string()
           .optional()
           .describe(
-            "ISO 8601 start date (YYYY-MM-DD). When provided, the calendar grid starts at this date and iterates forward for `days` days, clamped to today."
+            'First day of the grid: a local date (YYYY-MM-DD), a date-time, or a relative expression (e.g. "yesterday", "last 14 days", "this week"). The grid then runs forward for `days` days, clamped to today. Without start, the grid ends today and runs backward.'
           ),
       }),
       annotations: { readOnlyHint: true },
@@ -489,7 +509,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_baselines",
     {
       description:
-        "Personal rolling distributions for HRV, RHR, sleep and recovery. Excludes latest observations from baselines; not medical advice.",
+        "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time) and recovery. Excludes latest observations from baselines; not medical advice. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data' or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
       inputSchema: baselinesInputSchema,
       annotations: { readOnlyHint: true },
     },
@@ -499,7 +519,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_sleep_debt",
     {
       description:
-        "Observed nightly sleep deficits, standing debt and local clock consistency. Deficit sum is not outstanding debt or a recovery prediction.",
+        "Observed nightly sleep deficits, standing debt and local clock consistency. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data' and the nights that exist are still listed. status 'unavailable' means the sleep data could not be read. `notes` explains either case.",
       inputSchema: sleepDebtInputSchema,
       annotations: { readOnlyHint: true },
     },

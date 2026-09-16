@@ -1,355 +1,972 @@
 /**
  * Tests for compare_periods tool.
  *
+ * Fixtures are live-shaped: a user at +02:00 whose cycles start at sleep
+ * onset the evening before the day they cover, recoveries/sleeps linked to
+ * the cycle of their morning, the current cycle with end:null, newest-first
+ * pagination with next_token null on the last page, and WHOOP's overlap
+ * semantics for start/end (plus 404 for date-only values, 400 for reversed).
+ *
  * Verifies that compare_periods:
- * - Compares recovery, sleep, strain between two time periods
- * - Correctly computes percentage changes and direction
- * - Normalizes per-day when periods have different lengths
- * - Rejects periods longer than 90 days
- * - Rejects overlapping periods
- * - Handles periods with zero records gracefully
- * - Filters unscored records
- * - Uses ±5% threshold for "unchanged"
+ * - Resolves date-only and relative inputs to full UTC timestamps in the user's offset
+ * - Returns null averages, null change_pct and "insufficient_data" for sparse periods
+ * - Attributes each record to exactly one period (cycles by cycleDay, sleeps by end day)
+ * - Uses asleep time from main sleeps and leaves the in-progress cycle out of strain
+ * - Flags calibrating recoveries, truncation and failed sources
+ * - Rejects reversed, oversized (> 90 days) and overlapping periods locally
+ * - Matches the standard and aggregate output contracts
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../../src/api/client.js";
-import { comparePeriods } from "../../src/tools/compare-periods.js";
-import type { Recovery, Sleep, Cycle, PaginatedResponse } from "../../src/api/types.js";
+import { WhoopApiError, WhoopAuthError } from "../../src/api/client.js";
+import {
+  comparePeriods,
+  MIN_SAMPLES_PER_PERIOD,
+  type ComparePeriodsParams,
+} from "../../src/tools/compare-periods.js";
+import { InvalidDateExpression } from "../../src/tools/date-utils.js";
+import {
+  aggregateOutputSchemas,
+  outputSchemas,
+  projectAggregateDates,
+} from "../../src/tools/output-contracts.js";
+import { createWhoopServer } from "../../src/server.js";
+import type { Cycle, Recovery, Sleep } from "../../src/api/types.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Live-shaped fixtures
 // ---------------------------------------------------------------------------
 
-function createMockClient(): { client: WhoopClient; getMock: ReturnType<typeof vi.fn> } {
-  const getMock = vi.fn();
-  const client = { get: getMock } as unknown as WhoopClient;
-  return { client, getMock };
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+const OFFSET = "+02:00";
+/** 14:00 local on Wednesday 2026-09-16 */
+const NOW = new Date("2026-09-16T12:00:00.000Z");
+
+interface History {
+  cycles: Cycle[];
+  sleeps: Sleep[];
+  recoveries: Recovery[];
 }
 
-function makeRecovery(score: number): Recovery {
-  return {
-    cycle_id: 1,
-    sleep_id: "s1",
-    user_id: 100,
-    created_at: "2026-05-01T06:00:00.000Z",
-    updated_at: "2026-05-01T06:00:00.000Z",
-    score_state: "SCORED",
-    score: {
-      user_calibrating: false,
-      recovery_score: score,
-      resting_heart_rate: 55,
-      hrv_rmssd_milli: 60,
-      spo2_percentage: 98,
-      skin_temp_celsius: 33.5,
-    },
-  };
+interface DaySpec {
+  /** Local day the cycle covers (the morning the sleep ends) */
+  day: string;
+  recovery?: number;
+  calibrating?: boolean;
+  strain?: number;
+  asleepHours?: number;
+  /** The record's own UTC offset (default +02:00) */
+  offset?: string;
 }
 
-function makeSleep(startIso: string, endIso: string): Sleep {
-  return {
-    id: "sleep-1",
-    cycle_id: 1,
-    user_id: 100,
-    created_at: endIso,
-    updated_at: endIso,
-    start: startIso,
-    end: endIso,
-    timezone_offset: "-05:00",
-    nap: false,
-    score_state: "SCORED",
-    score: {
-      stage_summary: {
-        total_in_bed_time_milli: 28800000,
-        total_awake_time_milli: 3600000,
-        total_no_data_time_milli: 0,
-        total_light_sleep_time_milli: 10800000,
-        total_slow_wave_sleep_time_milli: 7200000,
-        total_rem_sleep_time_milli: 7200000,
-        sleep_cycle_count: 4,
-        disturbance_count: 2,
+const iso = (ms: number): string => new Date(ms).toISOString();
+
+/**
+ * Build consecutive days: sleep onset 23:00 local the evening before `day`,
+ * wake 07:00 local, cycle from onset to the next onset. The last cycle is
+ * still open (end null) when `openLast` is set.
+ */
+function buildHistory(specs: DaySpec[], openLast = true): History {
+  const history: History = { cycles: [], sleeps: [], recoveries: [] };
+  specs.forEach((spec, index) => {
+    // 23:00 local (+02:00) the evening before = 21:00Z two hours earlier in UTC
+    const onsetMs = Date.parse(`${spec.day}T00:00:00.000Z`) - 3 * HOUR_MS;
+    const wakeMs = onsetMs + 8 * HOUR_MS;
+    const nextOnsetMs = onsetMs + DAY_MS;
+    const isLast = index === specs.length - 1;
+    const cycleId = Number(spec.day.replaceAll("-", ""));
+    const offset = spec.offset ?? OFFSET;
+    const sleepId = `sleep-${spec.day}`;
+    const asleep = spec.asleepHours ?? 7;
+    history.cycles.push({
+      id: cycleId,
+      user_id: 100,
+      created_at: iso(onsetMs),
+      updated_at: iso(isLast && openLast ? NOW.getTime() : nextOnsetMs),
+      start: iso(onsetMs),
+      end: isLast && openLast ? null : iso(nextOnsetMs),
+      timezone_offset: offset,
+      score_state: "SCORED",
+      score: {
+        strain: spec.strain ?? 10,
+        kilojoule: 8000,
+        average_heart_rate: 70,
+        max_heart_rate: 160,
       },
-      sleep_needed: {
-        baseline_milli: 28800000,
-        need_from_sleep_debt_milli: 0,
-        need_from_recent_strain_milli: 0,
-        need_from_recent_nap_milli: 0,
+    });
+    history.sleeps.push({
+      id: sleepId,
+      cycle_id: cycleId,
+      v1_id: null,
+      user_id: 100,
+      created_at: iso(wakeMs),
+      updated_at: iso(wakeMs),
+      start: iso(onsetMs),
+      end: iso(wakeMs),
+      timezone_offset: offset,
+      nap: false,
+      score_state: "SCORED",
+      score: {
+        stage_summary: {
+          total_in_bed_time_milli: 8 * HOUR_MS,
+          total_awake_time_milli: (8 - asleep) * HOUR_MS,
+          total_no_data_time_milli: 0,
+          total_light_sleep_time_milli: asleep * 0.5 * HOUR_MS,
+          total_slow_wave_sleep_time_milli: asleep * 0.25 * HOUR_MS,
+          total_rem_sleep_time_milli: asleep * 0.25 * HOUR_MS,
+          sleep_cycle_count: 4,
+          disturbance_count: 2,
+        },
+        sleep_needed: {
+          baseline_milli: 8 * HOUR_MS,
+          need_from_sleep_debt_milli: 0,
+          need_from_recent_strain_milli: 0,
+          need_from_recent_nap_milli: 0,
+        },
+        respiratory_rate: 15,
+        sleep_performance_percentage: 80,
+        sleep_consistency_percentage: spec.calibrating ? 0 : 75,
+        sleep_efficiency_percentage: 90,
       },
-      respiratory_rate: 15,
-      sleep_performance_percentage: 85,
-      sleep_consistency_percentage: 90,
-      sleep_efficiency_percentage: 88,
-    },
-  };
+    });
+    history.recoveries.push({
+      cycle_id: cycleId,
+      sleep_id: sleepId,
+      user_id: 100,
+      created_at: iso(wakeMs + 10 * 60_000),
+      updated_at: iso(wakeMs + 10 * 60_000),
+      score_state: "SCORED",
+      score: {
+        user_calibrating: spec.calibrating ?? false,
+        recovery_score: spec.recovery ?? 60,
+        resting_heart_rate: 55,
+        hrv_rmssd_milli: 60,
+        spo2_percentage: null,
+        skin_temp_celsius: null,
+      },
+    });
+  });
+  return history;
 }
 
-function makeCycle(strain: number): Cycle {
-  return {
-    id: 1,
-    user_id: 100,
-    created_at: "2026-05-01T00:00:00.000Z",
-    updated_at: "2026-05-01T23:59:59.000Z",
-    start: "2026-05-01T00:00:00.000Z",
-    end: "2026-05-01T23:59:59.000Z",
-    timezone_offset: "-05:00",
-    score_state: "SCORED",
-    score: {
-      strain,
-      kilojoule: 8500,
-      average_heart_rate: 72,
-      max_heart_rate: 175,
-    },
-  };
+/** Days from `from` to `to` inclusive */
+function dayRange(from: string, to: string): string[] {
+  const days: string[] = [];
+  for (let ms = Date.parse(`${from}T00:00:00Z`); ms <= Date.parse(`${to}T00:00:00Z`); ms += DAY_MS)
+    days.push(iso(ms).slice(0, 10));
+  return days;
 }
 
-function paginated<T>(records: T[]): PaginatedResponse<T> {
-  return { records };
+/** The calibrating user: started wearing Monday 2026-09-14 evening, two cycles, the last one open */
+function calibratingUser(): History {
+  const history = buildHistory([
+    { day: "2026-09-15", recovery: 61, calibrating: true, strain: 8.2, asleepHours: 6.5 },
+    { day: "2026-09-16", recovery: 70, calibrating: true, strain: 5.1, asleepHours: 7.5 },
+  ]);
+  // An afternoon nap on 2026-09-15 belongs to the first cycle and must not count
+  const nap = structuredClone(history.sleeps[0]!);
+  nap.id = "nap-2026-09-15";
+  nap.nap = true;
+  nap.start = "2026-09-15T12:00:00.000Z";
+  nap.end = "2026-09-15T13:30:00.000Z";
+  history.sleeps.push(nap);
+  return history;
 }
+
+// ---------------------------------------------------------------------------
+// Fake WHOOP API
+// ---------------------------------------------------------------------------
+
+const ZONED_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+interface FakeOptions {
+  /** Return an error for a request instead of data */
+  fail?: (path: string) => Error | undefined;
+  /** Append records to an endpoint's filtered results */
+  extra?: Partial<Record<"cycle" | "sleep" | "recovery", unknown[]>>;
+}
+
+interface FakeWhoop {
+  client: WhoopClient;
+  paths: string[];
+}
+
+function fakeWhoop(history: History, options: FakeOptions = {}): FakeWhoop {
+  const paths: string[] = [];
+  const sleepsById = new Map(history.sleeps.map((sleep) => [sleep.id, sleep]));
+  const overlaps = (startIso: string, endIso: string | null, params: URLSearchParams): boolean => {
+    const start = params.get("start");
+    const end = params.get("end");
+    const recordEnd = endIso === null ? NOW.getTime() : Date.parse(endIso);
+    if (end !== null && Date.parse(startIso) >= Date.parse(end)) return false;
+    return start === null || recordEnd >= Date.parse(start);
+  };
+  const client: WhoopClient = {
+    get: async <T>(path: string): Promise<T> => {
+      paths.push(path);
+      const failure = options.fail?.(path);
+      if (failure) throw failure;
+      const [base = "", queryString = ""] = path.split("?");
+      const params = new URLSearchParams(queryString);
+      for (const key of ["start", "end"]) {
+        const value = params.get(key);
+        if (value !== null && !ZONED_TIMESTAMP.test(value)) throw new WhoopApiError(404, "", null);
+      }
+      const start = params.get("start");
+      const end = params.get("end");
+      if (start !== null && end !== null && Date.parse(end) <= Date.parse(start))
+        throw new WhoopApiError(400, "", null);
+
+      let records: unknown[];
+      if (base === "/v2/cycle") {
+        records = history.cycles
+          .filter((cycle) => overlaps(cycle.start, cycle.end ?? null, params))
+          .sort((left, right) => Date.parse(right.start) - Date.parse(left.start));
+      } else if (base === "/v2/activity/sleep") {
+        records = history.sleeps
+          .filter((sleep) => overlaps(sleep.start, sleep.end, params))
+          .sort((left, right) => Date.parse(right.start) - Date.parse(left.start));
+      } else if (base === "/v2/recovery") {
+        records = history.recoveries
+          .filter((recovery) => {
+            const sleep = sleepsById.get(recovery.sleep_id);
+            return sleep !== undefined && overlaps(sleep.start, sleep.end, params);
+          })
+          .sort(
+            (left, right) =>
+              Date.parse(sleepsById.get(right.sleep_id)!.start) -
+              Date.parse(sleepsById.get(left.sleep_id)!.start)
+          );
+      } else {
+        throw new WhoopApiError(404, "", null);
+      }
+      const kind = base === "/v2/cycle" ? "cycle" : base === "/v2/recovery" ? "recovery" : "sleep";
+      if (options.extra?.[kind] && params.get("start") !== null) {
+        records = [...records, ...options.extra[kind]!];
+      }
+      const limit = Number(params.get("limit") ?? 10);
+      const offset = Number(params.get("nextToken") ?? 0);
+      const page = records.slice(offset, offset + limit);
+      const next = offset + limit < records.length ? String(offset + limit) : null;
+      return { records: page, next_token: next } as T;
+    },
+  };
+  return { client, paths };
+}
+
+const SPARSE_PERIODS: ComparePeriodsParams = {
+  // The week before the user started wearing WHOOP vs. the days since
+  period_a_start: "2026-09-07",
+  period_a_end: "2026-09-13",
+  period_b_start: "2026-09-14",
+  period_b_end: "2026-09-16",
+};
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("comparePeriods", () => {
-  let client: WhoopClient;
-  let getMock: ReturnType<typeof vi.fn>;
+describe("comparePeriods — calibrating user with sparse data", () => {
+  it("returns null averages and insufficient_data instead of '+100% improved' against an empty period", async () => {
+    const { client } = fakeWhoop(calibratingUser());
 
-  beforeEach(() => {
-    const mock = createMockClient();
-    client = mock.client;
-    getMock = mock.getMock;
+    const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    expect(result.recovery).toEqual({
+      period_a_avg: null,
+      period_b_avg: 65.5,
+      period_a_n: 0,
+      period_b_n: 2,
+      change_pct: null,
+      direction: "insufficient_data",
+      period_a_calibrating_n: 0,
+      period_b_calibrating_n: 2,
+    });
+    expect(result.sleep.period_a_avg_hours).toBeNull();
+    expect(result.sleep.period_b_n).toBe(2);
+    expect(result.sleep.change_pct).toBeNull();
+    expect(result.sleep.direction).toBe("insufficient_data");
+    // The open cycle is left out of strain, so only the completed one counts
+    expect(result.strain).toEqual({
+      period_a_avg: null,
+      period_b_avg: 8.2,
+      period_a_n: 0,
+      period_b_n: 1,
+      change_pct: null,
+      direction: "insufficient_data",
+    });
+    expect(result.truncated).toBe(false);
+    expect(result.warnings).toEqual([]);
+    expect(result.notes).toContain(
+      "Not enough data yet to compare recovery: period A has 0 scored recoveries and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up."
+    );
+    expect(
+      result.notes.some((note) => note.startsWith("Not enough data yet to compare sleep"))
+    ).toBe(true);
+    expect(
+      result.notes.some((note) => note.includes("still calibrating for 2 of 2 recoveries"))
+    ).toBe(true);
+    expect(result.notes.some((note) => note.includes("still in progress"))).toBe(true);
+    expect(JSON.stringify(result)).not.toMatch(/"improved"|"increased"/);
   });
 
-  it("correctly computes percentage changes and direction (improved)", async () => {
-    // Period A: recovery avg 60, Period B: recovery avg 80 → +33.3% improved
-    getMock
-      .mockResolvedValueOnce(paginated([makeRecovery(60), makeRecovery(60)])) // period_a recovery
-      .mockResolvedValueOnce(paginated([makeSleep("2026-05-01T22:00:00Z", "2026-05-02T06:00:00Z")])) // period_a sleep
-      .mockResolvedValueOnce(paginated([makeCycle(10)])) // period_a cycle
-      .mockResolvedValueOnce(paginated([makeRecovery(80), makeRecovery(80)])) // period_b recovery
-      .mockResolvedValueOnce(paginated([makeSleep("2026-05-08T22:00:00Z", "2026-05-09T06:00:00Z")])) // period_b sleep
-      .mockResolvedValueOnce(paginated([makeCycle(10)])); // period_b cycle
+  it("sends only full UTC timestamps to WHOOP for date-only inputs (no 404)", async () => {
+    const { client, paths } = fakeWhoop(calibratingUser());
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
+    const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    const dataPaths = paths.filter((path) => path.includes("start="));
+    expect(dataPaths).toHaveLength(6);
+    for (const path of dataPaths) {
+      const params = new URLSearchParams(path.split("?")[1]);
+      expect(params.get("start")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(params.get("end")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+    // Local days in the user's offset, reported in that offset
+    expect(result.period_a).toEqual({
+      start: "2026-09-07T00:00:00.000+02:00",
+      end: "2026-09-13T23:59:59.999+02:00",
+      days: 7,
     });
+    expect(result.period_b).toEqual({
+      start: "2026-09-14T00:00:00.000+02:00",
+      end: "2026-09-16T23:59:59.999+02:00",
+      days: 3,
+    });
+  });
 
-    expect(result.recovery.period_a_avg).toBeCloseTo(60, 1);
-    expect(result.recovery.period_b_avg).toBeCloseTo(80, 1);
-    expect(result.recovery.change_pct).toBeCloseTo(33.33, 0);
+  it("matches the standard and aggregate output contracts", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+
+    const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    expect(outputSchemas.compare_periods!.safeParse(result).success).toBe(true);
+    const aggregate = aggregateOutputSchemas.compare_periods!.safeParse(result);
+    expect(aggregate.success).toBe(true);
+    const projected = projectAggregateDates(aggregate.data as Record<string, unknown>);
+    expect(projected.period_a).toEqual({ start: "2026-09-07", end: "2026-09-13", days: 7 });
+    expect(projected.period_b).toEqual({ start: "2026-09-14", end: "2026-09-16", days: 3 });
+  });
+
+  it("matches the contracts when both periods are empty", async () => {
+    const { client } = fakeWhoop({ cycles: [], sleeps: [], recoveries: [] });
+
+    const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    expect(result.recovery.period_a_avg).toBeNull();
+    expect(result.recovery.period_b_avg).toBeNull();
+    expect(result.recovery.direction).toBe("insufficient_data");
+    expect(result.notes).toContain(
+      "Not enough data yet to compare strain: neither period has any completed cycles."
+    );
+    expect(outputSchemas.compare_periods!.safeParse(result).success).toBe(true);
+    expect(aggregateOutputSchemas.compare_periods!.safeParse(result).success).toBe(true);
+  });
+
+  it("averages time asleep on main sleeps only (not time in bed, not naps)", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+
+    const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    // Two main sleeps of 6.5h and 7.5h asleep (8h in bed each); the nap is ignored
+    expect(result.sleep.period_b_avg_hours).toBe(7);
+    expect(result.sleep.period_b_n).toBe(2);
+  });
+});
+
+describe("comparePeriods — attribution to exactly one period", () => {
+  const days = dayRange("2026-09-01", "2026-09-16");
+  const history = buildHistory(
+    days.map((day, index) => ({
+      day,
+      recovery: 40 + index * 2,
+      strain: 5 + index,
+      asleepHours: 5 + index * 0.1,
+    }))
+  );
+  const valueFor = (day: string): number => days.indexOf(day);
+
+  it("splits adjacent date-only periods by local day with no record counted twice", async () => {
+    const { client } = fakeWhoop(history);
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-05",
+        period_a_end: "2026-09-08",
+        period_b_start: "2026-09-09",
+        period_b_end: "2026-09-12",
+      },
+      NOW
+    );
+
+    const aDays = dayRange("2026-09-05", "2026-09-08").map(valueFor);
+    const bDays = dayRange("2026-09-09", "2026-09-12").map(valueFor);
+    const avg = (values: number[]): number =>
+      values.reduce((sum, value) => sum + value, 0) / values.length;
+    expect(result.strain.period_a_n).toBe(4);
+    expect(result.strain.period_b_n).toBe(4);
+    expect(result.strain.period_a_avg).toBeCloseTo(5 + avg(aDays), 5);
+    expect(result.strain.period_b_avg).toBeCloseTo(5 + avg(bDays), 5);
+    expect(result.recovery.period_a_avg).toBeCloseTo(40 + 2 * avg(aDays), 5);
+    expect(result.recovery.period_b_avg).toBeCloseTo(40 + 2 * avg(bDays), 5);
+    expect(result.sleep.period_a_avg_hours).toBeCloseTo(5 + 0.1 * avg(aDays), 2);
+    expect(result.sleep.period_b_n).toBe(4);
+    expect(result.strain.direction).toBe("increased");
     expect(result.recovery.direction).toBe("improved");
   });
 
-  it("correctly identifies declined direction", async () => {
-    // Period A: recovery 80, Period B: recovery 60 → -25% declined
-    getMock
-      .mockResolvedValueOnce(paginated([makeRecovery(80)])) // period_a recovery
-      .mockResolvedValueOnce(paginated([])) // period_a sleep
-      .mockResolvedValueOnce(paginated([])) // period_a cycle
-      .mockResolvedValueOnce(paginated([makeRecovery(60)])) // period_b recovery
-      .mockResolvedValueOnce(paginated([])) // period_b sleep
-      .mockResolvedValueOnce(paginated([])); // period_b cycle
+  it("counts the cycle that crosses a shared UTC-midnight boundary in only one period", async () => {
+    const { client } = fakeWhoop(history);
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
+    // Finding 30 live repro: A ends exactly where B starts
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-07T00:00:00Z",
+        period_a_end: "2026-09-14T00:00:00Z",
+        period_b_start: "2026-09-14T00:00:00Z",
+        period_b_end: "2026-09-16T12:00:00Z",
+      },
+      NOW
+    );
+
+    // Days whose local midnight falls in A: 09-08..09-14; in B: 09-15, 09-16 (open)
+    expect(result.strain.period_a_n).toBe(7);
+    expect(result.strain.period_b_n).toBe(1);
+    expect(result.recovery.period_a_n).toBe(7);
+    expect(result.recovery.period_b_n).toBe(2);
+    expect(result.sleep.period_a_n + result.sleep.period_b_n).toBe(9);
+    expect(result.strain.period_b_avg).toBe(5 + valueFor("2026-09-15"));
+  });
+
+  it("leaves the in-progress cycle out of strain but keeps today's recovery and sleep", async () => {
+    const { client } = fakeWhoop(history);
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-10",
+        period_a_end: "2026-09-12",
+        period_b_start: "2026-09-13",
+        period_b_end: "2026-09-16",
+      },
+      NOW
+    );
+
+    expect(result.strain.period_b_n).toBe(3);
+    expect(result.recovery.period_b_n).toBe(4);
+    expect(result.sleep.period_b_n).toBe(4);
+    expect(result.notes).toContain(
+      "The current cycle in period B is still in progress, so its strain is not included yet."
+    );
+    expect(result.strain.direction).not.toBe("insufficient_data");
+  });
+
+  it("attributes recoveries through their sleep when the cycle source fails", async () => {
+    const sixDays = buildHistory(
+      dayRange("2026-09-08", "2026-09-13").map((day) => ({ day, recovery: 50 })),
+      false
+    );
+    const { client } = fakeWhoop(sixDays, {
+      fail: (path) =>
+        path.startsWith("/v2/cycle") && path.includes("start=")
+          ? new WhoopApiError(502, "", null)
+          : undefined,
     });
 
-    expect(result.recovery.change_pct).toBeCloseTo(-25, 0);
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-08",
+        period_a_end: "2026-09-10",
+        period_b_start: "2026-09-11",
+        period_b_end: "2026-09-13",
+      },
+      NOW
+    );
+
+    expect(result.recovery.period_a_n).toBe(3);
+    expect(result.recovery.period_b_n).toBe(3);
+    expect(result.strain.direction).toBe("insufficient_data");
+    expect(result.warnings).toHaveLength(2);
+  });
+
+  it("keeps each record's own local day when its offset differs from the user's current one", async () => {
+    // Summer records at +02:00, compared after the user's offset changed to +01:00
+    const summer = buildHistory(
+      dayRange("2026-07-01", "2026-07-08").map((day, index) => ({ day, strain: 1 + index })),
+      false
+    );
+    const winter = buildHistory([{ day: "2026-09-15", offset: "+01:00" }]);
+    const { client } = fakeWhoop({
+      cycles: [...summer.cycles, ...winter.cycles],
+      sleeps: [...summer.sleeps, ...winter.sleeps],
+      recoveries: [...summer.recoveries, ...winter.recoveries],
+    });
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-07-01",
+        period_a_end: "2026-07-03",
+        period_b_start: "2026-07-04",
+        period_b_end: "2026-07-06",
+      },
+      NOW
+    );
+
+    expect(result.period_a.start).toBe("2026-07-01T00:00:00.000+01:00");
+    // 07-01..07-03 have strain 1, 2, 3; 07-04..07-06 have 4, 5, 6
+    expect(result.strain).toMatchObject({ period_a_avg: 2, period_b_avg: 5 });
+    expect(result.strain.period_a_n).toBe(3);
+    expect(result.recovery.period_a_n).toBe(3);
+    expect(result.sleep.period_b_n).toBe(3);
+  });
+});
+
+describe("comparePeriods — comparison math", () => {
+  function twoPeriods(
+    a: Partial<DaySpec>,
+    b: Partial<DaySpec>,
+    count = MIN_SAMPLES_PER_PERIOD
+  ): History {
+    const aDays = dayRange("2026-09-01", "2026-09-10").slice(0, count);
+    const bDays = dayRange("2026-09-11", "2026-09-20").slice(0, count);
+    return buildHistory(
+      [...aDays.map((day) => ({ ...a, day })), ...bDays.map((day) => ({ ...b, day }))],
+      false
+    );
+  }
+  const periods: ComparePeriodsParams = {
+    period_a_start: "2026-09-01",
+    period_a_end: "2026-09-10",
+    period_b_start: "2026-09-11",
+    period_b_end: "2026-09-20",
+  };
+
+  it("computes percentage change and 'improved' with enough samples", async () => {
+    const { client } = fakeWhoop(twoPeriods({ recovery: 60 }, { recovery: 80 }));
+
+    const result = await comparePeriods(client, periods, NOW);
+
+    expect(result.recovery.period_a_avg).toBe(60);
+    expect(result.recovery.period_b_avg).toBe(80);
+    expect(result.recovery.change_pct).toBe(33.3);
+    expect(result.recovery.direction).toBe("improved");
+    expect(result.notes).toEqual([]);
+  });
+
+  it("identifies 'declined'", async () => {
+    const { client } = fakeWhoop(twoPeriods({ recovery: 80 }, { recovery: 60 }));
+
+    const result = await comparePeriods(client, periods, NOW);
+
+    expect(result.recovery.change_pct).toBe(-25);
     expect(result.recovery.direction).toBe("declined");
   });
 
-  it("uses ±5% threshold for unchanged", async () => {
-    // Period A: recovery 80, Period B: recovery 82 → +2.5% → unchanged
-    getMock
-      .mockResolvedValueOnce(paginated([makeRecovery(80)])) // period_a recovery
-      .mockResolvedValueOnce(paginated([])) // period_a sleep
-      .mockResolvedValueOnce(paginated([])) // period_a cycle
-      .mockResolvedValueOnce(paginated([makeRecovery(82)])) // period_b recovery
-      .mockResolvedValueOnce(paginated([])) // period_b sleep
-      .mockResolvedValueOnce(paginated([])); // period_b cycle
+  it("uses a ±5% threshold for 'unchanged'", async () => {
+    const { client } = fakeWhoop(twoPeriods({ recovery: 80 }, { recovery: 82 }));
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
-    });
+    const result = await comparePeriods(client, periods, NOW);
 
+    expect(result.recovery.change_pct).toBe(2.5);
     expect(result.recovery.direction).toBe("unchanged");
   });
 
-  it("rejects periods longer than 90 days", async () => {
-    await expect(
-      comparePeriods(client, {
-        period_a_start: "2026-01-01T00:00:00.000Z",
-        period_a_end: "2026-05-01T00:00:00.000Z", // 120 days
-        period_b_start: "2026-05-02T00:00:00.000Z",
-        period_b_end: "2026-05-08T00:00:00.000Z",
-      })
-    ).rejects.toThrow("90 days");
+  it("computes strain direction as increased/decreased", async () => {
+    const up = await comparePeriods(
+      fakeWhoop(twoPeriods({ strain: 10 }, { strain: 15 })).client,
+      periods,
+      NOW
+    );
+    const down = await comparePeriods(
+      fakeWhoop(twoPeriods({ strain: 15 }, { strain: 10 })).client,
+      periods,
+      NOW
+    );
+
+    expect(up.strain).toMatchObject({ period_a_avg: 10, period_b_avg: 15, change_pct: 50 });
+    expect(up.strain.direction).toBe("increased");
+    expect(down.strain.direction).toBe("decreased");
   });
 
-  it("rejects overlapping periods", async () => {
-    await expect(
-      comparePeriods(client, {
-        period_a_start: "2026-05-01T00:00:00.000Z",
-        period_a_end: "2026-05-10T23:59:59.999Z",
-        period_b_start: "2026-05-08T00:00:00.000Z", // overlaps with period_a
-        period_b_end: "2026-05-14T23:59:59.999Z",
-      })
-    ).rejects.toThrow("overlap");
-  });
+  it("compares sleep hours with different period lengths", async () => {
+    const history = buildHistory(
+      [
+        ...dayRange("2026-09-01", "2026-09-07").map((day) => ({ day, asleepHours: 8 })),
+        ...dayRange("2026-09-08", "2026-09-21").map((day) => ({ day, asleepHours: 7 })),
+      ],
+      false
+    );
+    const { client } = fakeWhoop(history);
 
-  it("handles periods with zero records gracefully", async () => {
-    getMock.mockResolvedValue(paginated([]));
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-01",
+        period_a_end: "2026-09-07",
+        period_b_start: "2026-09-08",
+        period_b_end: "2026-09-21",
+      },
+      NOW
+    );
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
+    expect(result.sleep).toEqual({
+      period_a_avg_hours: 8,
+      period_b_avg_hours: 7,
+      period_a_n: 7,
+      period_b_n: 14,
+      change_pct: -12.5,
+      direction: "declined",
     });
-
-    expect(result.recovery.period_a_avg).toBe(0);
-    expect(result.recovery.period_b_avg).toBe(0);
-    expect(result.recovery.change_pct).toBe(0);
-    expect(result.recovery.direction).toBe("unchanged");
   });
 
-  it("normalizes per-day when periods have different lengths", async () => {
-    // Period A: 7 days, 2 sleeps of 8h each → avg 8h/night
-    // Period B: 14 days, 4 sleeps of 7h each → avg 7h/night
-    const sleepA = [
-      makeSleep("2026-05-01T22:00:00Z", "2026-05-02T06:00:00Z"), // 8h
-      makeSleep("2026-05-02T22:00:00Z", "2026-05-03T06:00:00Z"), // 8h
-    ];
-    const sleepB = [
-      makeSleep("2026-05-08T22:00:00Z", "2026-05-09T05:00:00Z"), // 7h
-      makeSleep("2026-05-09T22:00:00Z", "2026-05-10T05:00:00Z"), // 7h
-      makeSleep("2026-05-10T22:00:00Z", "2026-05-11T05:00:00Z"), // 7h
-      makeSleep("2026-05-11T22:00:00Z", "2026-05-12T05:00:00Z"), // 7h
-    ];
+  it("keeps averages but reports no change below the minimum sample size", async () => {
+    const { client } = fakeWhoop(twoPeriods({ recovery: 50 }, { recovery: 90 }, 2));
 
-    getMock
-      .mockResolvedValueOnce(paginated([])) // period_a recovery
-      .mockResolvedValueOnce(paginated(sleepA)) // period_a sleep
-      .mockResolvedValueOnce(paginated([])) // period_a cycle
-      .mockResolvedValueOnce(paginated([])) // period_b recovery
-      .mockResolvedValueOnce(paginated(sleepB)) // period_b sleep
-      .mockResolvedValueOnce(paginated([])); // period_b cycle
+    const result = await comparePeriods(client, periods, NOW);
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-21T23:59:59.999Z",
+    expect(result.recovery).toMatchObject({
+      period_a_avg: 50,
+      period_b_avg: 90,
+      period_a_n: 2,
+      period_b_n: 2,
+      change_pct: null,
+      direction: "insufficient_data",
     });
-
-    // Avg sleep: period_a=8h, period_b=7h → -12.5% declined
-    expect(result.sleep.period_a_avg_hours).toBeCloseTo(8, 1);
-    expect(result.sleep.period_b_avg_hours).toBeCloseTo(7, 1);
-    expect(result.sleep.direction).toBe("declined");
+    expect(result.notes).toContain(
+      "Not enough data yet to compare recovery: period A has 2 scored recoveries and period B has 2; at least 3 per period are needed."
+    );
   });
 
-  it("filters unscored records", async () => {
-    const recoveries = [
-      makeRecovery(80),
-      { ...makeRecovery(50), score_state: "PENDING_SCORE" as const, score: undefined },
-    ];
+  it("ignores unscored and pending recoveries", async () => {
+    const history = twoPeriods({ recovery: 80 }, { recovery: 80 }, 4);
+    history.recoveries[0] = {
+      ...history.recoveries[0]!,
+      score_state: "PENDING_SCORE",
+      score: null,
+    };
+    const { client } = fakeWhoop(history);
 
-    getMock
-      .mockResolvedValueOnce(paginated(recoveries)) // period_a recovery
-      .mockResolvedValueOnce(paginated([])) // period_a sleep
-      .mockResolvedValueOnce(paginated([])) // period_a cycle
-      .mockResolvedValueOnce(paginated([makeRecovery(80)])) // period_b recovery
-      .mockResolvedValueOnce(paginated([])) // period_b sleep
-      .mockResolvedValueOnce(paginated([])); // period_b cycle
+    const result = await comparePeriods(client, periods, NOW);
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
-    });
-
-    // Only the scored recovery (80) should count
+    expect(result.recovery.period_a_n).toBe(3);
+    expect(result.recovery.period_b_n).toBe(4);
     expect(result.recovery.period_a_avg).toBe(80);
   });
 
-  it("includes period metadata (start, end, days) in output", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("includes calibrating recoveries and counts them", async () => {
+    const history = twoPeriods({ recovery: 60 }, { recovery: 60, calibrating: true });
+    const { client } = fakeWhoop(history);
 
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
-    });
+    const result = await comparePeriods(client, periods, NOW);
 
-    expect(result.period_a.start).toBe("2026-05-01T00:00:00.000Z");
-    expect(result.period_a.end).toBe("2026-05-07T23:59:59.999Z");
-    expect(result.period_a.days).toBeCloseTo(7, 0);
-    expect(result.period_b.start).toBe("2026-05-08T00:00:00.000Z");
-    expect(result.period_b.end).toBe("2026-05-14T23:59:59.999Z");
-    expect(result.period_b.days).toBeCloseTo(7, 0);
+    expect(result.recovery.period_b_n).toBe(3);
+    expect(result.recovery.period_b_calibrating_n).toBe(3);
+    expect(result.recovery.direction).toBe("unchanged");
+    expect(result.notes).toContain(
+      "WHOOP was still calibrating for 3 of 3 recoveries in period B; they are included, but calibrating recovery scores are less reliable."
+    );
+  });
+});
+
+describe("comparePeriods — date validation", () => {
+  const empty = (): WhoopClient => fakeWhoop({ cycles: [], sleeps: [], recoveries: [] }).client;
+
+  it("rejects a reversed period locally without calling WHOOP for data", async () => {
+    const { client, paths } = fakeWhoop(calibratingUser());
+
+    const promise = comparePeriods(
+      client,
+      { ...SPARSE_PERIODS, period_b_start: "2026-09-16", period_b_end: "2026-09-14" },
+      NOW
+    );
+
+    await expect(promise).rejects.toBeInstanceOf(InvalidDateExpression);
+    await expect(promise).rejects.toThrow(/end of period B must be after its start/);
+    expect(paths.filter((path) => path.includes("start="))).toHaveLength(0);
   });
 
-  it("computes strain direction as increased/decreased/unchanged", async () => {
-    getMock
-      .mockResolvedValueOnce(paginated([])) // period_a recovery
-      .mockResolvedValueOnce(paginated([])) // period_a sleep
-      .mockResolvedValueOnce(paginated([makeCycle(10)])) // period_a cycle
-      .mockResolvedValueOnce(paginated([])) // period_b recovery
-      .mockResolvedValueOnce(paginated([])) // period_b sleep
-      .mockResolvedValueOnce(paginated([makeCycle(15)])); // period_b cycle
-
-    const result = await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
-    });
-
-    expect(result.strain.period_a_avg).toBe(10);
-    expect(result.strain.period_b_avg).toBe(15);
-    expect(result.strain.change_pct).toBeCloseTo(50, 0);
-    expect(result.strain.direction).toBe("increased");
+  it("rejects a date-time period whose end equals its start", async () => {
+    await expect(
+      comparePeriods(
+        empty(),
+        {
+          ...SPARSE_PERIODS,
+          period_a_start: "2026-09-07T10:00:00Z",
+          period_a_end: "2026-09-07T10:00:00Z",
+        },
+        NOW
+      )
+    ).rejects.toThrow(/period_a_end "2026-09-07T10:00:00Z"/);
   });
 
-  it("makes 6 sequential API calls (3 per period)", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("accepts a single local day given as the same start and end date", async () => {
+    const result = await comparePeriods(
+      empty(),
+      { ...SPARSE_PERIODS, period_b_start: "2026-09-15", period_b_end: "2026-09-15" },
+      NOW
+    );
 
-    await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
-    });
-
-    expect(getMock).toHaveBeenCalledTimes(6);
+    expect(result.period_b.days).toBe(1);
   });
 
-  it("accepts enhanced date expressions", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    getMock.mockResolvedValue(paginated([]));
+  it("allows 90 whole days of date-only input and rejects 91", async () => {
+    const ninety = await comparePeriods(
+      empty(),
+      { ...SPARSE_PERIODS, period_a_start: "2026-06-01", period_a_end: "2026-08-29" },
+      NOW
+    );
+    expect(ninety.period_a.days).toBe(90);
 
-    await comparePeriods(client, {
-      period_a_start: "2026-05-01T00:00:00.000Z",
-      period_a_end: "2026-05-07T23:59:59.999Z",
-      period_b_start: "2026-05-08T00:00:00.000Z",
-      period_b_end: "2026-05-14T23:59:59.999Z",
+    await expect(
+      comparePeriods(
+        empty(),
+        { ...SPARSE_PERIODS, period_a_start: "2026-06-01", period_a_end: "2026-08-30" },
+        NOW
+      )
+    ).rejects.toThrow("Period A spans 91 days; each period can cover at most 90 days.");
+  });
+
+  it("rejects periods longer than 90 days given as date-times", async () => {
+    await expect(
+      comparePeriods(
+        empty(),
+        {
+          period_a_start: "2026-01-01T00:00:00.000Z",
+          period_a_end: "2026-05-01T00:00:00.000Z",
+          period_b_start: "2026-05-02T00:00:00.000Z",
+          period_b_end: "2026-05-08T00:00:00.000Z",
+        },
+        NOW
+      )
+    ).rejects.toThrow("90 days");
+  });
+
+  it("rejects overlapping periods, including date-only periods that share a day", async () => {
+    await expect(
+      comparePeriods(
+        empty(),
+        {
+          period_a_start: "2026-05-01T00:00:00.000Z",
+          period_a_end: "2026-05-10T23:59:59.999Z",
+          period_b_start: "2026-05-08T00:00:00.000Z",
+          period_b_end: "2026-05-14T23:59:59.999Z",
+        },
+        NOW
+      )
+    ).rejects.toThrow("overlap");
+    await expect(
+      comparePeriods(empty(), { ...SPARSE_PERIODS, period_a_end: "2026-09-14" }, NOW)
+    ).rejects.toBeInstanceOf(InvalidDateExpression);
+  });
+
+  it("rejects impossible calendar dates", async () => {
+    await expect(
+      comparePeriods(empty(), { ...SPARSE_PERIODS, period_a_start: "2026-02-30" }, NOW)
+    ).rejects.toBeInstanceOf(InvalidDateExpression);
+  });
+
+  it("resolves relative expressions in the user's offset", async () => {
+    const result = await comparePeriods(
+      fakeWhoop(calibratingUser()).client,
+      {
+        period_a_start: "last week",
+        period_a_end: "last week",
+        period_b_start: "this week",
+        period_b_end: "today",
+      },
+      NOW
+    );
+
+    expect(result.period_a).toEqual({
+      start: "2026-09-07T00:00:00.000+02:00",
+      end: "2026-09-13T23:59:59.999+02:00",
+      days: 7,
+    });
+    expect(result.period_b.start).toBe("2026-09-14T00:00:00.000+02:00");
+    expect(result.period_b.end).toBe("2026-09-16T23:59:59.999+02:00");
+  });
+
+  it("uses the user's offset from the latest cycle and falls back to UTC days", async () => {
+    const offline = fakeWhoop(
+      { cycles: [], sleeps: [], recoveries: [] },
+      { fail: (path) => (path.endsWith("limit=1") ? new WhoopApiError(500, "", null) : undefined) }
+    ).client;
+
+    const result = await comparePeriods(offline, SPARSE_PERIODS, NOW);
+
+    expect(result.period_a.start).toBe("2026-09-07T00:00:00.000Z");
+    expect(result.period_a.end).toBe("2026-09-13T23:59:59.999Z");
+  });
+});
+
+describe("comparePeriods — fetching", () => {
+  it("fetches recovery, sleep and cycle for each period after one offset lookup", async () => {
+    const { client, paths } = fakeWhoop(calibratingUser());
+
+    await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    expect(paths.map((path) => path.split("?")[0])).toEqual([
+      "/v2/cycle",
+      "/v2/recovery",
+      "/v2/activity/sleep",
+      "/v2/cycle",
+      "/v2/recovery",
+      "/v2/activity/sleep",
+      "/v2/cycle",
+    ]);
+  });
+
+  it("surfaces truncation when a source hits the record cap", async () => {
+    let served = 0;
+    const endless: WhoopClient = {
+      get: async <T>(path: string): Promise<T> => {
+        if (!path.startsWith("/v2/recovery") || !path.includes("start=")) {
+          return { records: [], next_token: null } as T;
+        }
+        const records = Array.from({ length: 25 }, () => {
+          served += 1;
+          return {
+            cycle_id: served,
+            sleep_id: `sleep-${served}`,
+            user_id: 100,
+            created_at: "2026-09-10T05:10:00.000Z",
+            updated_at: "2026-09-10T05:10:00.000Z",
+            score_state: "SCORED",
+            score: {
+              user_calibrating: false,
+              recovery_score: 50,
+              resting_heart_rate: 55,
+              hrv_rmssd_milli: 60,
+            },
+          };
+        });
+        return { records, next_token: "more" } as T;
+      },
+    };
+
+    const result = await comparePeriods(endless, SPARSE_PERIODS, NOW);
+
+    expect(result.truncated).toBe(true);
+    expect(result.warnings).toContain(
+      "Recovery data for period A reached the 500-record limit, so the oldest records of that period are not included."
+    );
+    expect(outputSchemas.compare_periods!.safeParse(result).success).toBe(true);
+  });
+
+  it("degrades to a warning when one source fails", async () => {
+    const history = buildHistory(dayRange("2026-09-01", "2026-09-16").map((day) => ({ day })));
+    let sleepCalls = 0;
+    const { client } = fakeWhoop(history, {
+      fail: (path) => {
+        if (!path.startsWith("/v2/activity/sleep")) return undefined;
+        sleepCalls += 1;
+        return sleepCalls === 2 ? new WhoopApiError(429, "Too Many Requests", null) : undefined;
+      },
     });
 
-    // Just verify it doesn't throw — date expressions are validated in date-utils
-    expect(getMock).toHaveBeenCalled();
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-01",
+        period_a_end: "2026-09-07",
+        period_b_start: "2026-09-08",
+        period_b_end: "2026-09-14",
+      },
+      NOW
+    );
 
-    vi.useRealTimers();
+    expect(result.warnings).toEqual([
+      "Sleep data for period B could not be loaded (WHOOP API returned 429), so that period has no sleep samples.",
+    ]);
+    expect(result.sleep.period_b_avg_hours).toBeNull();
+    expect(result.sleep.direction).toBe("insufficient_data");
+    expect(result.recovery.direction).toBe("unchanged");
+    expect(result.strain.period_b_n).toBe(7);
+  });
+
+  it("rethrows the WHOOP error when every source fails", async () => {
+    const { client } = fakeWhoop(calibratingUser(), {
+      fail: (path) => (path.includes("start=") ? new WhoopApiError(503, "", null) : undefined),
+    });
+
+    await expect(comparePeriods(client, SPARSE_PERIODS, NOW)).rejects.toBeInstanceOf(WhoopApiError);
+  });
+
+  it("rethrows authentication errors immediately", async () => {
+    const { client, paths } = fakeWhoop(calibratingUser(), {
+      fail: (path) => (path.includes("start=") ? new WhoopAuthError(new Error("x")) : undefined),
+    });
+
+    await expect(comparePeriods(client, SPARSE_PERIODS, NOW)).rejects.toBeInstanceOf(
+      WhoopAuthError
+    );
+    expect(paths.filter((path) => path.includes("start="))).toHaveLength(1);
+  });
+
+  it("skips records that do not match the WHOOP format with a warning", async () => {
+    const { client } = fakeWhoop(calibratingUser(), {
+      extra: { cycle: [{ id: "not-a-cycle" }] },
+    });
+
+    const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
+
+    expect(result.warnings).toContain(
+      "1 record of cycle (strain) data for period A did not match the expected WHOOP format and was skipped."
+    );
+    expect(result.strain.period_b_avg).toBe(8.2);
+  });
+});
+
+describe("compare_periods over MCP", () => {
+  async function callTool(
+    privacyMode: "standard" | "aggregate",
+    args: ComparePeriodsParams
+  ): Promise<Awaited<ReturnType<Client["callTool"]>>> {
+    const { server } = createWhoopServer(fakeWhoop(calibratingUser()).client, { privacyMode });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "compare-test", version: "1.0.0" });
+    await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      return await client.callTool({ name: "compare_periods", arguments: { ...args } });
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  }
+
+  it.each(["standard", "aggregate"] as const)(
+    "returns a contract-valid result for date-only input in %s mode",
+    async (privacyMode) => {
+      const result = await callTool(privacyMode, SPARSE_PERIODS);
+
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as {
+        recovery: { direction: string; period_a_avg: number | null };
+        notes: string[];
+      };
+      expect(structured.recovery.direction).toBe("insufficient_data");
+      expect(structured.recovery.period_a_avg).toBeNull();
+      expect(structured.notes.length).toBeGreaterThan(0);
+    }
+  );
+
+  it("returns the local validation message for a reversed period", async () => {
+    const result = await callTool("standard", {
+      ...SPARSE_PERIODS,
+      period_a_start: "2026-09-13",
+      period_a_end: "2026-09-07",
+    });
+
+    expect(result.isError).toBe(true);
+    const content = result.content as Array<{ type: string; text: string }>;
+    expect(content[0]!.text).toMatch(/end of period A must be after its start/);
   });
 });

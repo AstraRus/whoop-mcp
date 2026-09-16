@@ -280,3 +280,46 @@ describe("local calendar days for collection queries", () => {
     expect(await resolveUserUtcOffset(empty)).toBe("Z");
   });
 });
+
+describe("integration follow-ups", () => {
+  it("rejects a reversed collection range locally with a clear message", async () => {
+    const { buildCollectionQuery } = await import("../src/tools/collection-utils.js");
+    expect(() => buildCollectionQuery({ start: "2026-09-16", end: "2026-09-13" })).toThrow(
+      /before start/
+    );
+    // A single day given as both start and end is fine (whole local day)
+    expect(() => buildCollectionQuery({ start: "2026-09-16", end: "2026-09-16" })).not.toThrow();
+  });
+
+  it("get_sleep_debt and get_baselines surface the real upstream failure", async () => {
+    const { WhoopApiError } = await import("../src/api/client.js");
+    const { client, close } = await connect({
+      get: <T>(): Promise<T> => Promise.reject(new WhoopApiError(429, "Too Many Requests", "")),
+    });
+    try {
+      for (const name of ["get_sleep_debt", "get_baselines"]) {
+        const result = await client.callTool({ name, arguments: {} });
+        expect(result.isError).toBe(true);
+        expect(textOf(result)).not.toMatch(/internet connection/i);
+        expect(textOf(result)).toMatch(/rate|429|too many/i);
+      }
+    } finally {
+      await close();
+    }
+  });
+
+  it("saveTokens writes atomically and leaves no temp file", async () => {
+    const { mkdtemp, readdir, readFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { saveTokens } = await import("../src/auth/token-store.js");
+    const dir = await mkdtemp(join(tmpdir(), "whoop-mcp-atomic-"));
+    const tokens = { access_token: "a", refresh_token: "r", expires_at: 1, token_type: "Bearer" };
+    await saveTokens(tokens, dir);
+    await saveTokens({ ...tokens, refresh_token: "r2" }, dir);
+    expect(await readdir(dir)).toEqual(["tokens.json"]);
+    expect(JSON.parse(await readFile(join(dir, "tokens.json"), "utf-8"))).toMatchObject({
+      refresh_token: "r2",
+    });
+  });
+});

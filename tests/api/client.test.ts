@@ -4,6 +4,7 @@ import {
   WhoopNetworkError,
   WhoopAuthError,
   createWhoopClient,
+  describeWhoopError,
 } from "../../src/api/client.js";
 import type { WhoopClient } from "../../src/api/client.js";
 
@@ -38,6 +39,90 @@ describe("WhoopApiError", () => {
     const error = new WhoopApiError(401, "Unauthorized", null);
 
     expect(error.message).toBe("WHOOP API error: 401 Unauthorized");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// describeWhoopError: user-facing messages
+// ---------------------------------------------------------------------------
+
+describe("describeWhoopError", () => {
+  const SECRET_BODY = { error_description: "token abc.def.ghi for jane@example.com", hrv: 61.2 };
+
+  it.each([
+    [400, "Bad Request", ["HTTP 400", "rejected the request parameters", "ids and dates"]],
+    [401, "Unauthorized", ["HTTP 401", "authorization", "setup --verify"]],
+    [403, "Forbidden", ["HTTP 403", "denied access", "setup --verify"]],
+    [404, "Not Found", ["HTTP 404", "no matching record", "ids and dates"]],
+    [422, "Unprocessable Entity", ["HTTP 422", "rejected the request", "ids and dates"]],
+    [429, "Too Many Requests", ["HTTP 429", "rate limit", "retry"]],
+    [500, "Internal Server Error", ["HTTP 500", "unavailable", "Retry later"]],
+    [503, "Service Unavailable", ["HTTP 503", "unavailable", "Retry later"]],
+  ])("describes WHOOP %i responses", (status, statusText, phrases) => {
+    const message = describeWhoopError(new WhoopApiError(status, statusText, SECRET_BODY));
+
+    for (const phrase of phrases) {
+      expect(message).toContain(phrase);
+    }
+  });
+
+  it("never includes the response body or status text", () => {
+    for (const status of [400, 401, 403, 404, 429, 500]) {
+      const message = describeWhoopError(
+        new WhoopApiError(status, "Custom status text", JSON.stringify(SECRET_BODY))
+      );
+      expect(message).not.toContain("abc.def.ghi");
+      expect(message).not.toContain("jane@example.com");
+      expect(message).not.toContain("61.2");
+      expect(message).not.toContain("Custom status text");
+    }
+  });
+
+  it("does not tell the user to retry 400 or 404 responses", () => {
+    expect(describeWhoopError(new WhoopApiError(400, "Bad Request", null))).not.toMatch(/retry/i);
+    expect(describeWhoopError(new WhoopApiError(404, "Not Found", null))).not.toMatch(/retry/i);
+  });
+
+  it("describes a failed token refresh as an authentication problem", () => {
+    const message = describeWhoopError(new WhoopAuthError(new Error("invalid_grant secret")));
+
+    expect(message).toContain("authentication failed");
+    expect(message).toContain("setup --verify");
+    expect(message).not.toContain("secret");
+  });
+
+  it("describes a token refresh that could not reach WHOOP as a network problem", () => {
+    const message = describeWhoopError(
+      new WhoopAuthError(new WhoopNetworkError(new TypeError("fetch failed")))
+    );
+
+    expect(message).toContain("Network error");
+    expect(message).not.toContain("setup --verify");
+  });
+
+  it("describes network failures and timeouts", () => {
+    expect(describeWhoopError(new WhoopNetworkError(new TypeError("fetch failed")))).toBe(
+      "Network error: Unable to reach the WHOOP API. Check your internet connection."
+    );
+    const timeout = new Error("The operation was aborted due to timeout");
+    timeout.name = "TimeoutError";
+    expect(describeWhoopError(new WhoopNetworkError(timeout))).toContain("did not respond in time");
+  });
+
+  it("describes a network error wrapping an API or auth error by that error", () => {
+    expect(
+      describeWhoopError(new WhoopNetworkError(new WhoopApiError(429, "Too Many Requests", null)))
+    ).toContain("rate limit");
+    expect(describeWhoopError(new WhoopNetworkError(new WhoopAuthError(new Error("x"))))).toContain(
+      "authentication failed"
+    );
+  });
+
+  it("returns undefined for errors that are not WHOOP client errors", () => {
+    expect(describeWhoopError(new Error("boom"))).toBeUndefined();
+    expect(describeWhoopError(new RangeError("Invalid time value"))).toBeUndefined();
+    expect(describeWhoopError("a string")).toBeUndefined();
+    expect(describeWhoopError(undefined)).toBeUndefined();
   });
 });
 
@@ -721,6 +806,283 @@ describe("createWhoopClient", () => {
 
       expect(onTokenRefresh).toHaveBeenCalledTimes(1);
       expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Concurrent 401s: single-flight token refresh (WHOOP rotates refresh tokens)
+  // -------------------------------------------------------------------------
+
+  describe("get (concurrent 401 token refresh)", () => {
+    const NEW_TOKEN = "rotated_access_token";
+    /** The four endpoints get_today requests in parallel */
+    const TODAY_PATHS = [
+      "/v2/recovery?limit=25",
+      "/v2/activity/sleep?limit=25",
+      "/v2/cycle?limit=25",
+      "/v2/activity/workout?limit=25",
+    ];
+
+    function unauthorized(): Response {
+      return {
+        ok: false,
+        status: 401,
+        statusText: "Unauthorized",
+        headers: { get: () => null },
+        json: () => Promise.resolve({ error: "invalid_token" }),
+        text: () => Promise.resolve('{"error":"invalid_token"}'),
+      } as unknown as Response;
+    }
+
+    function okJson(data: unknown): Response {
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        json: () => Promise.resolve(data),
+        text: () => Promise.resolve(JSON.stringify(data)),
+      } as Response;
+    }
+
+    function deferred<T>(): {
+      promise: Promise<T>;
+      resolve: (value: T) => void;
+      reject: (reason: unknown) => void;
+    } {
+      let resolve: (value: T) => void = () => {};
+      let reject: (reason: unknown) => void = () => {};
+      const promise = new Promise<T>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      return { promise, resolve, reject };
+    }
+
+    function authHeader(init?: RequestInit): string | undefined {
+      return (init?.headers as Record<string, string> | undefined)?.["Authorization"];
+    }
+
+    /** Let every pending request run until it blocks on the refresh. */
+    async function settleMicrotasks(): Promise<void> {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+
+    /** fetch mock: 401 for any token except `validToken`, which echoes the requested URL. */
+    function acceptOnly(validToken: string): void {
+      mockFetch.mockImplementation((url: string, init?: RequestInit) =>
+        Promise.resolve(
+          authHeader(init) === `Bearer ${validToken}` ? okJson({ url }) : unauthorized()
+        )
+      );
+    }
+
+    it("calls onTokenRefresh once when several parallel requests get 401", async () => {
+      acceptOnly(NEW_TOKEN);
+      const refresh = deferred<string>();
+      const onTokenRefresh = vi.fn(() => refresh.promise);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      const pending = Promise.all(TODAY_PATHS.map((path) => client.get<{ url: string }>(path)));
+      await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(TODAY_PATHS.length));
+      await settleMicrotasks();
+
+      // Every request has hit its 401 and is waiting on the same refresh.
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+      refresh.resolve(NEW_TOKEN);
+
+      const results = await pending;
+      expect(results.map((r) => r.url)).toEqual(TODAY_PATHS.map((p) => `${TEST_BASE_URL}${p}`));
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+      const retries = mockFetch.mock.calls.slice(TODAY_PATHS.length) as Array<
+        [string, RequestInit]
+      >;
+      expect(retries).toHaveLength(TODAY_PATHS.length);
+      for (const [, init] of retries) {
+        expect(authHeader(init)).toBe(`Bearer ${NEW_TOKEN}`);
+      }
+    });
+
+    it("calls onTokenRefresh once for 3 parallel 401s when the refresh resolves immediately", async () => {
+      acceptOnly(NEW_TOKEN);
+      const onTokenRefresh = vi.fn().mockResolvedValue(NEW_TOKEN);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      const results = await Promise.all(
+        TODAY_PATHS.slice(0, 3).map((path) => client.get<{ url: string }>(path))
+      );
+
+      expect(results).toHaveLength(3);
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+      expect(mockFetch).toHaveBeenCalledTimes(6);
+    });
+
+    it("retries a late 401 with the already-refreshed token instead of refreshing again", async () => {
+      const lateUnauthorized = deferred<Response>();
+      mockFetch
+        // Request A's first attempt: 401 straight away.
+        .mockImplementationOnce(() => Promise.resolve(unauthorized()))
+        // Request B's first attempt (sent with the old token): its 401 arrives later.
+        .mockImplementationOnce(() => lateUnauthorized.promise)
+        .mockImplementation((url: string, init?: RequestInit) =>
+          Promise.resolve(
+            authHeader(init) === `Bearer ${NEW_TOKEN}` ? okJson({ url }) : unauthorized()
+          )
+        );
+      const onTokenRefresh = vi.fn().mockResolvedValue(NEW_TOKEN);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      const requestA = client.get<{ url: string }>("/v2/recovery?limit=25");
+      const requestB = client.get<{ url: string }>("/v2/cycle?limit=25");
+
+      await expect(requestA).resolves.toEqual({ url: `${TEST_BASE_URL}/v2/recovery?limit=25` });
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+
+      lateUnauthorized.resolve(unauthorized());
+      await expect(requestB).resolves.toEqual({ url: `${TEST_BASE_URL}/v2/cycle?limit=25` });
+
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+      const calls = mockFetch.mock.calls as Array<[string, RequestInit]>;
+      expect(calls).toHaveLength(4);
+      expect(authHeader(calls[1]![1])).toBe(`Bearer ${TEST_TOKEN}`);
+      expect(authHeader(calls[3]![1])).toBe(`Bearer ${NEW_TOKEN}`);
+    });
+
+    it("sends the refreshed token on requests that start while the refresh is running", async () => {
+      acceptOnly(NEW_TOKEN);
+      const refresh = deferred<string>();
+      const onTokenRefresh = vi.fn(() => refresh.promise);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      const first = client.get("/v2/recovery?limit=25");
+      await vi.waitFor(() => expect(onTokenRefresh).toHaveBeenCalledTimes(1));
+      // Starts mid-refresh with the old token, gets 401 and joins the same refresh.
+      const second = client.get("/v2/cycle?limit=25");
+      await settleMicrotasks();
+      refresh.resolve(NEW_TOKEN);
+      await Promise.all([first, second]);
+
+      // A request after the refresh goes straight out with the new token.
+      await client.get("/v2/activity/sleep?limit=25");
+
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+      const lastCall = mockFetch.mock.calls.at(-1) as [string, RequestInit];
+      expect(lastCall[0]).toBe(`${TEST_BASE_URL}/v2/activity/sleep?limit=25`);
+      expect(authHeader(lastCall[1])).toBe(`Bearer ${NEW_TOKEN}`);
+      expect(mockFetch).toHaveBeenCalledTimes(5);
+    });
+
+    it("rejects every waiter with WhoopAuthError when the shared refresh fails", async () => {
+      acceptOnly(NEW_TOKEN);
+      const refresh = deferred<string>();
+      const refreshError = new Error("Token refresh failed (400): invalid_grant");
+      const onTokenRefresh = vi.fn(() => refresh.promise);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      const settled = Promise.allSettled(TODAY_PATHS.slice(0, 3).map((path) => client.get(path)));
+      await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(3));
+      await settleMicrotasks();
+      refresh.reject(refreshError);
+
+      const results = await settled;
+      expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+      for (const result of results) {
+        expect(result.status).toBe("rejected");
+        const reason = (result as PromiseRejectedResult).reason as WhoopAuthError;
+        expect(reason).toBeInstanceOf(WhoopAuthError);
+        expect(reason.cause).toBe(refreshError);
+      }
+      // No retry is sent after a failed refresh.
+      expect(mockFetch).toHaveBeenCalledTimes(3);
+    });
+
+    it("lets the next 401 try again after a failed refresh", async () => {
+      acceptOnly(NEW_TOKEN);
+      const onTokenRefresh = vi
+        .fn<() => Promise<string>>()
+        .mockRejectedValueOnce(new Error("network blip"))
+        .mockResolvedValueOnce(NEW_TOKEN);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      await expect(client.get("/v2/recovery?limit=25")).rejects.toBeInstanceOf(WhoopAuthError);
+      await expect(client.get<{ url: string }>("/v2/recovery?limit=25")).resolves.toEqual({
+        url: `${TEST_BASE_URL}/v2/recovery?limit=25`,
+      });
+      expect(onTokenRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("recovers when onTokenRefresh throws synchronously", async () => {
+      acceptOnly(NEW_TOKEN);
+      const onTokenRefresh = vi
+        .fn<() => Promise<string>>()
+        .mockImplementationOnce(() => {
+          throw new Error("synchronous failure");
+        })
+        .mockResolvedValueOnce(NEW_TOKEN);
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh,
+      });
+
+      await expect(client.get("/v2/cycle?limit=1")).rejects.toBeInstanceOf(WhoopAuthError);
+      await expect(client.get("/v2/cycle?limit=1")).resolves.toEqual({
+        url: `${TEST_BASE_URL}/v2/cycle?limit=1`,
+      });
+      expect(onTokenRefresh).toHaveBeenCalledTimes(2);
+    });
+
+    it("logs one refresh at info level for concurrent 401s", async () => {
+      acceptOnly(NEW_TOKEN);
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const refresh = deferred<string>();
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh: () => refresh.promise,
+        logger,
+      });
+
+      const pending = Promise.all(TODAY_PATHS.map((path) => client.get(path)));
+      await vi.waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(TODAY_PATHS.length));
+      await settleMicrotasks();
+      refresh.resolve(NEW_TOKEN);
+      await pending;
+
+      const refreshedLogs = logger.info.mock.calls.filter(
+        ([message]) => message === "whoop token refreshed"
+      );
+      expect(refreshedLogs).toHaveLength(1);
+      const serialized = JSON.stringify([
+        logger.debug.mock.calls,
+        logger.info.mock.calls,
+        logger.warn.mock.calls,
+      ]);
+      expect(serialized).not.toContain(NEW_TOKEN);
+      expect(serialized).not.toContain(TEST_TOKEN);
     });
   });
 

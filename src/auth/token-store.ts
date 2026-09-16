@@ -5,7 +5,7 @@
  * Pure I/O module — no dependencies on API client or OAuth flow.
  */
 
-import { mkdir, writeFile, readFile, unlink } from "node:fs/promises";
+import { mkdir, writeFile, readFile, rename, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -80,10 +80,12 @@ function tokenFilePath(tokenDir?: string): string {
 export async function saveTokens(tokens: OAuthTokens, tokenDir?: string): Promise<void> {
   const dir = tokenDir ?? DEFAULT_TOKEN_DIR;
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  await writeFile(tokenFilePath(tokenDir), JSON.stringify(tokens, null, 2), {
-    encoding: "utf-8",
-    mode: 0o600,
-  });
+  // Write-then-rename so a crash mid-write can never leave a truncated file
+  // behind after WHOOP has already rotated (invalidated) the old refresh token.
+  const target = tokenFilePath(tokenDir);
+  const temp = `${target}.${process.pid}.tmp`;
+  await writeFile(temp, JSON.stringify(tokens, null, 2), { encoding: "utf-8", mode: 0o600 });
+  await rename(temp, target);
 }
 
 /**

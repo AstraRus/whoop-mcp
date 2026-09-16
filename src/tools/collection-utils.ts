@@ -13,7 +13,7 @@ import type { WhoopClient } from "../api/client.js";
 import type { CycleCollection } from "../api/types.js";
 import { ENDPOINT_CYCLE } from "../api/endpoints.js";
 import { offsetSchema } from "../api/record-schemas.js";
-import { resolveDateExpression } from "./date-utils.js";
+import { InvalidDateExpression, resolveDateExpression } from "./date-utils.js";
 
 /** Input params shared by all collection endpoints */
 export interface CollectionParams {
@@ -69,12 +69,24 @@ export async function resolveUserUtcOffset(client: WhoopClient): Promise<string>
 export function buildCollectionQuery(params: CollectionParams, utcOffset: string = "Z"): string {
   const searchParams = new URLSearchParams();
   const now = new Date();
+  const start =
+    params.start === undefined
+      ? undefined
+      : resolveDateExpression(params.start, now, utcOffset).start;
+  const end =
+    params.end === undefined ? undefined : resolveDateExpression(params.end, now, utcOffset).end;
 
-  if (params.start !== undefined) {
-    searchParams.set("start", resolveDateExpression(params.start, now, utcOffset).start);
+  // WHOOP answers a reversed range with a bare 400; explain it instead
+  if (start !== undefined && end !== undefined && Date.parse(end) < Date.parse(start)) {
+    throw new InvalidDateExpression(
+      `End (${params.end}) is before start (${params.start}). Swap them or widen the range.`
+    );
   }
-  if (params.end !== undefined) {
-    searchParams.set("end", resolveDateExpression(params.end, now, utcOffset).end);
+  if (start !== undefined) {
+    searchParams.set("start", start);
+  }
+  if (end !== undefined) {
+    searchParams.set("end", end);
   }
   if (params.limit !== undefined) {
     searchParams.set("limit", String(params.limit));

@@ -19,7 +19,11 @@ export interface WhoopClientOptions {
   accessToken: string;
   /** Override base URL — useful for testing. Defaults to WHOOP_API_BASE_URL. */
   baseUrl?: string;
-  /** Callback to refresh the access token on 401. Returns a new access token. */
+  /**
+   * Callback to refresh the access token on 401. Returns a new access token.
+   * Never called concurrently: requests that hit a 401 while a refresh is
+   * running share its result (WHOOP rotates refresh tokens).
+   */
   onTokenRefresh?: () => Promise<string>;
   /**
    * Optional structured logger for API call observability.
@@ -88,6 +92,85 @@ export class WhoopAuthError extends Error {
       cause,
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// User-facing error descriptions
+// ---------------------------------------------------------------------------
+
+/** Maximum depth followed through `cause` chains when classifying an error */
+const MAX_CAUSE_DEPTH = 5;
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+}
+
+function describeApiStatus(statusCode: number): string {
+  if (statusCode === 400) {
+    return "WHOOP rejected the request parameters (HTTP 400). Check the ids and dates: use ISO 8601 dates or a supported date expression, and make sure start is before end.";
+  }
+  if (statusCode === 401) {
+    return "WHOOP rejected the authorization (HTTP 401). Run setup --verify to reconnect.";
+  }
+  if (statusCode === 403) {
+    return "WHOOP denied access (HTTP 403). The connection may be missing a required permission; run setup --verify to reconnect.";
+  }
+  if (statusCode === 404) {
+    return "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).";
+  }
+  if (statusCode === 429) {
+    return "WHOOP rate limit reached (HTTP 429). Wait a minute, then retry.";
+  }
+  if (statusCode >= 500) {
+    return `WHOOP API is temporarily unavailable (HTTP ${statusCode}). Retry later.`;
+  }
+  if (statusCode >= 400) {
+    return `WHOOP rejected the request (HTTP ${statusCode}). Check the ids and dates, then retry.`;
+  }
+  return `WHOOP API returned an unexpected response (HTTP ${statusCode}). Retry later.`;
+}
+
+/**
+ * Describe a WHOOP client error in plain language for tool and resource
+ * responses.
+ *
+ * Messages depend only on the error type and HTTP status code — never on the
+ * response body, request URL, tokens or health data. Wrapped causes are
+ * followed where they explain the failure better: a token refresh that could
+ * not reach WHOOP is a network problem, and a WhoopNetworkError wrapping an
+ * API or auth error (e.g. a composite tool rethrowing its first rejection) is
+ * described by that error.
+ *
+ * @returns The description, or `undefined` when the error is not a WHOOP client error.
+ */
+export function describeWhoopError(error: unknown): string | undefined {
+  return describeWhoopErrorAt(error, 0);
+}
+
+function describeWhoopErrorAt(error: unknown, depth: number): string | undefined {
+  if (depth > MAX_CAUSE_DEPTH) {
+    return undefined;
+  }
+  if (error instanceof WhoopApiError) {
+    return describeApiStatus(error.statusCode);
+  }
+  if (error instanceof WhoopAuthError) {
+    if (error.cause instanceof WhoopNetworkError) {
+      return describeWhoopErrorAt(error.cause, depth + 1);
+    }
+    return "WHOOP authentication failed: the access token could not be refreshed. Run setup --verify to reconnect.";
+  }
+  if (error instanceof WhoopNetworkError) {
+    const cause = error.cause;
+    if (cause instanceof WhoopApiError || cause instanceof WhoopAuthError) {
+      return describeWhoopErrorAt(cause, depth + 1);
+    }
+    if (isTimeoutError(cause)) {
+      return "Network error: the WHOOP API did not respond in time. Retry shortly.";
+    }
+    return "Network error: Unable to reach the WHOOP API. Check your internet connection.";
+  }
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +250,10 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
   const logger = options.logger;
   const requestId = options.requestId;
   const cache = options.cache;
+  /** Latest access token; replaced when a refresh succeeds. */
+  let accessToken = options.accessToken;
+  /** The token refresh currently in progress, shared by every request that hits a 401. */
+  let refreshInFlight: Promise<string> | null = null;
 
   function logExtras(extra: Record<string, unknown>): Record<string, unknown> {
     return requestId !== undefined ? { requestId, ...extra } : extra;
@@ -236,9 +323,39 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
     },
   };
 
+  /**
+   * Refresh the access token at most once at a time.
+   *
+   * WHOOP rotates refresh tokens, so two refreshes racing with the same stored
+   * refresh token would make all but one fail and can revoke the grant. Every
+   * request that hits a 401 while a refresh is running waits for that same
+   * refresh. The shared promise is cleared once it settles, so after a failed
+   * refresh (which rejects every waiter) the next 401 may try again.
+   */
+  function refreshAccessTokenOnce(refresh: () => Promise<string>, url: string): Promise<string> {
+    if (refreshInFlight !== null) {
+      logger?.debug("whoop token refresh already in progress", logExtras({ url }));
+      return refreshInFlight;
+    }
+    const flight = (async (): Promise<string> => {
+      const newToken = await refresh();
+      accessToken = newToken;
+      logger?.info("whoop token refreshed", logExtras({ url }));
+      return newToken;
+    })();
+    refreshInFlight = flight;
+    const settle = (): void => {
+      if (refreshInFlight === flight) {
+        refreshInFlight = null;
+      }
+    };
+    // Registered before any waiter, so the slot is free by the time waiters resume.
+    flight.then(settle, settle);
+    return flight;
+  }
+
   async function doGet<T>(path: string): Promise<T> {
     const url = `${baseUrl}${path}`;
-    let currentToken = options.accessToken;
     let lastError: WhoopApiError | undefined;
     let lastResponse: Response | undefined;
 
@@ -250,7 +367,9 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
         await delay(retryDelay);
       }
 
-      const response = await doFetch(url, currentToken);
+      // Always send the latest token: another request may have refreshed it.
+      const sentToken = accessToken;
+      const response = await doFetch(url, sentToken);
 
       if (response.ok) {
         return (await response.json()) as T;
@@ -271,19 +390,21 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
         continue;
       }
 
-      // 401: attempt token refresh once
+      // 401: refresh the token (shared with concurrent requests) and retry once
       if (response.status === 401 && options.onTokenRefresh) {
         let newToken: string;
-        try {
-          newToken = await options.onTokenRefresh();
-          logger?.info("whoop token refreshed", logExtras({ url }));
-        } catch (refreshError: unknown) {
-          throw new WhoopAuthError(refreshError);
+        if (accessToken !== sentToken) {
+          // Another request already refreshed the token while this one was in flight.
+          newToken = accessToken;
+        } else {
+          try {
+            newToken = await refreshAccessTokenOnce(options.onTokenRefresh, url);
+          } catch (refreshError: unknown) {
+            throw new WhoopAuthError(refreshError);
+          }
         }
 
         // Retry with the new token
-        options.accessToken = newToken;
-        currentToken = newToken;
         const retryResponse = await doFetch(url, newToken);
         if (retryResponse.ok) {
           return (await retryResponse.json()) as T;

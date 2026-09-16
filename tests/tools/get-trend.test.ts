@@ -1,334 +1,663 @@
 /**
  * Tests for get_trend tool.
  *
+ * Fixtures are live-shaped: WHOOP returns records newest first, a cycle
+ * starts at the evening sleep onset, the user is at +02:00, the current cycle
+ * has end:null, next_token is null on the last page, and a new user's
+ * recoveries are calibrating with only 2-3 days of history.
+ *
  * Verifies that get_trend:
- * - Maps metric names to correct endpoint + field extraction
- * - Returns statistics (mean, median, std_dev, min, max)
- * - Returns trend direction + slope + confidence
- * - Detects anomalies (>2σ from mean)
- * - Errors for < 2 data points
- * - Returns "stable" for constant values
- * - Filters unscored records
- * - Accepts days parameter (7–90, default 30)
+ * - Maps metric names to the correct endpoint + field extraction
+ * - Orders values oldest first (dates in lockstep) before regression
+ * - Labels direction per metric (lower RHR is better; strain has no better direction)
+ * - Never throws for sparse data: null statistics/trend with notes instead
+ * - Caps confidence by sample size
+ * - Places recoveries on their cycle's local day and filters to the window
+ * - Surfaces pagination truncation
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../../src/api/client.js";
+import { WhoopApiError } from "../../src/api/client.js";
+import { createWhoopServer } from "../../src/server.js";
 import { getTrend } from "../../src/tools/get-trend.js";
-import type { Recovery, Sleep, Cycle, PaginatedResponse } from "../../src/api/types.js";
+import type { TrendMetric } from "../../src/tools/get-trend.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Live-shaped fake WHOOP API
 // ---------------------------------------------------------------------------
 
-function createMockClient(): { client: WhoopClient; getMock: ReturnType<typeof vi.fn> } {
-  const getMock = vi.fn();
-  const client = { get: getMock } as unknown as WhoopClient;
-  return { client, getMock };
+type WhoopRecord = Record<string, unknown>;
+
+interface FakeData {
+  recovery: WhoopRecord[];
+  sleep: WhoopRecord[];
+  cycle: WhoopRecord[];
 }
 
-function makeRecovery(opts: {
-  recovery_score: number;
-  hrv: number;
-  rhr: number;
-  date?: string;
-}): Recovery {
+interface DaySpec {
+  /** Local (+02:00) day the cycle covers / the sleep ends */
+  day: string;
+  recovery?: number;
+  hrv?: number;
+  rhr?: number;
+  strain?: number;
+  performance?: number | null;
+  calibrating?: boolean;
+}
+
+const NOW = new Date("2026-09-16T12:00:00.000Z"); // 14:00 local (+02:00), a Wednesday
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+function shiftDay(day: string, count: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY_MS).toISOString().slice(0, 10);
+}
+
+function stageSummary(): Record<string, number> {
   return {
-    cycle_id: 1,
-    sleep_id: "s1",
-    user_id: 100,
-    created_at: opts.date ?? "2026-05-01T06:00:00.000Z",
-    updated_at: opts.date ?? "2026-05-01T06:00:00.000Z",
-    score_state: "SCORED",
-    score: {
-      user_calibrating: false,
-      recovery_score: opts.recovery_score,
-      resting_heart_rate: opts.rhr,
-      hrv_rmssd_milli: opts.hrv,
-      spo2_percentage: 98,
-      skin_temp_celsius: 33.5,
-    },
+    total_in_bed_time_milli: 8 * HOUR_MS,
+    total_awake_time_milli: HOUR_MS,
+    total_no_data_time_milli: 0,
+    total_light_sleep_time_milli: 3.5 * HOUR_MS,
+    total_slow_wave_sleep_time_milli: 1.5 * HOUR_MS,
+    total_rem_sleep_time_milli: 2 * HOUR_MS, // 7h asleep, 8h in bed
+    sleep_cycle_count: 4,
+    disturbance_count: 10,
   };
 }
 
-function makeSleep(startIso: string, endIso: string, performance?: number): Sleep {
-  return {
-    id: `sleep-${startIso}`,
-    cycle_id: 1,
-    user_id: 100,
-    created_at: endIso,
-    updated_at: endIso,
-    start: startIso,
-    end: endIso,
-    timezone_offset: "-05:00",
-    nap: false,
-    score_state: "SCORED",
-    score: {
-      stage_summary: {
-        total_in_bed_time_milli: 28800000,
-        total_awake_time_milli: 3600000,
-        total_no_data_time_milli: 0,
-        total_light_sleep_time_milli: 10800000,
-        total_slow_wave_sleep_time_milli: 7200000,
-        total_rem_sleep_time_milli: 7200000,
-        sleep_cycle_count: 4,
-        disturbance_count: 2,
+/**
+ * Build a history, one entry per local day (ascending). Bedtime is 23:00
+ * local the evening before, wake-up 07:00 local; the newest cycle is open
+ * (end:null). Returned arrays are newest first, like WHOOP.
+ */
+function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeData {
+  const openLatest = options.openLatest ?? true;
+  const data: FakeData = { recovery: [], sleep: [], cycle: [] };
+  days.forEach((spec, index) => {
+    const id = index + 1;
+    const sleepStart = `${shiftDay(spec.day, -1)}T21:00:00.000Z`;
+    const sleepEnd = `${spec.day}T05:00:00.000Z`;
+    const next = days[index + 1];
+    const cycleEnd = next
+      ? `${shiftDay(next.day, -1)}T21:00:00.000Z`
+      : openLatest
+        ? null
+        : `${spec.day}T21:00:00.000Z`;
+    const sleepId = `sleep-${spec.day}`;
+    data.sleep.push({
+      id: sleepId,
+      cycle_id: id,
+      v1_id: null,
+      user_id: 1,
+      created_at: sleepEnd,
+      updated_at: sleepEnd,
+      start: sleepStart,
+      end: sleepEnd,
+      timezone_offset: "+02:00",
+      nap: false,
+      score_state: "SCORED",
+      score: {
+        stage_summary: stageSummary(),
+        sleep_needed: {
+          baseline_milli: 8 * HOUR_MS,
+          need_from_sleep_debt_milli: 0,
+          need_from_recent_strain_milli: 0,
+          need_from_recent_nap_milli: 0,
+        },
+        respiratory_rate: 15,
+        sleep_performance_percentage: spec.performance === undefined ? 80 : spec.performance,
+        sleep_consistency_percentage: 0,
+        sleep_efficiency_percentage: 88,
       },
-      sleep_needed: {
-        baseline_milli: 28800000,
-        need_from_sleep_debt_milli: 0,
-        need_from_recent_strain_milli: 0,
-        need_from_recent_nap_milli: 0,
+    });
+    data.cycle.push({
+      id,
+      user_id: 1,
+      created_at: sleepStart,
+      updated_at: sleepStart,
+      start: sleepStart,
+      end: cycleEnd,
+      timezone_offset: "+02:00",
+      score_state: "SCORED",
+      score: {
+        strain: spec.strain ?? 10,
+        kilojoule: 8000,
+        average_heart_rate: 70,
+        max_heart_rate: 150,
       },
-      respiratory_rate: 15,
-      sleep_performance_percentage: performance ?? 85,
-      sleep_consistency_percentage: 90,
-      sleep_efficiency_percentage: 88,
-    },
-  };
-}
-
-function makeCycle(strain: number, date?: string): Cycle {
+    });
+    data.recovery.push({
+      cycle_id: id,
+      sleep_id: sleepId,
+      user_id: 1,
+      created_at: `${spec.day}T05:30:00.000Z`,
+      updated_at: `${spec.day}T05:30:00.000Z`,
+      score_state: "SCORED",
+      score: {
+        user_calibrating: spec.calibrating ?? false,
+        recovery_score: spec.recovery ?? 60,
+        resting_heart_rate: spec.rhr ?? 55,
+        hrv_rmssd_milli: spec.hrv ?? 70,
+        spo2_percentage: 96,
+        skin_temp_celsius: 34,
+      },
+    });
+  });
   return {
-    id: 1,
-    user_id: 100,
-    created_at: date ?? "2026-05-01T00:00:00.000Z",
-    updated_at: date ?? "2026-05-01T23:59:59.000Z",
-    start: date ?? "2026-05-01T00:00:00.000Z",
-    end: date ?? "2026-05-01T23:59:59.000Z",
-    timezone_offset: "-05:00",
-    score_state: "SCORED",
-    score: {
-      strain,
-      kilojoule: 8500,
-      average_heart_rate: 72,
-      max_heart_rate: 175,
-    },
+    recovery: data.recovery.reverse(),
+    sleep: data.sleep.reverse(),
+    cycle: data.cycle.reverse(),
   };
 }
 
-function paginated<T>(records: T[]): PaginatedResponse<T> {
-  return { records };
+/** Ascending local days ending at `lastDay` */
+function dayRange(lastDay: string, count: number): string[] {
+  return Array.from({ length: count }, (_, index) => shiftDay(lastDay, index - count + 1));
+}
+
+function bounds(kind: keyof FakeData, record: WhoopRecord, data: FakeData): [number, number] {
+  if (kind === "recovery") {
+    const cycle = data.cycle.find((c) => c.id === record.cycle_id);
+    if (cycle) return bounds("cycle", cycle, data);
+    const created = Date.parse(String(record.created_at));
+    return [created, created];
+  }
+  const start = Date.parse(String(record.start));
+  return [start, record.end ? Date.parse(String(record.end)) : Number.POSITIVE_INFINITY];
+}
+
+interface FakeClient {
+  client: WhoopClient;
+  paths: string[];
+}
+
+/**
+ * A fake WHOOP client: filters by overlap with start/end like WHOOP,
+ * paginates 25 per page with next_token null on the last page.
+ */
+function fakeWhoop(
+  data: FakeData,
+  overrides: { fail?: Partial<Record<keyof FakeData, Error>>; endless?: keyof FakeData } = {}
+): FakeClient {
+  const paths: string[] = [];
+  const get = async <T>(path: string): Promise<T> => {
+    paths.push(path);
+    const url = new URL(path, "https://whoop.test");
+    const kind: keyof FakeData = url.pathname.includes("recovery")
+      ? "recovery"
+      : url.pathname.includes("sleep")
+        ? "sleep"
+        : "cycle";
+    const failure = overrides.fail?.[kind];
+    if (failure && url.searchParams.has("start")) throw failure;
+    const start = url.searchParams.get("start");
+    const end = url.searchParams.get("end");
+    const records = data[kind].filter((record) => {
+      const [recordStart, recordEnd] = bounds(kind, record, data);
+      return (
+        (start === null || recordEnd >= Date.parse(start)) &&
+        (end === null || recordStart < Date.parse(end))
+      );
+    });
+    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const offset = Number(url.searchParams.get("nextToken") ?? 0);
+    if (overrides.endless === kind && url.searchParams.has("start")) {
+      const page = Array.from({ length: limit }, () => records[0]);
+      return { records: page, next_token: String(offset + limit) } as T;
+    }
+    const page = records.slice(offset, offset + limit);
+    const nextToken = offset + limit < records.length ? String(offset + limit) : null;
+    return { records: page, next_token: nextToken } as T;
+  };
+  return { client: { get } as WhoopClient, paths };
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-describe("getTrend", () => {
-  let client: WhoopClient;
-  let getMock: ReturnType<typeof vi.fn>;
+describe("getTrend — metric mapping and ordering", () => {
+  const days = ["2026-09-13", "2026-09-14", "2026-09-15", "2026-09-16"];
+  const data = history(
+    days.map((day, i) => ({
+      day,
+      recovery: 50 + i * 10,
+      hrv: 90 - i * 10,
+      rhr: 52 + i * 2,
+      strain: 8 + i,
+      performance: 70 + i * 5,
+    })),
+    { openLatest: false }
+  );
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    const mock = createMockClient();
-    client = mock.client;
-    getMock = mock.getMock;
+  it("returns recovery values oldest first with their local dates, from newest-first data", async () => {
+    const { client, paths } = fakeWhoop(data);
+    const result = await getTrend(client, { metric: "recovery", days: 7 }, NOW);
+
+    expect(result.values).toEqual([50, 60, 70, 80]);
+    expect(result.dates).toEqual(days);
+    expect(paths.some((path) => path.startsWith("/v2/recovery?"))).toBe(true);
   });
 
-  it("maps 'recovery' metric to recovery endpoint and recovery_score field", async () => {
-    const recoveries = [
-      makeRecovery({ recovery_score: 70, hrv: 55, rhr: 52 }),
-      makeRecovery({ recovery_score: 75, hrv: 60, rhr: 54 }),
-      makeRecovery({ recovery_score: 80, hrv: 65, rhr: 56 }),
-    ];
-    getMock.mockResolvedValueOnce(paginated(recoveries));
+  it("maps hrv and rhr to their recovery fields", async () => {
+    const hrv = await getTrend(fakeWhoop(data).client, { metric: "hrv", days: 7 }, NOW);
+    const rhr = await getTrend(fakeWhoop(data).client, { metric: "rhr", days: 7 }, NOW);
 
-    const result = await getTrend(client, { metric: "recovery" });
-
-    expect(result.metric).toBe("recovery");
-    expect(result.values).toEqual([70, 75, 80]);
-    expect(getMock.mock.calls[0]?.[0]).toContain("/v2/recovery");
+    expect(hrv.values).toEqual([90, 80, 70, 60]);
+    expect(rhr.values).toEqual([52, 54, 56, 58]);
   });
 
-  it("maps 'hrv' metric to recovery endpoint and hrv_rmssd_milli field", async () => {
-    const recoveries = [
-      makeRecovery({ recovery_score: 70, hrv: 50, rhr: 52 }),
-      makeRecovery({ recovery_score: 75, hrv: 60, rhr: 54 }),
-      makeRecovery({ recovery_score: 80, hrv: 70, rhr: 56 }),
-    ];
-    getMock.mockResolvedValueOnce(paginated(recoveries));
+  it("maps sleep_duration to hours asleep (not time in bed) on the local wake-up day", async () => {
+    const { client, paths } = fakeWhoop(data);
+    const result = await getTrend(client, { metric: "sleep_duration", days: 7 }, NOW);
 
-    const result = await getTrend(client, { metric: "hrv" });
-
-    expect(result.values).toEqual([50, 60, 70]);
+    expect(result.values).toEqual([7, 7, 7, 7]);
+    expect(result.dates).toEqual(days);
+    expect(paths.some((path) => path.startsWith("/v2/activity/sleep?"))).toBe(true);
   });
 
-  it("maps 'rhr' metric to recovery endpoint and resting_heart_rate field", async () => {
-    const recoveries = [
-      makeRecovery({ recovery_score: 70, hrv: 55, rhr: 52 }),
-      makeRecovery({ recovery_score: 75, hrv: 60, rhr: 54 }),
-    ];
-    getMock.mockResolvedValueOnce(paginated(recoveries));
-
-    const result = await getTrend(client, { metric: "rhr" });
-
-    expect(result.values).toEqual([52, 54]);
-  });
-
-  it("maps 'sleep_duration' metric to sleep endpoint and computes hours from start/end", async () => {
-    const sleeps = [
-      makeSleep("2026-05-25T22:00:00Z", "2026-05-26T06:00:00Z"), // 8h
-      makeSleep("2026-05-26T23:00:00Z", "2026-05-27T06:30:00Z"), // 7.5h
-    ];
-    getMock.mockResolvedValueOnce(paginated(sleeps));
-
-    const result = await getTrend(client, { metric: "sleep_duration" });
-
-    expect(result.values[0]).toBeCloseTo(8, 1);
-    expect(result.values[1]).toBeCloseTo(7.5, 1);
-    expect(getMock.mock.calls[0]?.[0]).toContain("/v2/activity/sleep");
-  });
-
-  it("maps 'sleep_performance' metric to sleep endpoint and sleep_performance_percentage", async () => {
-    const sleeps = [
-      makeSleep("2026-05-25T22:00:00Z", "2026-05-26T06:00:00Z", 85),
-      makeSleep("2026-05-26T22:00:00Z", "2026-05-27T06:00:00Z", 90),
-    ];
-    getMock.mockResolvedValueOnce(paginated(sleeps));
-
-    const result = await getTrend(client, { metric: "sleep_performance" });
-
-    expect(result.values).toEqual([85, 90]);
-  });
-
-  it("maps 'strain' metric to cycle endpoint and score.strain", async () => {
-    const cycles = [makeCycle(12.5), makeCycle(14.0), makeCycle(10.0)];
-    getMock.mockResolvedValueOnce(paginated(cycles));
-
-    const result = await getTrend(client, { metric: "strain" });
-
-    expect(result.values).toEqual([12.5, 14.0, 10.0]);
-    expect(getMock.mock.calls[0]?.[0]).toContain("/v2/cycle");
-  });
-
-  it("returns correct statistics", async () => {
-    // Values: 60, 70, 80, 90, 100
-    const recoveries = [60, 70, 80, 90, 100].map((s) =>
-      makeRecovery({ recovery_score: s, hrv: 55, rhr: 52 })
+  it("maps sleep_performance to sleep_performance_percentage", async () => {
+    const result = await getTrend(
+      fakeWhoop(data).client,
+      { metric: "sleep_performance", days: 7 },
+      NOW
     );
-    getMock.mockResolvedValueOnce(paginated(recoveries));
 
-    const result = await getTrend(client, { metric: "recovery" });
-
-    expect(result.statistics.mean).toBe(80);
-    expect(result.statistics.median).toBe(80);
-    expect(result.statistics.min).toBe(60);
-    expect(result.statistics.max).toBe(100);
-    expect(result.statistics.std_dev).toBeGreaterThan(0);
+    expect(result.values).toEqual([70, 75, 80, 85]);
   });
 
-  it("returns trend direction with slope and confidence", async () => {
-    // Monotonically increasing → improving with high confidence
-    const recoveries = [50, 60, 70, 80, 90, 100].map((s) =>
-      makeRecovery({ recovery_score: s, hrv: 55, rhr: 52 })
-    );
-    getMock.mockResolvedValueOnce(paginated(recoveries));
+  it("maps strain to cycle strain on the cycle's local day", async () => {
+    const { client, paths } = fakeWhoop(data);
+    const result = await getTrend(client, { metric: "strain", days: 7 }, NOW);
 
-    const result = await getTrend(client, { metric: "recovery" });
-
-    expect(result.trend.direction).toBe("improving");
-    expect(result.trend.slope).toBeGreaterThan(0);
-    expect(result.trend.confidence).toBe("high");
+    expect(result.values).toEqual([8, 9, 10, 11]);
+    expect(result.dates).toEqual(days);
+    expect(paths.some((path) => path.startsWith("/v2/cycle?start="))).toBe(true);
   });
+});
 
-  it("returns declining trend for decreasing values", async () => {
-    const recoveries = [100, 90, 80, 70, 60, 50].map((s) =>
-      makeRecovery({ recovery_score: s, hrv: 55, rhr: 52 })
+describe("getTrend — direction semantics", () => {
+  function series(values: number[], field: "recovery" | "hrv" | "rhr"): FakeData {
+    return history(
+      dayRange("2026-09-16", values.length).map((day, i) => ({ day, [field]: values[i] })),
+      { openLatest: false }
     );
-    getMock.mockResolvedValueOnce(paginated(recoveries));
+  }
 
-    const result = await getTrend(client, { metric: "recovery" });
+  it("reports a declining HRV when newer values are lower (regression runs oldest first)", async () => {
+    const data = series([100, 90, 80, 70, 60, 50, 40], "hrv");
+    // Newest first from the API: the newest value is the lowest
+    expect((data.recovery[0]!.score as { hrv_rmssd_milli: number }).hrv_rmssd_milli).toBe(40);
 
+    const result = await getTrend(fakeWhoop(data).client, { metric: "hrv", days: 7 }, NOW);
+
+    expect(result.values).toEqual([100, 90, 80, 70, 60, 50, 40]);
+    expect(result.trend.change).toBe("decreasing");
     expect(result.trend.direction).toBe("declining");
-    expect(result.trend.slope).toBeLessThan(0);
+    expect(result.trend.slope).toBeCloseTo(-10, 6);
+    expect(result.trend.better_when).toBe("higher");
+  });
+
+  it("reports an improving recovery when values rise over time", async () => {
+    const data = series([50, 55, 60, 65, 70, 75, 80], "recovery");
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery", days: 7 }, NOW);
+
+    expect(result.trend.change).toBe("increasing");
+    expect(result.trend.direction).toBe("improving");
+    expect(result.trend.slope).toBeCloseTo(5, 6);
+  });
+
+  it("labels a rising resting heart rate as declining (lower is better)", async () => {
+    const data = series([52, 54, 56, 58, 60, 62, 64], "rhr");
+    const result = await getTrend(fakeWhoop(data).client, { metric: "rhr", days: 7 }, NOW);
+
+    expect(result.trend.change).toBe("increasing");
+    expect(result.trend.direction).toBe("declining");
+    expect(result.trend.better_when).toBe("lower");
+  });
+
+  it("labels a falling resting heart rate as improving", async () => {
+    const data = series([64, 62, 60, 58, 56, 54, 52], "rhr");
+    const result = await getTrend(fakeWhoop(data).client, { metric: "rhr", days: 7 }, NOW);
+
+    expect(result.trend.change).toBe("decreasing");
+    expect(result.trend.direction).toBe("improving");
+  });
+
+  it("gives strain a change but no better/worse direction", async () => {
+    const data = history(
+      dayRange("2026-09-16", 7).map((day, i) => ({ day, strain: 6 + i })),
+      { openLatest: false }
+    );
+    const result = await getTrend(fakeWhoop(data).client, { metric: "strain", days: 7 }, NOW);
+
+    expect(result.trend.change).toBe("increasing");
+    expect(result.trend.direction).toBeNull();
+    expect(result.trend.better_when).toBeNull();
+    expect(result.notes.join(" ")).toMatch(/trend\.change/);
   });
 
   it("returns stable when all values are identical (zero variance)", async () => {
-    const recoveries = [75, 75, 75, 75, 75].map((s) =>
-      makeRecovery({ recovery_score: s, hrv: 55, rhr: 52 })
-    );
-    getMock.mockResolvedValueOnce(paginated(recoveries));
+    const data = series([75, 75, 75, 75, 75], "recovery");
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery", days: 7 }, NOW);
 
-    const result = await getTrend(client, { metric: "recovery" });
-
+    expect(result.trend.change).toBe("stable");
     expect(result.trend.direction).toBe("stable");
     expect(result.statistics.std_dev).toBe(0);
   });
 
-  it("detects anomalies (>2σ from mean)", async () => {
-    // 10 values around 70, one outlier at 20
-    const scores = [70, 72, 68, 71, 69, 73, 70, 71, 20, 70];
-    const recoveries = scores.map((s) => makeRecovery({ recovery_score: s, hrv: 55, rhr: 52 }));
-    getMock.mockResolvedValueOnce(paginated(recoveries));
-
-    const result = await getTrend(client, { metric: "recovery" });
-
-    expect(result.anomalies.length).toBeGreaterThan(0);
-    expect(result.anomalies[0]!.value).toBe(20);
-    expect(result.anomalies[0]!.deviation_from_mean).toBeGreaterThan(2);
-  });
-
-  it("throws error for < 2 data points", async () => {
-    getMock.mockResolvedValueOnce(
-      paginated([makeRecovery({ recovery_score: 70, hrv: 55, rhr: 52 })])
+  it("uses days, not record positions, as the regression x axis when days are missing", async () => {
+    // Days 0, 1, 4, 5 of the window with value = 2 * day
+    const all = dayRange("2026-09-16", 6);
+    const specs = [0, 1, 4, 5].map((offset) => ({ day: all[offset]!, recovery: 2 * offset + 10 }));
+    const result = await getTrend(
+      fakeWhoop(history(specs, { openLatest: false })).client,
+      { metric: "recovery", days: 7 },
+      NOW
     );
 
-    await expect(getTrend(client, { metric: "recovery" })).rejects.toThrow("at least 2");
+    expect(result.values).toEqual([10, 12, 18, 20]);
+    expect(result.trend.slope).toBeCloseTo(2, 6);
+  });
+});
+
+describe("getTrend — sparse data and confidence", () => {
+  it("returns data without a trend for a calibrating user with 2 recoveries (no throw)", async () => {
+    const data = history([
+      { day: "2026-09-15", recovery: 95, hrv: 150, calibrating: true },
+      { day: "2026-09-16", recovery: 66, hrv: 108, calibrating: true },
+    ]);
+    const result = await getTrend(fakeWhoop(data).client, { metric: "hrv" }, NOW);
+
+    expect(result.status).toBe("insufficient_data");
+    expect(result.sample_size).toBe(2);
+    expect(result.values).toEqual([150, 108]);
+    expect(result.dates).toEqual(["2026-09-15", "2026-09-16"]);
+    expect(result.statistics).toEqual({ mean: 129, median: 129, std_dev: 21, min: 108, max: 150 });
+    expect(result.trend).toEqual({
+      direction: null,
+      change: null,
+      better_when: "higher",
+      slope: null,
+      confidence: null,
+    });
+    expect(result.anomalies).toEqual([]);
+    expect(result.calibrating).toBe(true);
+    expect(result.notes[0]).toBe(
+      "Not enough data yet: 2 scored recoveries in the last 30 days; a trend needs at least 4."
+    );
+    expect(result.notes.join(" ")).toMatch(/WHOOP is still calibrating \(2 of 2/);
   });
 
-  it("throws error for 0 data points", async () => {
-    getMock.mockResolvedValueOnce(paginated([]));
+  it("returns null statistics and a note for 0 data points", async () => {
+    const result = await getTrend(
+      fakeWhoop({ recovery: [], sleep: [], cycle: [] }).client,
+      { metric: "recovery" },
+      NOW
+    );
 
-    await expect(getTrend(client, { metric: "recovery" })).rejects.toThrow("at least 2");
+    expect(result.status).toBe("insufficient_data");
+    expect(result.sample_size).toBe(0);
+    expect(result.values).toEqual([]);
+    expect(result.statistics).toEqual({
+      mean: null,
+      median: null,
+      std_dev: null,
+      min: null,
+      max: null,
+    });
+    expect(result.trend.slope).toBeNull();
+    expect(result.calibrating).toBe(false);
+    expect(result.notes[0]).toBe(
+      "Not enough data yet: no scored recoveries in the last 30 days; a trend needs at least 4."
+    );
+  });
+
+  it("gives mean/min/max but a null std_dev for a single data point", async () => {
+    const data = history([{ day: "2026-09-16", recovery: 70 }]);
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery" }, NOW);
+
+    expect(result.statistics).toEqual({ mean: 70, median: 70, std_dev: null, min: 70, max: 70 });
+    expect(result.notes[0]).toMatch(/1 scored recovery in the last 30 days/);
+  });
+
+  it("caps confidence at low below 7 points and medium below 14", async () => {
+    const perfect = (count: number): FakeData =>
+      history(
+        dayRange("2026-09-16", count).map((day, i) => ({ day, recovery: 20 + i * 4 })),
+        { openLatest: false }
+      );
+
+    const four = await getTrend(fakeWhoop(perfect(4)).client, { metric: "recovery" }, NOW);
+    const ten = await getTrend(fakeWhoop(perfect(10)).client, { metric: "recovery" }, NOW);
+    const fourteen = await getTrend(fakeWhoop(perfect(14)).client, { metric: "recovery" }, NOW);
+
+    expect(four.status).toBe("available");
+    expect(four.trend.confidence).toBe("low");
+    expect(ten.trend.confidence).toBe("medium");
+    expect(fourteen.trend.confidence).toBe("high");
+  });
+
+  it("skips nights whose sleep performance is null instead of counting them as 0", async () => {
+    const data = history([
+      { day: "2026-09-14", performance: 80 },
+      { day: "2026-09-15", performance: null },
+      { day: "2026-09-16", performance: 90 },
+    ]);
+    const result = await getTrend(fakeWhoop(data).client, { metric: "sleep_performance" }, NOW);
+
+    expect(result.values).toEqual([80, 90]);
+    expect(result.statistics.mean).toBe(85);
+    expect(result.calibrating).toBeNull();
+    expect(result.notes.join(" ")).toMatch(/1 scored night\(s\) had no sleep performance score/);
+  });
+
+  it("detects anomalies with the date of the anomalous value", async () => {
+    const scores = [70, 72, 68, 71, 69, 73, 70, 71, 20, 70];
+    const days = dayRange("2026-09-16", scores.length);
+    const data = history(
+      days.map((day, i) => ({ day, recovery: scores[i] })),
+      { openLatest: false }
+    );
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery" }, NOW);
+
+    expect(result.anomalies).toHaveLength(1);
+    expect(result.anomalies[0]!.value).toBe(20);
+    expect(result.anomalies[0]!.date).toBe(days[8]);
+    expect(result.anomalies[0]!.deviation_from_mean).toBeGreaterThan(2);
+  });
+});
+
+describe("getTrend — windows, joins and data quality", () => {
+  it("covers `days` local days including today, starting at local midnight", async () => {
+    const { client, paths } = fakeWhoop({ recovery: [], sleep: [], cycle: [] });
+    const result = await getTrend(client, { metric: "recovery", days: 14 }, NOW);
+
+    expect(result.period).toEqual({
+      start: "2026-09-03T00:00:00.000Z",
+      end: "2026-09-16T12:00:00.000Z",
+      days: 14,
+    });
+    // Offset lookup falls back to UTC without cycles; the query starts a day early
+    const query = paths.find((path) => path.startsWith("/v2/recovery?"))!;
+    expect(query).toContain("start=2026-09-02T00%3A00%3A00.000Z");
+  });
+
+  it("writes the period in the user's offset and defaults to 30 days", async () => {
+    const data = history([{ day: "2026-09-16", recovery: 60 }]);
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery" }, NOW);
+
+    expect(result.period).toEqual({
+      start: "2026-08-18T00:00:00.000+02:00",
+      end: "2026-09-16T14:00:00.000+02:00",
+      days: 30,
+    });
+  });
+
+  it("excludes records outside the local-day window even if WHOOP returns them", async () => {
+    // Window for days=7 is 2026-09-10..2026-09-16; 2026-09-09 is only in the query margin
+    const data = history([
+      { day: "2026-09-09", recovery: 5, strain: 20 },
+      { day: "2026-09-10", recovery: 60, strain: 10 },
+      { day: "2026-09-16", recovery: 70, strain: 11 },
+    ]);
+    const recovery = await getTrend(fakeWhoop(data).client, { metric: "recovery", days: 7 }, NOW);
+    const sleep = await getTrend(
+      fakeWhoop(data).client,
+      { metric: "sleep_duration", days: 7 },
+      NOW
+    );
+
+    expect(recovery.values).toEqual([60, 70]);
+    expect(recovery.dates).toEqual(["2026-09-10", "2026-09-16"]);
+    expect(sleep.dates).toEqual(["2026-09-10", "2026-09-16"]);
+  });
+
+  it("dates a recovery by its cycle even when it was recorded (synced) a day later", async () => {
+    const data = history([
+      { day: "2026-09-14", recovery: 50 },
+      { day: "2026-09-15", recovery: 60 },
+      { day: "2026-09-16", recovery: 70 },
+    ]);
+    const late = data.recovery.find((r) => r.cycle_id === 2)!;
+    late.created_at = "2026-09-16T09:00:00.000Z";
+
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery" }, NOW);
+
+    expect(result.values).toEqual([50, 60, 70]);
+    expect(result.dates).toEqual(["2026-09-14", "2026-09-15", "2026-09-16"]);
+  });
+
+  it("falls back to when a recovery was recorded if cycles cannot be loaded", async () => {
+    const data = history([
+      { day: "2026-09-15", recovery: 60 },
+      { day: "2026-09-16", recovery: 70 },
+    ]);
+    const { client } = fakeWhoop(data, { fail: { cycle: new WhoopApiError(500, "err", null) } });
+    const result = await getTrend(client, { metric: "recovery" }, NOW);
+
+    expect(result.values).toEqual([60, 70]);
+    expect(result.dates).toEqual(["2026-09-15", "2026-09-16"]);
+    expect(result.notes.join(" ")).toMatch(/Cycle data could not be loaded/);
+  });
+
+  it("leaves the in-progress cycle out of strain and says so", async () => {
+    const data = history([
+      { day: "2026-09-14", strain: 12 },
+      { day: "2026-09-15", strain: 14 },
+      { day: "2026-09-16", strain: 3 },
+    ]);
+    expect(data.cycle[0]!.end).toBeNull();
+
+    const result = await getTrend(fakeWhoop(data).client, { metric: "strain" }, NOW);
+
+    expect(result.values).toEqual([12, 14]);
+    expect(result.notes).toContain("Today's strain is still accumulating and is not included.");
   });
 
   it("filters unscored records", async () => {
-    const recoveries: Recovery[] = [
-      makeRecovery({ recovery_score: 70, hrv: 55, rhr: 52 }),
-      {
-        ...makeRecovery({ recovery_score: 50, hrv: 40, rhr: 60 }),
-        score_state: "PENDING_SCORE",
-        score: undefined,
-      },
-      makeRecovery({ recovery_score: 80, hrv: 65, rhr: 54 }),
-    ];
-    getMock.mockResolvedValueOnce(paginated(recoveries));
+    const data = history([
+      { day: "2026-09-14", recovery: 70 },
+      { day: "2026-09-15", recovery: 50 },
+      { day: "2026-09-16", recovery: 80 },
+    ]);
+    const pending = data.recovery.find((r) => r.cycle_id === 2)!;
+    pending.score_state = "PENDING_SCORE";
+    pending.score = null;
 
-    const result = await getTrend(client, { metric: "recovery" });
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery" }, NOW);
 
     expect(result.values).toEqual([70, 80]);
   });
 
-  it("defaults to 30 days when days not specified", async () => {
-    getMock.mockResolvedValueOnce(
-      paginated([
-        makeRecovery({ recovery_score: 70, hrv: 55, rhr: 52 }),
-        makeRecovery({ recovery_score: 75, hrv: 60, rhr: 54 }),
-      ])
-    );
+  it("skips records that do not match the WHOOP format and notes it", async () => {
+    const data = history([
+      { day: "2026-09-15", recovery: 60 },
+      { day: "2026-09-16", recovery: 70 },
+    ]);
+    (data.recovery[0]!.score as Record<string, unknown>).recovery_score = "high";
 
-    const result = await getTrend(client, { metric: "recovery" });
+    const result = await getTrend(fakeWhoop(data).client, { metric: "recovery" }, NOW);
 
-    expect(result.period.days).toBe(30);
-    // Check the query includes appropriate date range
-    const call = getMock.mock.calls[0]?.[0] as string;
-    expect(call).toContain("start=");
+    expect(result.values).toEqual([60]);
+    expect(result.notes.join(" ")).toMatch(/1 recovery record\(s\) did not match/);
   });
 
-  it("includes period start, end, and days in output", async () => {
-    getMock.mockResolvedValueOnce(
-      paginated([
-        makeRecovery({ recovery_score: 70, hrv: 55, rhr: 52 }),
-        makeRecovery({ recovery_score: 75, hrv: 60, rhr: 54 }),
-      ])
+  it("surfaces pagination truncation", async () => {
+    const data = history(dayRange("2026-09-16", 5).map((day) => ({ day })));
+    const { client } = fakeWhoop(data, { endless: "recovery" });
+    const result = await getTrend(client, { metric: "recovery" }, NOW);
+
+    expect(result.truncated).toBe(true);
+    expect(result.notes.join(" ")).toMatch(/oldest days of the window are missing/);
+  });
+
+  it("rethrows WHOOP API failures of the metric's own endpoint", async () => {
+    const data = history([{ day: "2026-09-16" }]);
+    const { client } = fakeWhoop(data, { fail: { sleep: new WhoopApiError(503, "down", null) } });
+
+    await expect(getTrend(client, { metric: "sleep_duration" }, NOW)).rejects.toBeInstanceOf(
+      WhoopApiError
     );
+  });
+});
 
-    const result = await getTrend(client, { metric: "recovery", days: 14 });
+describe("get_trend output contract", () => {
+  async function callTrend(
+    data: FakeData,
+    metric: TrendMetric,
+    privacyMode: "standard" | "aggregate"
+  ): Promise<{ isError?: boolean; structuredContent?: Record<string, unknown> }> {
+    const { server } = createWhoopServer(fakeWhoop(data).client, { privacyMode });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = new Client({ name: "test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
+    try {
+      return (await mcp.callTool({ name: "get_trend", arguments: { metric } })) as {
+        isError?: boolean;
+        structuredContent?: Record<string, unknown>;
+      };
+    } finally {
+      await mcp.close();
+      await server.close();
+    }
+  }
 
-    expect(result.period.days).toBe(14);
-    expect(result.period.start).toBeDefined();
-    expect(result.period.end).toBeDefined();
+  const sparse = history([
+    { day: "2026-09-15", recovery: 95, performance: null, calibrating: true },
+    { day: "2026-09-16", recovery: 66, calibrating: true },
+  ]);
+  const empty: FakeData = { recovery: [], sleep: [], cycle: [] };
+
+  for (const privacyMode of ["standard", "aggregate"] as const) {
+    for (const metric of [
+      "recovery",
+      "hrv",
+      "rhr",
+      "sleep_duration",
+      "sleep_performance",
+      "strain",
+    ] as const) {
+      it(`passes the ${privacyMode} contract for sparse and empty ${metric} data`, async () => {
+        for (const data of [sparse, empty]) {
+          const result = await callTrend(data, metric, privacyMode);
+          expect(result.isError).toBeFalsy();
+          expect(result.structuredContent?.status).toBe("insufficient_data");
+        }
+      });
+    }
+  }
+
+  it("omits per-day values and dates in aggregate mode", async () => {
+    const result = await callTrend(sparse, "recovery", "aggregate");
+
+    expect(result.structuredContent).not.toHaveProperty("values");
+    expect(result.structuredContent).not.toHaveProperty("dates");
+    expect(result.structuredContent).not.toHaveProperty("anomalies");
+    expect(result.structuredContent?.notes).toBeDefined();
   });
 });

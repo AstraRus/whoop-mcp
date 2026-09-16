@@ -24,52 +24,94 @@ const weekly = z.object({
   week_start: z.string(),
   week_end: z.string(),
   recovery: z.object({
-    average_score: number,
-    min_score: number,
-    max_score: number,
-    average_hrv: number,
-    average_rhr: number,
-    trend: direction,
+    average_score: nullable,
+    min_score: nullable,
+    max_score: nullable,
+    average_hrv: nullable,
+    average_rhr: nullable,
+    trend: direction.nullable(),
   }),
   sleep: z.object({
-    average_duration_hours: number,
-    average_performance_pct: number,
-    average_efficiency_pct: number,
+    average_duration_hours: nullable.describe(
+      "Average hours asleep (light + slow-wave + REM) per main sleep; naps and time awake in bed excluded"
+    ),
+    average_performance_pct: nullable,
+    average_efficiency_pct: nullable,
   }),
   workouts: z.object({
-    count: number,
-    total_strain: number,
-    total_calories_kj: number,
+    count: nullable,
+    total_strain: nullable,
+    total_calories_kj: nullable,
     sport_breakdown: z.record(z.string(), number),
   }),
-  strain: z.object({ average_daily_strain: number, max_daily_strain: number }),
+  strain: z.object({ average_daily_strain: nullable, max_daily_strain: nullable }),
+  sample_sizes: z.object({
+    recovery_days: z.number().int().nonnegative(),
+    sleep_nights: z.number().int().nonnegative(),
+    completed_cycles: z.number().int().nonnegative(),
+  }),
+  calibrating: z.boolean(),
+  truncated: z.boolean(),
+  notes: z.array(z.string()),
   warnings: z.array(z.string()).optional(),
 });
+const comparisonCount = z.number().int().nonnegative();
+const comparisonDirection = z.enum(["improved", "declined", "unchanged", "insufficient_data"]);
 const comparisonMetric = z.object({
-  period_a_avg: number,
-  period_b_avg: number,
-  change_pct: number,
-  direction: z.enum(["improved", "declined", "unchanged"]),
+  period_a_avg: nullable,
+  period_b_avg: nullable,
+  period_a_n: comparisonCount,
+  period_b_n: comparisonCount,
+  change_pct: nullable,
+  direction: comparisonDirection,
 });
 const comparison = z.object({
   period_a: period,
   period_b: period,
-  recovery: comparisonMetric,
-  sleep: z.object({
-    period_a_avg_hours: number,
-    period_b_avg_hours: number,
-    change_pct: number,
-    direction: z.enum(["improved", "declined", "unchanged"]),
+  recovery: comparisonMetric.extend({
+    period_a_calibrating_n: comparisonCount,
+    period_b_calibrating_n: comparisonCount,
   }),
-  strain: comparisonMetric.extend({ direction: z.enum(["increased", "decreased", "unchanged"]) }),
+  sleep: z.object({
+    period_a_avg_hours: nullable.describe("Average time asleep per main sleep (naps excluded)"),
+    period_b_avg_hours: nullable.describe("Average time asleep per main sleep (naps excluded)"),
+    period_a_n: comparisonCount,
+    period_b_n: comparisonCount,
+    change_pct: nullable,
+    direction: comparisonDirection,
+  }),
+  strain: comparisonMetric.extend({
+    direction: z.enum(["increased", "decreased", "unchanged", "insufficient_data"]),
+  }),
+  truncated: z.boolean(),
+  notes: z.array(z.string()),
+  warnings: z.array(z.string()),
 });
 const trend = z.object({
   metric: z.string(),
   period,
+  status: z.enum(["available", "insufficient_data"]),
+  sample_size: z.number().int().nonnegative(),
+  calibrating: z.boolean().nullable(),
+  truncated: z.boolean(),
   values: z.array(number),
-  statistics: z.object({ mean: number, median: number, std_dev: number, min: number, max: number }),
-  trend: z.object({ direction, slope: number, confidence: z.enum(["high", "medium", "low"]) }),
+  dates: z.array(z.string()),
+  statistics: z.object({
+    mean: nullable,
+    median: nullable,
+    std_dev: nullable,
+    min: nullable,
+    max: nullable,
+  }),
+  trend: z.object({
+    direction: direction.nullable(),
+    change: z.enum(["increasing", "decreasing", "stable"]).nullable(),
+    better_when: z.enum(["higher", "lower"]).nullable(),
+    slope: nullable,
+    confidence: z.enum(["high", "medium", "low"]).nullable(),
+  }),
   anomalies: z.array(z.object({ date: z.string(), value: number, deviation_from_mean: number })),
+  notes: z.array(z.string()),
 });
 const today = z.object({
   timestamp: z.string(),
@@ -80,6 +122,7 @@ const today = z.object({
       resting_heart_rate: number,
       spo2_pct: nullable,
       skin_temp_celsius: nullable,
+      user_calibrating: z.boolean(),
     })
     .nullable(),
   sleep: z
@@ -111,21 +154,37 @@ const today = z.object({
     })
     .nullable(),
   summary: z.string(),
+  notes: z.array(z.string()),
   data_quality: dataQualitySchema,
 });
+const calendarCount = z.number().int().nonnegative();
 const calendar = z.object({
-  period,
+  period: period.extend({ utc_offset: z.string() }),
   days: z.array(
     z.object({
       date: z.string(),
       recovery_score: nullable,
       recovery_zone: z.enum(["green", "yellow", "red"]).nullable(),
+      recovery_calibrating: z.boolean().nullable(),
       sleep_hours: nullable,
       sleep_performance_pct: nullable,
       day_strain: nullable,
+      day_strain_in_progress: z.boolean(),
     })
   ),
-  averages: z.object({ recovery: nullable, sleep_hours: nullable, strain: nullable }),
+  averages: z.object({
+    recovery: nullable,
+    sleep_hours: nullable,
+    strain: nullable,
+    sample_sizes: z.object({
+      recovery: calendarCount,
+      sleep_hours: calendarCount,
+      strain: calendarCount,
+    }),
+  }),
+  truncated: z.boolean(),
+  notes: z.array(z.string()),
+  warnings: z.array(z.string()),
 });
 
 export const outputSchemas: Record<string, z.ZodObject> = {
@@ -182,7 +241,7 @@ export const aggregateOutputSchemas: Record<string, z.ZodObject> = {
     .omit({ warnings: true })
     .extend({ workouts: weekly.shape.workouts.omit({ sport_breakdown: true }) }),
   compare_periods: comparison,
-  get_trend: trend.omit({ values: true, anomalies: true }),
+  get_trend: trend.omit({ values: true, dates: true, anomalies: true }),
   get_baselines: baselinesOutputSchema.extend({
     metrics: z.record(
       z.enum(["hrv", "rhr", "respiratory_rate", "sleep_hours", "recovery_score"]),

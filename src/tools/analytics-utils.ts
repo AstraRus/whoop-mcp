@@ -2,6 +2,7 @@ import { z } from "zod";
 import { offsetSchema } from "../api/record-schemas.js";
 import type { Sleep } from "../api/types.js";
 import type { WhoopClient } from "../api/client.js";
+import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../api/client.js";
 import { fetchAllPages, ABSOLUTE_MAX_RECORDS } from "../api/pagination.js";
 import { parseUtcOffset } from "./date-utils.js";
 
@@ -108,12 +109,41 @@ export function parseRecords<T>(
   return parsed;
 }
 
+/** Lower rank = more actionable for the user */
+function errorRank(error: unknown): number {
+  if (error instanceof WhoopAuthError) return 0;
+  if (error instanceof WhoopApiError) {
+    if (error.statusCode === 401 || error.statusCode === 403) return 1;
+    if (error.statusCode === 429) return 2;
+    return 3;
+  }
+  if (error instanceof WhoopNetworkError) return 4;
+  return 5;
+}
+
+/**
+ * Pick the most relevant of several upstream failures (auth, then rate limit,
+ * then other API errors, then network) so the server can explain it accurately.
+ */
+export function mostRelevantError(reasons: unknown[]): Error {
+  const reason = [...reasons].sort((left, right) => errorRank(left) - errorRank(right))[0];
+  return reason instanceof Error
+    ? reason
+    : new Error("All WHOOP requests failed.", { cause: reason });
+}
+
+/**
+ * Fetch and validate every page of an analytics source. A fetch failure is
+ * reported as status "fetch_failed" with the original `error`, so callers
+ * that cannot continue can rethrow it and the user sees the real cause
+ * (authorization, rate limit, network) instead of a generic message.
+ */
 export async function loadAnalyticsSource<T>(
   client: WhoopClient,
   endpoint: string,
   period: { start: string; end: string },
   schema: z.ZodType<T>
-): Promise<{ records: T[]; quality: SourceQuality }> {
+): Promise<{ records: T[]; quality: SourceQuality; error?: unknown }> {
   const query = new URLSearchParams({ ...period, limit: "25" });
   const pageSchema = z.object({
     records: z.array(z.unknown()),
@@ -131,13 +161,10 @@ export async function loadAnalyticsSource<T>(
     const records = parseRecords(result.records, schema, quality);
     return { records, quality };
   } catch (error: unknown) {
-    return {
-      records: [],
-      quality: {
-        ...sourceQuality(),
-        status: error instanceof z.ZodError ? "invalid" : "fetch_failed",
-      },
-    };
+    if (error instanceof z.ZodError) {
+      return { records: [], quality: { ...sourceQuality(), status: "invalid" } };
+    }
+    return { records: [], quality: { ...sourceQuality(), status: "fetch_failed" }, error };
   }
 }
 

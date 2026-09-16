@@ -1,15 +1,24 @@
 /**
  * Tool: get_weekly_summary
  *
- * Fetches recovery, sleep, workout, and cycle data for a 7-day period
- * and returns computed aggregates including averages, totals, and trends.
+ * Summarizes one Monday-to-Sunday week in the user's local time: recovery,
+ * sleep, workouts and daily strain, plus the recovery trend.
  *
- * Uses fetchAllPages with serialized endpoint calls to respect rate limits.
- * Filters unscored records. Returns partial results with warnings if some
- * endpoints fail; throws only if ALL 4 endpoints fail.
+ * Each record is counted in exactly one week, by its own local day: cycles by
+ * cycleDay(), recoveries through their cycle (cycle_id), sleeps by the local
+ * day they end, workouts by the local day they start. The in-progress cycle
+ * is left out of strain averages.
+ *
+ * Sparse data (a new or still-calibrating WHOOP user) is a normal state:
+ * values that cannot be computed are null, never 0, with the reason in
+ * `notes`. Endpoint calls are serialized to respect rate limits; partial
+ * failures return partial results with warnings, and the call throws only if
+ * ALL 4 endpoints fail.
  */
 
+import type { z } from "zod";
 import type { WhoopClient } from "../api/client.js";
+import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../api/client.js";
 import { fetchAllPages } from "../api/pagination.js";
 import {
   ENDPOINT_RECOVERY,
@@ -17,9 +26,24 @@ import {
   ENDPOINT_WORKOUT,
   ENDPOINT_CYCLE,
 } from "../api/endpoints.js";
-import type { Recovery, Sleep, Workout, Cycle } from "../api/types.js";
-import { resolveDateExpression } from "./date-utils.js";
-import { mean, linearRegression, trendDirection } from "./stats-utils.js";
+import {
+  cycleRecordSchema,
+  recoveryRecordSchema,
+  sleepRecordSchema,
+  workoutRecordSchema,
+} from "../api/record-schemas.js";
+import {
+  asleepHours,
+  cycleDay,
+  DAY_MS,
+  localDay,
+  mainSleeps,
+  parseRecords,
+  sourceQuality,
+} from "./analytics-utils.js";
+import { resolveUserUtcOffset } from "./collection-utils.js";
+import { parseUtcOffset, resolveDateExpression } from "./date-utils.js";
+import { mean, linearRegressionXY, trendDirection, MIN_TREND_POINTS } from "./stats-utils.js";
 import type { TrendDirectionResult } from "./stats-utils.js";
 
 // ---------------------------------------------------------------------------
@@ -28,60 +52,122 @@ import type { TrendDirectionResult } from "./stats-utils.js";
 
 /** Input parameters for get_weekly_summary */
 export interface WeeklySummaryParams {
-  /** ISO 8601 start of week, or date expression. Defaults to most recent Monday. */
+  /** Any day in the week (date, date-time or expression). Defaults to the current week. */
   week_start?: string;
 }
 
 /** Output shape for get_weekly_summary */
 export interface WeeklySummary {
+  /** Local Monday 00:00, written with the user's UTC offset */
   week_start: string;
+  /** Local Sunday 23:59:59.999, written with the user's UTC offset */
   week_end: string;
   recovery: {
-    average_score: number;
-    min_score: number;
-    max_score: number;
-    average_hrv: number;
-    average_rhr: number;
-    trend: TrendDirectionResult;
+    average_score: number | null;
+    min_score: number | null;
+    max_score: number | null;
+    average_hrv: number | null;
+    average_rhr: number | null;
+    trend: TrendDirectionResult | null;
   };
   sleep: {
-    average_duration_hours: number;
-    average_performance_pct: number;
-    average_efficiency_pct: number;
+    /** Hours asleep (light + slow-wave + REM) per main sleep; time in bed is not counted */
+    average_duration_hours: number | null;
+    average_performance_pct: number | null;
+    average_efficiency_pct: number | null;
   };
   workouts: {
-    count: number;
-    total_strain: number;
-    total_calories_kj: number;
+    count: number | null;
+    total_strain: number | null;
+    total_calories_kj: number | null;
     sport_breakdown: Record<string, number>;
   };
   strain: {
-    average_daily_strain: number;
-    max_daily_strain: number;
+    average_daily_strain: number | null;
+    max_daily_strain: number | null;
   };
+  sample_sizes: {
+    recovery_days: number;
+    sleep_nights: number;
+    completed_cycles: number;
+  };
+  calibrating: boolean;
+  truncated: boolean;
+  notes: string[];
   warnings?: string[];
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+type FetchOutcome<T> =
+  | { ok: true; records: T[]; truncated: boolean; invalid: number }
+  | { ok: false; error: unknown };
 
-/** Get the Monday of the week containing the given date (ISO week, UTC) */
-function getMondayUTC(date: Date): Date {
-  const d = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-  const day = d.getUTCDay();
-  const diff = day === 0 ? 6 : day - 1;
-  d.setUTCDate(d.getUTCDate() - diff);
-  return d;
+interface Week {
+  monday: string;
+  sunday: string;
+  /** Local Monday 00:00 as epoch ms */
+  startMs: number;
+  /** Following local Monday 00:00 as epoch ms (exclusive) */
+  endMs: number;
 }
 
-/** Get end-of-day Sunday for a given Monday */
-function getSundayEndUTC(monday: Date): Date {
-  const sunday = new Date(monday);
-  sunday.setUTCDate(sunday.getUTCDate() + 6);
-  return new Date(
-    Date.UTC(sunday.getUTCFullYear(), sunday.getUTCMonth(), sunday.getUTCDate(), 23, 59, 59, 999)
-  );
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_RECORDS_PER_ENDPOINT = 200;
+const MAX_PAGES = 10;
+const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+// ---------------------------------------------------------------------------
+// Local-day helpers
+// ---------------------------------------------------------------------------
+
+function dayMs(day: string): number {
+  return Date.parse(`${day}T00:00:00.000Z`);
+}
+
+function addDays(day: string, count: number): string {
+  return new Date(dayMs(day) + count * DAY_MS).toISOString().slice(0, 10);
+}
+
+function weekdayName(day: string): string {
+  return WEEKDAYS[new Date(dayMs(day)).getUTCDay()]!;
+}
+
+/** Monday of the ISO week containing a calendar day */
+function mondayOf(day: string): string {
+  const weekday = new Date(dayMs(day)).getUTCDay();
+  return addDays(day, weekday === 0 ? -6 : 1 - weekday);
+}
+
+/** ISO 8601 timestamp written in the user's offset, so its date part is the local date */
+function formatLocal(ms: number, offset: string): string {
+  const wallClock = new Date(ms + parseUtcOffset(offset) * 60_000).toISOString().slice(0, 23);
+  return `${wallClock}${offset === "Z" ? "Z" : offset}`;
+}
+
+/**
+ * Resolve week_start to the local Monday-to-Sunday week containing it.
+ * Without week_start, the week containing today.
+ */
+function resolveWeek(
+  weekStart: string | undefined,
+  now: Date,
+  offset: string
+): Week & { requestedDay: string } {
+  const requestedDay =
+    weekStart === undefined
+      ? localDay(now.toISOString(), offset)
+      : localDay(resolveDateExpression(weekStart, now, offset).start, offset);
+  const monday = mondayOf(requestedDay);
+  const offsetMs = parseUtcOffset(offset) * 60_000;
+  return {
+    requestedDay,
+    monday,
+    sunday: addDays(monday, 6),
+    startMs: dayMs(monday) - offsetMs,
+    endMs: dayMs(addDays(monday, 7)) - offsetMs,
+  };
 }
 
 /** Build a query string with start/end params and limit=25 */
@@ -93,53 +179,56 @@ function buildWeekQuery(start: string, end: string): string {
   return `?${params.toString()}`;
 }
 
-/** Resolve week_start parameter to a start/end ISO range */
-function resolveWeekRange(weekStart?: string): { start: string; end: string } {
-  if (weekStart) {
-    const resolved = resolveDateExpression(weekStart);
-    // Use resolved.start as the Monday reference
-    const monday = new Date(resolved.start);
-    const sundayEnd = getSundayEndUTC(monday);
-    return {
-      start: resolved.start,
-      end: sundayEnd.toISOString(),
-    };
-  }
-
-  // Default: current week (Monday to Sunday)
-  const now = new Date();
-  const monday = getMondayUTC(now);
-  const sundayEnd = getSundayEndUTC(monday);
-  return {
-    start: monday.toISOString(),
-    end: sundayEnd.toISOString(),
-  };
-}
-
-/** Safely fetch an endpoint, returning records or null on failure */
+/** Fetch and validate an endpoint, capturing any failure instead of throwing */
 async function safeFetch<T>(
   client: WhoopClient,
   endpoint: string,
-  query: string
-): Promise<{ records: T[]; error?: undefined } | { records?: undefined; error: string }> {
+  query: string,
+  schema: z.ZodType<T>
+): Promise<FetchOutcome<T>> {
   try {
-    const result = await fetchAllPages<T>(client, `${endpoint}${query}`, {
-      maxRecords: 50,
-      maxPages: 5,
+    const result = await fetchAllPages<unknown>(client, `${endpoint}${query}`, {
+      maxRecords: MAX_RECORDS_PER_ENDPOINT,
+      maxPages: MAX_PAGES,
       interPageDelayMs: 0, // Delay handled by serialization
     });
-    return { records: result.records };
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return { error: message };
+    const quality = sourceQuality(result.records.length, result.truncated);
+    const records = parseRecords(result.records, schema, quality);
+    return {
+      ok: true,
+      records,
+      truncated: result.truncated,
+      invalid: quality.exclusions.invalid ?? 0,
+    };
+  } catch (error: unknown) {
+    return { ok: false, error };
   }
 }
 
-/** Compute sleep duration in hours from start/end timestamps */
-function sleepDurationHours(sleep: Sleep): number {
-  const startMs = new Date(sleep.start).getTime();
-  const endMs = new Date(sleep.end).getTime();
-  return (endMs - startMs) / (1000 * 60 * 60);
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "Unknown error";
+}
+
+function isWhoopError(error: unknown): boolean {
+  return (
+    error instanceof WhoopApiError ||
+    error instanceof WhoopAuthError ||
+    error instanceof WhoopNetworkError
+  );
+}
+
+function recordsOf<T>(outcome: FetchOutcome<T>): T[] {
+  return outcome.ok ? outcome.records : [];
+}
+
+function averageOrNull(values: number[]): number | null {
+  return values.length ? mean(values) : null;
+}
+
+function finiteNumbers(values: (number | null | undefined)[]): number[] {
+  return values.filter(
+    (value): value is number => typeof value === "number" && Number.isFinite(value)
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -147,123 +236,212 @@ function sleepDurationHours(sleep: Sleep): number {
 // ---------------------------------------------------------------------------
 
 /**
- * Get a summarized health report for a given week.
+ * Get a summarized health report for the local Monday-to-Sunday week that
+ * contains `week_start` (default: the current week).
  *
- * Fetches recovery, sleep, workout, and cycle data, then computes:
- * - Average/min/max recovery score, HRV, RHR
- * - Recovery trend (improving/declining/stable)
- * - Average sleep duration, performance, efficiency
- * - Workout count, total strain, calories, sport breakdown
- * - Average and max daily strain
- *
- * Returns partial results with warnings if 1-3 endpoints fail.
- * Throws if ALL 4 endpoints fail.
+ * Returns partial results with warnings if 1-3 endpoints fail. If ALL 4 fail,
+ * rethrows the first WHOOP API/auth/network error (or a plain Error).
  */
 export async function getWeeklySummary(
   client: WhoopClient,
-  params: WeeklySummaryParams
+  params: WeeklySummaryParams,
+  now: Date = new Date()
 ): Promise<WeeklySummary> {
-  const { start, end } = resolveWeekRange(params.week_start);
-  const query = buildWeekQuery(start, end);
+  const offset = await resolveUserUtcOffset(client);
+  const week = resolveWeek(params.week_start, now, offset);
+  const inWeek = (day: string): boolean => day >= week.monday && day <= week.sunday;
+  const notes: string[] = [];
+
+  if (params.week_start !== undefined && week.requestedDay !== week.monday) {
+    notes.push(
+      `${week.requestedDay} is a ${weekdayName(week.requestedDay)}; summarizing the week from Monday ${week.monday} to Sunday ${week.sunday}.`
+    );
+  }
+  const today = localDay(now.toISOString(), offset);
+  if (inWeek(today)) {
+    notes.push(`This week is still in progress (data through ${today}).`);
+  } else if (week.monday > today) {
+    notes.push("This week has not started yet.");
+  }
+
+  // Start a day early so records spanning Monday 00:00 (e.g. Sunday-night
+  // sleep) are returned; membership is decided per record below.
+  const queryStart = new Date(week.startMs - DAY_MS).toISOString();
+  const queryEnd = new Date(week.endMs).toISOString();
+  const query = buildWeekQuery(queryStart, queryEnd);
 
   // Serialize endpoint calls (not parallel) to respect rate limits
-  const recoveryResult = await safeFetch<Recovery>(client, ENDPOINT_RECOVERY, query);
-  const sleepResult = await safeFetch<Sleep>(client, ENDPOINT_SLEEP, query);
-  const workoutResult = await safeFetch<Workout>(client, ENDPOINT_WORKOUT, query);
-  const cycleResult = await safeFetch<Cycle>(client, ENDPOINT_CYCLE, query);
+  const sources = {
+    recovery: await safeFetch(client, ENDPOINT_RECOVERY, query, recoveryRecordSchema),
+    sleep: await safeFetch(client, ENDPOINT_SLEEP, query, sleepRecordSchema),
+    workout: await safeFetch(client, ENDPOINT_WORKOUT, query, workoutRecordSchema),
+    cycle: await safeFetch(client, ENDPOINT_CYCLE, query, cycleRecordSchema),
+  };
 
-  // Check if all endpoints failed
   const warnings: string[] = [];
-  if (recoveryResult.error) warnings.push(`recovery: ${recoveryResult.error}`);
-  if (sleepResult.error) warnings.push(`sleep: ${sleepResult.error}`);
-  if (workoutResult.error) warnings.push(`workout: ${workoutResult.error}`);
-  if (cycleResult.error) warnings.push(`cycle: ${cycleResult.error}`);
+  const failures: unknown[] = [];
+  let truncated = false;
+  for (const [name, outcome] of Object.entries(sources)) {
+    if (!outcome.ok) {
+      warnings.push(`${name}: ${errorMessage(outcome.error)}`);
+      failures.push(outcome.error);
+      notes.push(`${name[0]!.toUpperCase()}${name.slice(1)} data could not be loaded from WHOOP.`);
+      continue;
+    }
+    if (outcome.truncated) {
+      truncated = true;
+      notes.push(
+        `WHOOP returned more ${name} records than could be fetched; some records of the week may be missing.`
+      );
+    }
+    if (outcome.invalid) {
+      notes.push(
+        `${outcome.invalid} ${name} record(s) did not match the expected WHOOP format and were skipped.`
+      );
+    }
+  }
 
-  if (warnings.length === 4) {
+  if (failures.length === 4) {
+    const typed = failures.find(isWhoopError);
+    if (typed) throw typed;
     throw new Error(`All endpoints failed: ${warnings.join("; ")}`);
   }
 
-  // --- Recovery aggregation ---
-  const scoredRecoveries = (recoveryResult.records ?? []).filter(
-    (r) => r.score_state === "SCORED" && r.score
-  );
-  const recoveryScores = scoredRecoveries.map((r) => r.score!.recovery_score);
-  const hrvValues = scoredRecoveries.map((r) => r.score!.hrv_rmssd_milli);
-  const rhrValues = scoredRecoveries.map((r) => r.score!.resting_heart_rate);
+  const cycles = recordsOf(sources.cycle);
+  const sleeps = recordsOf(sources.sleep);
 
-  let recoveryTrend: TrendDirectionResult = "stable";
-  if (recoveryScores.length >= 2) {
-    const reg = linearRegression(recoveryScores);
-    recoveryTrend = trendDirection(reg.slope, reg.r2);
+  // --- Recovery: joined to its cycle; oldest first for the trend ---
+  const cyclesById = new Map(cycles.map((cycle) => [cycle.id, cycle]));
+  const sleepsById = new Map(sleeps.map((sleep) => [sleep.id, sleep]));
+  const weekRecoveries = recordsOf(sources.recovery)
+    .filter((record) => record.score_state === "SCORED" && record.score)
+    .map((record) => {
+      const cycle = cyclesById.get(record.cycle_id);
+      const sleep = sleepsById.get(record.sleep_id);
+      const placement = cycle
+        ? { day: cycleDay(cycle), anchor: Date.parse(cycle.start) }
+        : sleep
+          ? { day: localDay(sleep.end, sleep.timezone_offset), anchor: Date.parse(sleep.start) }
+          : { day: localDay(record.created_at, offset), anchor: Date.parse(record.created_at) };
+      return { ...placement, score: record.score! };
+    })
+    .filter((recovery) => inWeek(recovery.day))
+    .sort((left, right) => left.anchor - right.anchor);
+
+  const recoveryScores = weekRecoveries.map((recovery) => recovery.score.recovery_score);
+  const calibratingCount = weekRecoveries.filter((r) => r.score.user_calibrating).length;
+
+  let recoveryTrend: TrendDirectionResult | null = null;
+  if (recoveryScores.length >= MIN_TREND_POINTS) {
+    const firstDay = dayMs(weekRecoveries[0]!.day);
+    const xs = weekRecoveries.map((recovery) => (dayMs(recovery.day) - firstDay) / DAY_MS);
+    const regression = linearRegressionXY(xs, recoveryScores);
+    recoveryTrend = trendDirection(regression.slope, regression.r2);
   }
 
   const recovery = {
-    average_score: recoveryScores.length > 0 ? mean(recoveryScores) : 0,
-    min_score: recoveryScores.length > 0 ? Math.min(...recoveryScores) : 0,
-    max_score: recoveryScores.length > 0 ? Math.max(...recoveryScores) : 0,
-    average_hrv: hrvValues.length > 0 ? mean(hrvValues) : 0,
-    average_rhr: rhrValues.length > 0 ? mean(rhrValues) : 0,
+    average_score: averageOrNull(recoveryScores),
+    min_score: recoveryScores.length ? Math.min(...recoveryScores) : null,
+    max_score: recoveryScores.length ? Math.max(...recoveryScores) : null,
+    average_hrv: averageOrNull(weekRecoveries.map((r) => r.score.hrv_rmssd_milli)),
+    average_rhr: averageOrNull(weekRecoveries.map((r) => r.score.resting_heart_rate)),
     trend: recoveryTrend,
   };
 
-  // --- Sleep aggregation (exclude naps) ---
-  const scoredSleeps = (sleepResult.records ?? []).filter(
-    (s) => s.score_state === "SCORED" && s.score && !s.nap
+  if (sources.recovery.ok) {
+    if (!recoveryScores.length) {
+      notes.push("No scored recovery recorded this week.");
+    } else if (recoveryScores.length < MIN_TREND_POINTS) {
+      notes.push(
+        `Not enough data yet for a recovery trend: ${recoveryScores.length} scored recovery day(s) this week; a trend needs at least ${MIN_TREND_POINTS}.`
+      );
+    }
+  }
+  if (calibratingCount) {
+    notes.push(
+      `WHOOP is still calibrating (${calibratingCount} of ${recoveryScores.length} scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.`
+    );
+  }
+
+  // --- Sleep: main sleeps only, by the local day they end, hours asleep ---
+  const sleepQuality = sourceQuality();
+  const nights = mainSleeps(
+    sleeps.filter((sleep) => inWeek(localDay(sleep.end, sleep.timezone_offset))),
+    // Membership was decided by local day; the period only has to contain every candidate
+    {
+      start: new Date(Date.parse(queryStart) - DAY_MS).toISOString(),
+      end: new Date(Date.parse(queryEnd) + DAY_MS).toISOString(),
+    },
+    sleepQuality
   );
-  const sleepDurations = scoredSleeps.map(sleepDurationHours);
-  const sleepPerformances = scoredSleeps
-    .map((s) => s.score!.sleep_performance_percentage)
-    .filter((v): v is number => typeof v === "number");
-  const sleepEfficiencies = scoredSleeps
-    .map((s) => s.score!.sleep_efficiency_percentage)
-    .filter((v): v is number => typeof v === "number");
-
   const sleep = {
-    average_duration_hours: sleepDurations.length > 0 ? mean(sleepDurations) : 0,
-    average_performance_pct: sleepPerformances.length > 0 ? mean(sleepPerformances) : 0,
-    average_efficiency_pct: sleepEfficiencies.length > 0 ? mean(sleepEfficiencies) : 0,
+    average_duration_hours: averageOrNull(nights.map(asleepHours)),
+    average_performance_pct: averageOrNull(
+      finiteNumbers(nights.map((night) => night.score?.sleep_performance_percentage))
+    ),
+    average_efficiency_pct: averageOrNull(
+      finiteNumbers(nights.map((night) => night.score?.sleep_efficiency_percentage))
+    ),
   };
+  if (sources.sleep.ok && !nights.length) {
+    notes.push("No scored main sleep recorded this week.");
+  }
 
-  // --- Workout aggregation ---
-  const scoredWorkouts = (workoutResult.records ?? []).filter(
-    (w) => w.score_state === "SCORED" && w.score
+  // --- Workouts: by the local day they start ---
+  const scoredWorkouts = recordsOf(sources.workout).filter(
+    (workout) =>
+      workout.score_state === "SCORED" &&
+      workout.score &&
+      inWeek(localDay(workout.start, workout.timezone_offset))
   );
   const sportBreakdown: Record<string, number> = {};
   let totalStrain = 0;
   let totalCaloriesKj = 0;
+  for (const workout of scoredWorkouts) {
+    totalStrain += workout.score!.strain;
+    totalCaloriesKj += workout.score!.kilojoule;
+    sportBreakdown[workout.sport_name] = (sportBreakdown[workout.sport_name] ?? 0) + 1;
+  }
+  const workouts = sources.workout.ok
+    ? {
+        count: scoredWorkouts.length,
+        total_strain: totalStrain,
+        total_calories_kj: totalCaloriesKj,
+        sport_breakdown: sportBreakdown,
+      }
+    : { count: null, total_strain: null, total_calories_kj: null, sport_breakdown: {} };
 
-  for (const w of scoredWorkouts) {
-    totalStrain += w.score!.strain;
-    totalCaloriesKj += w.score!.kilojoule;
-    sportBreakdown[w.sport_name] = (sportBreakdown[w.sport_name] ?? 0) + 1;
+  // --- Strain: completed cycles by cycleDay ---
+  const weekCycles = cycles.filter((cycle) => inWeek(cycleDay(cycle)));
+  const strainValues = weekCycles
+    .filter((cycle) => cycle.end != null && cycle.score_state === "SCORED" && cycle.score)
+    .map((cycle) => cycle.score!.strain);
+  const strain = {
+    average_daily_strain: averageOrNull(strainValues),
+    max_daily_strain: strainValues.length ? Math.max(...strainValues) : null,
+  };
+  if (weekCycles.some((cycle) => cycle.end == null)) {
+    notes.push("Today's strain is still accumulating and is not included.");
+  }
+  if (sources.cycle.ok && !strainValues.length) {
+    notes.push("No completed, scored cycle this week, so daily strain is null.");
   }
 
-  const workouts = {
-    count: scoredWorkouts.length,
-    total_strain: totalStrain,
-    total_calories_kj: totalCaloriesKj,
-    sport_breakdown: sportBreakdown,
-  };
-
-  // --- Cycle/Strain aggregation ---
-  const scoredCycles = (cycleResult.records ?? []).filter(
-    (c) => c.score_state === "SCORED" && c.score
-  );
-  const strainValues = scoredCycles.map((c) => c.score!.strain);
-
-  const strain = {
-    average_daily_strain: strainValues.length > 0 ? mean(strainValues) : 0,
-    max_daily_strain: strainValues.length > 0 ? Math.max(...strainValues) : 0,
-  };
-
-  // --- Build result ---
   const result: WeeklySummary = {
-    week_start: start,
-    week_end: end,
+    week_start: formatLocal(week.startMs, offset),
+    week_end: formatLocal(week.endMs - 1, offset),
     recovery,
     sleep,
     workouts,
     strain,
+    sample_sizes: {
+      recovery_days: recoveryScores.length,
+      sleep_nights: nights.length,
+      completed_cycles: strainValues.length,
+    },
+    calibrating: calibratingCount > 0,
+    truncated,
+    notes,
   };
 
   if (warnings.length > 0) {

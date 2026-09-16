@@ -168,6 +168,53 @@ export function linearRegression(values: number[]): LinearRegressionResult {
   return { slope, r2 };
 }
 
+/**
+ * Fewest data points a trend (direction, slope, confidence) is reported for.
+ * Two or three points always fit a line well, so they say nothing about a
+ * trend.
+ */
+export const MIN_TREND_POINTS = 4;
+
+/**
+ * Simple linear regression of ys on explicit xs (e.g. days since the first
+ * observation), so gaps between observations are respected. Callers must pass
+ * xs in chronological order together with their ys.
+ *
+ * Returns slope (change in y per unit of x) and R². A single point, identical
+ * xs or constant ys return { slope: 0, r2: 0 }.
+ *
+ * @throws Error if the arrays are empty or differ in length
+ * @throws RangeError if any value is not finite
+ */
+export function linearRegressionXY(xs: number[], ys: number[]): LinearRegressionResult {
+  assertNonEmpty(ys, "linearRegressionXY");
+  if (xs.length !== ys.length) {
+    throw new Error("linearRegressionXY: xs and ys must have the same length");
+  }
+  if ([...xs, ...ys].some((value) => !Number.isFinite(value))) {
+    throw new RangeError("linearRegressionXY requires finite values.");
+  }
+  const n = ys.length;
+  const xMean = mean(xs);
+  const yMean = mean(ys);
+  let sxx = 0;
+  let sxy = 0;
+  let syy = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i]! - xMean;
+    const dy = ys[i]! - yMean;
+    sxx += dx * dx;
+    sxy += dx * dy;
+    syy += dy * dy;
+  }
+  if (n === 1 || sxx === 0) {
+    return { slope: 0, r2: 0 };
+  }
+  const slope = sxy / sxx;
+  const r2 = syy === 0 ? 0 : Math.min(1, (sxy * sxy) / (sxx * syy));
+  return { slope, r2 };
+}
+
 // ---------------------------------------------------------------------------
 // Anomaly detection
 // ---------------------------------------------------------------------------

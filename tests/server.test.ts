@@ -637,10 +637,165 @@ describe("createWhoopServer (error handling)", () => {
       const content = result.content as Array<{ type: string; text: string }>;
       expect(content[0].text).toContain("403");
       expect(content[0].text).not.toContain("No access");
-      expect(content[0].text).toContain("WHOOP API returned");
+      expect(content[0].text).toContain("denied access");
+      expect(content[0].text).toContain("setup --verify");
     } finally {
       await cleanup();
     }
+  });
+
+  /** Call a tool against a client that always throws `error`; returns the error text. */
+  async function errorText(
+    error: unknown,
+    name = "get_profile",
+    args: Record<string, unknown> = {}
+  ): Promise<string> {
+    const throwingClient: WhoopClient = {
+      get: async <T>(): Promise<T> => {
+        throw error;
+      },
+    };
+    const { server } = createWhoopServer(throwingClient);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcpClient = new Client({ name: "error-text-client", version: "1.0.0" });
+    await Promise.all([mcpClient.connect(clientTransport), server.connect(serverTransport)]);
+    try {
+      const result = await mcpClient.callTool({ name, arguments: args });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toBeUndefined();
+      const content = result.content as Array<{ type: string; text: string }>;
+      expect(content).toHaveLength(1);
+      return content[0].text;
+    } finally {
+      await mcpClient.close();
+      await server.close();
+    }
+  }
+
+  const SENSITIVE_BODY = {
+    error_description: "refresh token rt-SECRET-123 rejected for jane@example.com",
+    recovery_score: 42,
+  };
+
+  it.each([
+    [400, "Bad Request", "get_cycle_collection", ["HTTP 400", "rejected the request parameters"]],
+    [404, "Not Found", "get_cycle_by_id", ["HTTP 404", "no matching record"]],
+    [401, "Unauthorized", "get_profile", ["HTTP 401", "setup --verify"]],
+    [429, "Too Many Requests", "get_recovery_collection", ["HTTP 429", "rate limit"]],
+    [500, "Internal Server Error", "get_sleep_collection", ["HTTP 500", "Retry later"]],
+    [502, "Bad Gateway", "get_workout_collection", ["HTTP 502", "unavailable"]],
+  ])("maps WhoopApiError %i to a specific message", async (status, statusText, tool, phrases) => {
+    const args = tool === "get_cycle_by_id" ? { id: 1 } : {};
+    const text = await errorText(new WhoopApiError(status, statusText, SENSITIVE_BODY), tool, args);
+
+    for (const phrase of phrases) {
+      expect(text).toContain(phrase);
+    }
+    expect(text).not.toContain("WHOOP API returned");
+    expect(text).not.toContain("SECRET");
+    expect(text).not.toContain("jane@example.com");
+    expect(text).not.toContain(statusText);
+  });
+
+  it("does not suggest retrying a 400 or 404 rejection", async () => {
+    expect(await errorText(new WhoopApiError(400, "Bad Request", null))).not.toMatch(/retry/i);
+    expect(
+      await errorText(new WhoopApiError(404, "Not Found", null), "get_cycle_by_id", { id: 1 })
+    ).toContain("ids and dates");
+  });
+
+  it("passes an invalid date expression's own message through", async () => {
+    const emptyClient: WhoopClient = {
+      get: async <T>(): Promise<T> => ({ records: [], next_token: null }) as T,
+    };
+    const { server } = createWhoopServer(emptyClient);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcpClient = new Client({ name: "date-error-client", version: "1.0.0" });
+    await Promise.all([mcpClient.connect(clientTransport), server.connect(serverTransport)]);
+
+    try {
+      const result = await mcpClient.callTool({
+        name: "get_recovery_collection",
+        arguments: { start: "next tuesday" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+      expect(text).toContain('Unrecognized date expression: "next tuesday"');
+      expect(text).toContain("Supported:");
+      expect(text).not.toContain("unexpected error");
+    } finally {
+      await mcpClient.close();
+      await server.close();
+    }
+  });
+
+  it("maps InvalidDateExpression thrown anywhere in a tool to its message", async () => {
+    const { InvalidDateExpression } = await import("../src/tools/date-utils.js");
+    const text = await errorText(
+      new InvalidDateExpression("Periods overlap. Provide two non-overlapping time ranges.")
+    );
+
+    expect(text).toBe("Periods overlap. Provide two non-overlapping time ranges.");
+  });
+
+  it("bounds long or control-character date input echoed in the message", async () => {
+    const { InvalidDateExpression } = await import("../src/tools/date-utils.js");
+    const hugeInput = `x\n${"y".repeat(5000)}`;
+    const text = await errorText(
+      new InvalidDateExpression(
+        `Unrecognized date expression: "${hugeInput}". Supported: "today", "yesterday".`
+      )
+    );
+
+    expect(text.length).toBeLessThanOrEqual(600);
+    expect(text).not.toMatch(/\p{Cc}/u);
+    expect(text).toContain("…");
+    expect(text).toContain('Supported: "today", "yesterday".');
+  });
+
+  it("names the failing fields for zod errors without echoing values", async () => {
+    const { z } = await import("zod");
+    const parsed = z.object({ days: z.number() }).safeParse({ days: "SECRET-VALUE" });
+    const text = await errorText(parsed.error);
+
+    expect(text).toContain("Invalid input or data");
+    expect(text).toContain("days");
+    expect(text).not.toContain("SECRET-VALUE");
+  });
+
+  it("reports a timeout as a network message", async () => {
+    const timeout = new Error("The operation was aborted due to timeout");
+    timeout.name = "TimeoutError";
+    const text = await errorText(new WhoopNetworkError(timeout));
+
+    expect(text).toContain("Network error");
+    expect(text).toContain("did not respond in time");
+  });
+
+  it("reports a token refresh that could not reach WHOOP as a network problem", async () => {
+    const text = await errorText(
+      new WhoopAuthError(new WhoopNetworkError(new TypeError("fetch failed")))
+    );
+
+    expect(text).toContain("Network error");
+    expect(text).not.toContain("setup --verify");
+  });
+
+  it("reports an auth failure wrapped in a network error as an auth failure", async () => {
+    const text = await errorText(new WhoopNetworkError(new WhoopAuthError(new Error("expired"))));
+
+    expect(text).toContain("authentication failed");
+    expect(text).not.toContain("internet connection");
+  });
+
+  it("keeps RangeError and unknown error details out of the message", async () => {
+    expect(await errorText(new RangeError("Invalid time value SECRET"))).toBe(
+      "Invalid input or data. Check the requested parameters and date range."
+    );
+    expect(await errorText(new Error("Insufficient data SECRET"))).toBe(
+      "An unexpected error occurred. Check configuration and retry."
+    );
   });
 
   it("returns isError with network message for WhoopNetworkError", async () => {

@@ -1,521 +1,727 @@
 /**
  * Tests for get_weekly_summary tool.
  *
+ * Fixtures are live-shaped: WHOOP returns records newest first, a cycle
+ * starts at the evening sleep onset, the user is at +02:00, the current cycle
+ * has end:null, next_token is null on the last page, and a new user's
+ * recoveries are calibrating with only 2-3 days of history.
+ *
  * Verifies that the weekly summary:
- * - Fetches recovery, sleep, workout, cycle for a 7-day period
- * - Computes correct averages/aggregates
- * - Determines recovery trend via linear regression
- * - Handles partial failures gracefully (some endpoints down)
- * - Returns error only if ALL 4 endpoints fail
- * - Filters unscored records
- * - Defaults to current week
- * - Accepts enhanced date expressions
+ * - Covers the local Monday-to-Sunday week containing week_start (snapped)
+ * - Accepts date-only, date-time and relative week_start values
+ * - Counts each record in exactly one week by its local day
+ * - Returns null (never 0) for averages it cannot compute, with notes
+ * - Uses hours asleep for sleep and skips null percentages
+ * - Excludes the in-progress cycle from strain
+ * - Computes the recovery trend oldest first, only from 4+ points
+ * - Flags calibrating recoveries and pagination truncation
+ * - Handles partial failures; rethrows WHOOP errors when all 4 endpoints fail
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../../src/api/client.js";
+import { WhoopApiError } from "../../src/api/client.js";
+import { createWhoopServer } from "../../src/server.js";
 import { getWeeklySummary } from "../../src/tools/get-weekly-summary.js";
-import type { Recovery, Sleep, Workout, Cycle, PaginatedResponse } from "../../src/api/types.js";
 
 // ---------------------------------------------------------------------------
-// Helpers
+// Live-shaped fake WHOOP API
 // ---------------------------------------------------------------------------
 
-function createMockClient(): { client: WhoopClient; getMock: ReturnType<typeof vi.fn> } {
-  const getMock = vi.fn();
-  const client = { get: getMock } as unknown as WhoopClient;
-  return { client, getMock };
+type WhoopRecord = Record<string, unknown>;
+type Kind = "recovery" | "sleep" | "workout" | "cycle";
+type FakeData = Record<Kind, WhoopRecord[]>;
+
+interface DaySpec {
+  /** Local (+02:00) day the cycle covers / the sleep ends */
+  day: string;
+  recovery?: number;
+  hrv?: number;
+  rhr?: number;
+  strain?: number;
+  performance?: number | null;
+  efficiency?: number | null;
+  calibrating?: boolean;
 }
 
-function makeRecovery(
-  overrides: Partial<Recovery> & { score?: Partial<Recovery["score"]> } = {}
-): Recovery {
-  return {
-    cycle_id: 1,
-    sleep_id: "s1",
-    user_id: 100,
-    created_at: "2026-05-26T06:00:00.000Z",
-    updated_at: "2026-05-26T06:00:00.000Z",
-    score_state: "SCORED",
-    score: {
-      user_calibrating: false,
-      recovery_score: 75,
-      resting_heart_rate: 55,
-      hrv_rmssd_milli: 60,
-      spo2_percentage: 98,
-      skin_temp_celsius: 33.5,
-      ...overrides.score,
-    },
-    ...overrides,
-    // Re-apply score to override the spread
-  } as Recovery;
+const NOW = new Date("2026-09-16T12:00:00.000Z"); // Wednesday 14:00 local (+02:00)
+const HOUR_MS = 3_600_000;
+const DAY_MS = 86_400_000;
+
+function shiftDay(day: string, count: number): string {
+  return new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY_MS).toISOString().slice(0, 10);
 }
 
-function makeSleep(overrides: Partial<Sleep> = {}): Sleep {
+/**
+ * One entry per local day (ascending). Bedtime is 23:00 local the evening
+ * before, wake-up 07:00 local (8h in bed, 7h asleep); the newest cycle is open
+ * unless openLatest is false. Returned arrays are newest first, like WHOOP.
+ */
+function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeData {
+  const openLatest = options.openLatest ?? true;
+  const data: FakeData = { recovery: [], sleep: [], workout: [], cycle: [] };
+  days.forEach((spec, index) => {
+    const id = index + 1;
+    const sleepStart = `${shiftDay(spec.day, -1)}T21:00:00.000Z`;
+    const sleepEnd = `${spec.day}T05:00:00.000Z`;
+    const next = days[index + 1];
+    const cycleEnd = next
+      ? `${shiftDay(next.day, -1)}T21:00:00.000Z`
+      : openLatest
+        ? null
+        : `${spec.day}T21:00:00.000Z`;
+    const sleepId = `sleep-${spec.day}`;
+    data.sleep.push({
+      id: sleepId,
+      cycle_id: id,
+      v1_id: null,
+      user_id: 1,
+      created_at: sleepEnd,
+      updated_at: sleepEnd,
+      start: sleepStart,
+      end: sleepEnd,
+      timezone_offset: "+02:00",
+      nap: false,
+      score_state: "SCORED",
+      score: {
+        stage_summary: {
+          total_in_bed_time_milli: 8 * HOUR_MS,
+          total_awake_time_milli: HOUR_MS,
+          total_no_data_time_milli: 0,
+          total_light_sleep_time_milli: 3.5 * HOUR_MS,
+          total_slow_wave_sleep_time_milli: 1.5 * HOUR_MS,
+          total_rem_sleep_time_milli: 2 * HOUR_MS,
+          sleep_cycle_count: 4,
+          disturbance_count: 10,
+        },
+        sleep_needed: {
+          baseline_milli: 8 * HOUR_MS,
+          need_from_sleep_debt_milli: 0,
+          need_from_recent_strain_milli: 0,
+          need_from_recent_nap_milli: 0,
+        },
+        respiratory_rate: 15,
+        sleep_performance_percentage: spec.performance === undefined ? 80 : spec.performance,
+        sleep_consistency_percentage: 0,
+        sleep_efficiency_percentage: spec.efficiency === undefined ? 90 : spec.efficiency,
+      },
+    });
+    data.cycle.push({
+      id,
+      user_id: 1,
+      created_at: sleepStart,
+      updated_at: sleepStart,
+      start: sleepStart,
+      end: cycleEnd,
+      timezone_offset: "+02:00",
+      score_state: "SCORED",
+      score: {
+        strain: spec.strain ?? 10,
+        kilojoule: 8000,
+        average_heart_rate: 70,
+        max_heart_rate: 150,
+      },
+    });
+    data.recovery.push({
+      cycle_id: id,
+      sleep_id: sleepId,
+      user_id: 1,
+      created_at: `${spec.day}T05:30:00.000Z`,
+      updated_at: `${spec.day}T05:30:00.000Z`,
+      score_state: "SCORED",
+      score: {
+        user_calibrating: spec.calibrating ?? false,
+        recovery_score: spec.recovery ?? 60,
+        resting_heart_rate: spec.rhr ?? 55,
+        hrv_rmssd_milli: spec.hrv ?? 70,
+        spo2_percentage: 96,
+        skin_temp_celsius: 34,
+      },
+    });
+  });
   return {
-    id: "sleep-1",
-    cycle_id: 1,
-    user_id: 100,
-    created_at: "2026-05-26T06:00:00.000Z",
-    updated_at: "2026-05-26T06:00:00.000Z",
-    start: "2026-05-25T22:00:00.000Z",
-    end: "2026-05-26T06:00:00.000Z",
-    timezone_offset: "-05:00",
-    nap: false,
-    score_state: "SCORED",
-    score: {
-      stage_summary: {
-        total_in_bed_time_milli: 28800000,
-        total_awake_time_milli: 3600000,
-        total_no_data_time_milli: 0,
-        total_light_sleep_time_milli: 10800000,
-        total_slow_wave_sleep_time_milli: 7200000,
-        total_rem_sleep_time_milli: 7200000,
-        sleep_cycle_count: 4,
-        disturbance_count: 2,
-      },
-      sleep_needed: {
-        baseline_milli: 28800000,
-        need_from_sleep_debt_milli: 0,
-        need_from_recent_strain_milli: 0,
-        need_from_recent_nap_milli: 0,
-      },
-      respiratory_rate: 15,
-      sleep_performance_percentage: 85,
-      sleep_consistency_percentage: 90,
-      sleep_efficiency_percentage: 88,
-    },
-    ...overrides,
+    recovery: data.recovery.reverse(),
+    sleep: data.sleep.reverse(),
+    workout: [],
+    cycle: data.cycle.reverse(),
   };
 }
 
-function makeWorkout(overrides: Partial<Workout> = {}): Workout {
+function workout(
+  id: string,
+  start: string,
+  sport: string,
+  strain: number,
+  kj: number
+): WhoopRecord {
   return {
-    id: "workout-1",
-    user_id: 100,
-    created_at: "2026-05-26T10:00:00.000Z",
-    updated_at: "2026-05-26T10:00:00.000Z",
-    start: "2026-05-26T10:00:00.000Z",
-    end: "2026-05-26T11:00:00.000Z",
-    timezone_offset: "-05:00",
-    sport_name: "Running",
+    id,
+    v1_id: null,
+    user_id: 1,
+    created_at: start,
+    updated_at: start,
+    start,
+    end: new Date(Date.parse(start) + HOUR_MS).toISOString(),
+    timezone_offset: "+02:00",
+    sport_name: sport,
+    sport_id: 63,
     score_state: "SCORED",
     score: {
-      strain: 12.5,
-      average_heart_rate: 145,
-      max_heart_rate: 175,
-      kilojoule: 1200,
+      strain,
+      average_heart_rate: 120,
+      max_heart_rate: 160,
+      kilojoule: kj,
       percent_recorded: 100,
+      distance_meter: null,
+      altitude_gain_meter: null,
+      altitude_change_meter: null,
       zone_durations: {
         zone_zero_milli: 0,
-        zone_one_milli: 600000,
-        zone_two_milli: 1200000,
-        zone_three_milli: 1200000,
-        zone_four_milli: 600000,
+        zone_one_milli: 0,
+        zone_two_milli: 0,
+        zone_three_milli: 0,
+        zone_four_milli: 0,
         zone_five_milli: 0,
       },
     },
-    ...overrides,
   };
 }
 
-function makeCycle(overrides: Partial<Cycle> = {}): Cycle {
-  return {
-    id: 1,
-    user_id: 100,
-    created_at: "2026-05-26T00:00:00.000Z",
-    updated_at: "2026-05-26T23:59:59.000Z",
-    start: "2026-05-26T00:00:00.000Z",
-    end: "2026-05-26T23:59:59.000Z",
-    timezone_offset: "-05:00",
-    score_state: "SCORED",
-    score: {
-      strain: 14.2,
-      kilojoule: 8500,
-      average_heart_rate: 72,
-      max_heart_rate: 175,
-    },
-    ...overrides,
+function bounds(kind: Kind, record: WhoopRecord, data: FakeData): [number, number] {
+  if (kind === "recovery") {
+    const cycle = data.cycle.find((c) => c.id === record.cycle_id);
+    if (cycle) return bounds("cycle", cycle, data);
+    const created = Date.parse(String(record.created_at));
+    return [created, created];
+  }
+  const start = Date.parse(String(record.start));
+  return [start, record.end ? Date.parse(String(record.end)) : Number.POSITIVE_INFINITY];
+}
+
+function kindOf(pathname: string): Kind {
+  if (pathname.includes("recovery")) return "recovery";
+  if (pathname.includes("sleep")) return "sleep";
+  if (pathname.includes("workout")) return "workout";
+  return "cycle";
+}
+
+/**
+ * A fake WHOOP client: filters by overlap with start/end like WHOOP,
+ * paginates with next_token null on the last page, records every path.
+ */
+function fakeWhoop(
+  data: FakeData,
+  overrides: { fail?: Partial<Record<Kind, Error>>; endless?: Kind } = {}
+): { client: WhoopClient; paths: string[] } {
+  const paths: string[] = [];
+  const get = async <T>(path: string): Promise<T> => {
+    paths.push(path);
+    const url = new URL(path, "https://whoop.test");
+    const kind = kindOf(url.pathname);
+    const windowed = url.searchParams.has("start");
+    const failure = overrides.fail?.[kind];
+    if (failure && windowed) throw failure;
+    const start = url.searchParams.get("start");
+    const end = url.searchParams.get("end");
+    const records = data[kind].filter((record) => {
+      const [recordStart, recordEnd] = bounds(kind, record, data);
+      return (
+        (start === null || recordEnd >= Date.parse(start)) &&
+        (end === null || recordStart < Date.parse(end))
+      );
+    });
+    const limit = Number(url.searchParams.get("limit") ?? 10);
+    const offset = Number(url.searchParams.get("nextToken") ?? 0);
+    if (overrides.endless === kind && windowed) {
+      return {
+        records: Array.from({ length: limit }, () => records[0]),
+        next_token: String(offset + limit),
+      } as T;
+    }
+    const nextToken = offset + limit < records.length ? String(offset + limit) : null;
+    return { records: records.slice(offset, offset + limit), next_token: nextToken } as T;
   };
+  return { client: { get } as WhoopClient, paths };
 }
 
-/** Create a paginated response wrapper */
-function paginated<T>(records: T[]): PaginatedResponse<T> {
-  return { records };
+/** The live user: started Monday evening, two calibrating nights, open current cycle */
+function calibratingUser(): FakeData {
+  const data = history([
+    { day: "2026-09-15", recovery: 95, hrv: 150, rhr: 52, strain: 18, calibrating: true },
+    { day: "2026-09-16", recovery: 66, hrv: 108, rhr: 56, strain: 6, calibrating: true },
+  ]);
+  data.workout = [
+    workout("w1", "2026-09-14T16:00:00.000Z", "walking", 8, 1000),
+    workout("w2", "2026-09-15T15:00:00.000Z", "walking", 6, 800),
+    workout("w3", "2026-09-15T17:00:00.000Z", "running", 12, 2000),
+  ];
+  return data;
+}
+
+const EMPTY: FakeData = { recovery: [], sleep: [], workout: [], cycle: [] };
+
+function queryOf(paths: string[], prefix: string): URLSearchParams {
+  const path = paths.find((p) => p.startsWith(`${prefix}?start=`));
+  if (!path) throw new Error(`no request for ${prefix}`);
+  return new URL(path, "https://whoop.test").searchParams;
 }
 
 // ---------------------------------------------------------------------------
-// Tests
+// Week resolution
 // ---------------------------------------------------------------------------
 
-describe("getWeeklySummary", () => {
-  let client: WhoopClient;
-  let getMock: ReturnType<typeof vi.fn>;
+describe("getWeeklySummary — week resolution", () => {
+  it("defaults to the current local Monday-to-Sunday week, written in the user's offset", async () => {
+    const { client, paths } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, {}, NOW);
 
-  beforeEach(() => {
-    vi.useFakeTimers();
-    // Set current date to Thursday 2026-05-28 12:00:00 UTC
-    vi.setSystemTime(new Date("2026-05-28T12:00:00.000Z"));
-    const mock = createMockClient();
-    client = mock.client;
-    getMock = mock.getMock;
+    expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
+    expect(result.week_end).toBe("2026-09-20T23:59:59.999+02:00");
+    // WHOOP gets full UTC timestamps; the query starts a day early to catch edge records
+    const query = queryOf(paths, "/v2/recovery");
+    expect(query.get("start")).toBe("2026-09-12T22:00:00.000Z");
+    expect(query.get("end")).toBe("2026-09-20T22:00:00.000Z");
+    expect(result.notes).toContain("This week is still in progress (data through 2026-09-16).");
   });
 
-  it("defaults to current week (Monday to now) when no week_start provided", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("uses UTC days when the user's offset cannot be determined", async () => {
+    const { client, paths } = fakeWhoop(EMPTY);
+    const result = await getWeeklySummary(client, {}, NOW);
 
-    await getWeeklySummary(client, {});
-
-    // Should fetch with start = Monday 2026-05-25T00:00:00.000Z
-    const firstCall = getMock.mock.calls[0]?.[0] as string;
-    expect(firstCall).toContain("start=2026-05-25T00%3A00%3A00.000Z");
+    expect(result.week_start).toBe("2026-09-14T00:00:00.000Z");
+    expect(result.week_end).toBe("2026-09-20T23:59:59.999Z");
+    expect(queryOf(paths, "/v2/cycle").get("start")).toBe("2026-09-13T00:00:00.000Z");
   });
 
-  it("computes correct recovery averages from scored records", async () => {
-    const recoveries = [
-      makeRecovery({
-        score: {
-          user_calibrating: false,
-          recovery_score: 70,
-          resting_heart_rate: 52,
-          hrv_rmssd_milli: 55,
-          spo2_percentage: 98,
-          skin_temp_celsius: 33,
-        },
-      }),
-      makeRecovery({
-        score: {
-          user_calibrating: false,
-          recovery_score: 80,
-          resting_heart_rate: 58,
-          hrv_rmssd_milli: 65,
-          spo2_percentage: 97,
-          skin_temp_celsius: 34,
-        },
-      }),
-      makeRecovery({
-        score: {
-          user_calibrating: false,
-          recovery_score: 60,
-          resting_heart_rate: 54,
-          hrv_rmssd_milli: 50,
-          spo2_percentage: 99,
-          skin_temp_celsius: 33.5,
-        },
-      }),
-    ];
+  it("accepts a date-only week_start and never sends a date-only value to WHOOP", async () => {
+    const { client, paths } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, { week_start: "2026-09-14" }, NOW);
 
-    getMock
-      .mockResolvedValueOnce(paginated(recoveries)) // recovery
-      .mockResolvedValueOnce(paginated([])) // sleep
-      .mockResolvedValueOnce(paginated([])) // workout
-      .mockResolvedValueOnce(paginated([])); // cycle
-
-    const result = await getWeeklySummary(client, {});
-
-    expect(result.recovery.average_score).toBeCloseTo(70, 1);
-    expect(result.recovery.min_score).toBe(60);
-    expect(result.recovery.max_score).toBe(80);
-    expect(result.recovery.average_hrv).toBeCloseTo(56.67, 1);
-    expect(result.recovery.average_rhr).toBeCloseTo(54.67, 1);
+    expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
+    for (const path of paths.filter((p) => p.includes("start="))) {
+      const query = new URL(path, "https://whoop.test").searchParams;
+      expect(query.get("start")).toMatch(/T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+      expect(query.get("end")).toMatch(/T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    }
+    expect(result.notes.join(" ")).not.toMatch(/is a Monday/);
   });
 
-  it("computes correct sleep averages", async () => {
-    // 8 hours sleep, 85% performance, 88% efficiency
-    const sleeps = [
-      makeSleep({ start: "2026-05-25T22:00:00.000Z", end: "2026-05-26T06:00:00.000Z" }),
-      makeSleep({
-        start: "2026-05-26T23:00:00.000Z",
-        end: "2026-05-27T06:30:00.000Z",
-        score: {
-          stage_summary: {
-            total_in_bed_time_milli: 27000000,
-            total_awake_time_milli: 3000000,
-            total_no_data_time_milli: 0,
-            total_light_sleep_time_milli: 10000000,
-            total_slow_wave_sleep_time_milli: 7000000,
-            total_rem_sleep_time_milli: 7000000,
-            sleep_cycle_count: 3,
-            disturbance_count: 1,
-          },
-          sleep_needed: {
-            baseline_milli: 28800000,
-            need_from_sleep_debt_milli: 1800000,
-            need_from_recent_strain_milli: 0,
-            need_from_recent_nap_milli: 0,
-          },
-          respiratory_rate: 14,
-          sleep_performance_percentage: 75,
-          sleep_consistency_percentage: 85,
-          sleep_efficiency_percentage: 80,
-        },
-      }),
-    ];
+  it("snaps a mid-week date to that week's Monday and says so", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, { week_start: "2026-09-16" }, NOW);
 
-    getMock
-      .mockResolvedValueOnce(paginated([])) // recovery
-      .mockResolvedValueOnce(paginated(sleeps)) // sleep
-      .mockResolvedValueOnce(paginated([])) // workout
-      .mockResolvedValueOnce(paginated([])); // cycle
-
-    const result = await getWeeklySummary(client, {});
-
-    // Sleep 1: 8h = 28800000ms, Sleep 2: 7.5h = 27000000ms → avg 7.75h
-    expect(result.sleep.average_duration_hours).toBeCloseTo(7.75, 1);
-    expect(result.sleep.average_performance_pct).toBeCloseTo(80, 1);
-    expect(result.sleep.average_efficiency_pct).toBeCloseTo(84, 1);
-  });
-
-  it("computes correct workout stats with sport breakdown", async () => {
-    const workouts = [
-      makeWorkout({
-        sport_name: "Running",
-        score: {
-          strain: 12.5,
-          average_heart_rate: 145,
-          max_heart_rate: 175,
-          kilojoule: 1200,
-          percent_recorded: 100,
-          zone_durations: {
-            zone_zero_milli: 0,
-            zone_one_milli: 0,
-            zone_two_milli: 0,
-            zone_three_milli: 0,
-            zone_four_milli: 0,
-            zone_five_milli: 0,
-          },
-        },
-      }),
-      makeWorkout({
-        id: "workout-2",
-        sport_name: "Running",
-        score: {
-          strain: 10.0,
-          average_heart_rate: 140,
-          max_heart_rate: 170,
-          kilojoule: 1000,
-          percent_recorded: 100,
-          zone_durations: {
-            zone_zero_milli: 0,
-            zone_one_milli: 0,
-            zone_two_milli: 0,
-            zone_three_milli: 0,
-            zone_four_milli: 0,
-            zone_five_milli: 0,
-          },
-        },
-      }),
-      makeWorkout({
-        id: "workout-3",
-        sport_name: "Cycling",
-        score: {
-          strain: 8.0,
-          average_heart_rate: 135,
-          max_heart_rate: 160,
-          kilojoule: 900,
-          percent_recorded: 100,
-          zone_durations: {
-            zone_zero_milli: 0,
-            zone_one_milli: 0,
-            zone_two_milli: 0,
-            zone_three_milli: 0,
-            zone_four_milli: 0,
-            zone_five_milli: 0,
-          },
-        },
-      }),
-    ];
-
-    getMock
-      .mockResolvedValueOnce(paginated([])) // recovery
-      .mockResolvedValueOnce(paginated([])) // sleep
-      .mockResolvedValueOnce(paginated(workouts)) // workout
-      .mockResolvedValueOnce(paginated([])); // cycle
-
-    const result = await getWeeklySummary(client, {});
-
-    expect(result.workouts.count).toBe(3);
-    expect(result.workouts.total_strain).toBeCloseTo(30.5, 1);
-    expect(result.workouts.total_calories_kj).toBe(3100);
-    expect(result.workouts.sport_breakdown).toEqual({ Running: 2, Cycling: 1 });
-  });
-
-  it("computes correct strain averages from cycle data", async () => {
-    const cycles = [
-      makeCycle({
-        score: { strain: 14.2, kilojoule: 8500, average_heart_rate: 72, max_heart_rate: 175 },
-      }),
-      makeCycle({
-        id: 2,
-        score: { strain: 10.0, kilojoule: 7000, average_heart_rate: 68, max_heart_rate: 165 },
-      }),
-    ];
-
-    getMock
-      .mockResolvedValueOnce(paginated([])) // recovery
-      .mockResolvedValueOnce(paginated([])) // sleep
-      .mockResolvedValueOnce(paginated([])) // workout
-      .mockResolvedValueOnce(paginated(cycles)); // cycle
-
-    const result = await getWeeklySummary(client, {});
-
-    expect(result.strain.average_daily_strain).toBeCloseTo(12.1, 1);
-    expect(result.strain.max_daily_strain).toBe(14.2);
-  });
-
-  it("determines recovery trend using linear regression", async () => {
-    // Improving: 50, 55, 60, 65, 70, 75, 80
-    const recoveries = [50, 55, 60, 65, 70, 75, 80].map((score) =>
-      makeRecovery({
-        score: {
-          user_calibrating: false,
-          recovery_score: score,
-          resting_heart_rate: 55,
-          hrv_rmssd_milli: 60,
-          spo2_percentage: 98,
-          skin_temp_celsius: 33,
-        },
-      })
+    expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
+    expect(result.notes).toContain(
+      "2026-09-16 is a Wednesday; summarizing the week from Monday 2026-09-14 to Sunday 2026-09-20."
     );
+  });
 
-    getMock
-      .mockResolvedValueOnce(paginated(recoveries))
-      .mockResolvedValueOnce(paginated([]))
-      .mockResolvedValueOnce(paginated([]))
-      .mockResolvedValueOnce(paginated([]));
+  it("snaps relative expressions and date-times in the user's local day", async () => {
+    for (const weekStart of ["today", "yesterday", "this week", "2026-09-16T01:30:00+02:00"]) {
+      const { client } = fakeWhoop(calibratingUser());
+      const result = await getWeeklySummary(client, { week_start: weekStart }, NOW);
+      expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
+    }
+    // 2026-09-13T23:30Z is already Monday 01:30 at +02:00
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, { week_start: "2026-09-13T23:30:00Z" }, NOW);
+    expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
+  });
 
-    const result = await getWeeklySummary(client, {});
+  it("resolves 'last week' to the previous local week", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, { week_start: "last week" }, NOW);
 
-    expect(result.recovery.trend).toBe("improving");
+    expect(result.week_start).toBe("2026-09-07T00:00:00.000+02:00");
+    expect(result.week_end).toBe("2026-09-13T23:59:59.999+02:00");
+    expect(result.notes.join(" ")).not.toMatch(/still in progress/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sparse and missing data
+// ---------------------------------------------------------------------------
+
+describe("getWeeklySummary — sparse and missing data", () => {
+  it("summarizes a calibrating user's first days without zeros or a trend", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, {}, NOW);
+
+    expect(result.recovery).toEqual({
+      average_score: 80.5,
+      min_score: 66,
+      max_score: 95,
+      average_hrv: 129,
+      average_rhr: 54,
+      trend: null,
+    });
+    expect(result.calibrating).toBe(true);
+    expect(result.sample_sizes).toEqual({ recovery_days: 2, sleep_nights: 2, completed_cycles: 1 });
+    expect(result.notes).toContain(
+      "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4."
+    );
+    expect(result.notes.join(" ")).toMatch(/WHOOP is still calibrating \(2 of 2/);
+    expect(result.truncated).toBe(false);
+    expect(result.warnings).toBeUndefined();
+  });
+
+  it("reports hours asleep (not time in bed) for sleep", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, {}, NOW);
+
+    expect(result.sleep).toEqual({
+      average_duration_hours: 7,
+      average_performance_pct: 80,
+      average_efficiency_pct: 90,
+    });
+  });
+
+  it("leaves the in-progress cycle out of strain and says so", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, {}, NOW);
+
+    expect(result.strain).toEqual({ average_daily_strain: 18, max_daily_strain: 18 });
+    expect(result.notes).toContain("Today's strain is still accumulating and is not included.");
+  });
+
+  it("returns nulls with notes, not zeros, for a week without data", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, { week_start: "last week" }, NOW);
+
+    expect(result.recovery).toEqual({
+      average_score: null,
+      min_score: null,
+      max_score: null,
+      average_hrv: null,
+      average_rhr: null,
+      trend: null,
+    });
+    expect(result.sleep).toEqual({
+      average_duration_hours: null,
+      average_performance_pct: null,
+      average_efficiency_pct: null,
+    });
+    expect(result.strain).toEqual({ average_daily_strain: null, max_daily_strain: null });
+    // A successful fetch with no workouts is a true zero
+    expect(result.workouts).toEqual({
+      count: 0,
+      total_strain: 0,
+      total_calories_kj: 0,
+      sport_breakdown: {},
+    });
+    expect(result.sample_sizes).toEqual({ recovery_days: 0, sleep_nights: 0, completed_cycles: 0 });
+    expect(result.calibrating).toBe(false);
+    expect(result.notes).toEqual(
+      expect.arrayContaining([
+        "No scored recovery recorded this week.",
+        "No scored main sleep recorded this week.",
+        "No completed, scored cycle this week, so daily strain is null.",
+      ])
+    );
+  });
+
+  it("averages sleep percentages over nights that have them (null is not 0)", async () => {
+    const data = history(
+      [
+        { day: "2026-09-08", performance: 80, efficiency: null },
+        { day: "2026-09-09", performance: null, efficiency: 90 },
+      ],
+      { openLatest: false }
+    );
+    const { client } = fakeWhoop(data);
+    const result = await getWeeklySummary(client, { week_start: "last week" }, NOW);
+
+    expect(result.sleep.average_performance_pct).toBe(80);
+    expect(result.sleep.average_efficiency_pct).toBe(90);
+    expect(result.sample_sizes.sleep_nights).toBe(2);
   });
 
   it("filters out unscored records (PENDING_SCORE, UNSCORABLE)", async () => {
-    const recoveries = [
-      makeRecovery({
-        score: {
-          user_calibrating: false,
-          recovery_score: 70,
-          resting_heart_rate: 52,
-          hrv_rmssd_milli: 55,
-          spo2_percentage: 98,
-          skin_temp_celsius: 33,
-        },
-      }),
-      makeRecovery({ score_state: "PENDING_SCORE", score: undefined }),
-      makeRecovery({ score_state: "UNSCORABLE", score: undefined }),
+    const data = calibratingUser();
+    data.recovery[0]!.score_state = "PENDING_SCORE";
+    data.recovery[0]!.score = null;
+    data.sleep[0]!.score_state = "UNSCORABLE";
+    data.sleep[0]!.score = null;
+
+    const { client } = fakeWhoop(data);
+    const result = await getWeeklySummary(client, {}, NOW);
+
+    expect(result.recovery.average_score).toBe(95);
+    expect(result.sample_sizes.recovery_days).toBe(1);
+    expect(result.sample_sizes.sleep_nights).toBe(1);
+  });
+
+  it("excludes naps from sleep", async () => {
+    const data = calibratingUser();
+    data.sleep.unshift({
+      ...data.sleep[0]!,
+      id: "nap-1",
+      nap: true,
+      start: "2026-09-16T11:00:00.000Z",
+      end: "2026-09-16T11:30:00.000Z",
+    });
+    const { client } = fakeWhoop(data);
+    const result = await getWeeklySummary(client, {}, NOW);
+
+    expect(result.sample_sizes.sleep_nights).toBe(2);
+    expect(result.sleep.average_duration_hours).toBe(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Week membership and trend
+// ---------------------------------------------------------------------------
+
+describe("getWeeklySummary — membership and trend", () => {
+  const spanning = (): FakeData => {
+    // Sunday 2026-09-13's cycle starts Saturday evening; Monday 2026-09-14's
+    // cycle and sleep start Sunday 23:00 local, before the week begins.
+    const data = history(
+      [
+        { day: "2026-09-12", recovery: 40, strain: 5 },
+        { day: "2026-09-13", recovery: 50, strain: 7 },
+        { day: "2026-09-14", recovery: 60, strain: 9 },
+        { day: "2026-09-15", recovery: 70, strain: 11 },
+        { day: "2026-09-16", recovery: 80, strain: 13 },
+      ],
+      { openLatest: true }
+    );
+    data.workout = [
+      workout("sun-late", "2026-09-13T21:30:00.000Z", "walking", 5, 500), // Sunday 23:30 local
+      workout("mon-early", "2026-09-13T22:30:00.000Z", "running", 9, 900), // Monday 00:30 local
     ];
+    return data;
+  };
 
-    getMock
-      .mockResolvedValueOnce(paginated(recoveries))
-      .mockResolvedValueOnce(paginated([]))
-      .mockResolvedValueOnce(paginated([]))
-      .mockResolvedValueOnce(paginated([]));
+  it("counts records spanning the week edge in exactly one week", async () => {
+    const thisWeek = await getWeeklySummary(fakeWhoop(spanning()).client, {}, NOW);
+    const lastWeek = await getWeeklySummary(
+      fakeWhoop(spanning()).client,
+      { week_start: "last week" },
+      NOW
+    );
 
-    const result = await getWeeklySummary(client, {});
+    // This week: Monday 14, Tuesday 15, Wednesday 16 (open cycle excluded from strain)
+    expect(thisWeek.sample_sizes).toEqual({
+      recovery_days: 3,
+      sleep_nights: 3,
+      completed_cycles: 2,
+    });
+    expect(thisWeek.recovery.min_score).toBe(60);
+    expect(thisWeek.strain).toEqual({ average_daily_strain: 10, max_daily_strain: 11 });
+    expect(thisWeek.workouts.sport_breakdown).toEqual({ running: 1 });
 
-    // Only 1 scored recovery
-    expect(result.recovery.average_score).toBe(70);
-    expect(result.recovery.min_score).toBe(70);
-    expect(result.recovery.max_score).toBe(70);
+    // Last week: only Saturday 12 and Sunday 13
+    expect(lastWeek.sample_sizes).toEqual({
+      recovery_days: 2,
+      sleep_nights: 2,
+      completed_cycles: 2,
+    });
+    expect(lastWeek.recovery.max_score).toBe(50);
+    expect(lastWeek.strain).toEqual({ average_daily_strain: 6, max_daily_strain: 7 });
+    expect(lastWeek.workouts.sport_breakdown).toEqual({ walking: 1 });
+  });
+
+  it("places a late-synced recovery in its cycle's week", async () => {
+    const data = spanning();
+    const sunday = data.recovery.find((r) => r.sleep_id === "sleep-2026-09-13")!;
+    sunday.created_at = "2026-09-14T09:00:00.000Z";
+
+    const thisWeek = await getWeeklySummary(fakeWhoop(data).client, {}, NOW);
+
+    expect(thisWeek.sample_sizes.recovery_days).toBe(3);
+    expect(thisWeek.recovery.min_score).toBe(60);
+  });
+
+  it("computes the recovery trend oldest first from newest-first data", async () => {
+    const days = ["2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"];
+    const declining = history(
+      days.map((day, i) => ({ day, recovery: 90 - i * 10 })),
+      { openLatest: false }
+    );
+    const improving = history(
+      days.map((day, i) => ({ day, recovery: 40 + i * 10 })),
+      { openLatest: false }
+    );
+    // Newest first, as WHOOP returns it
+    expect((declining.recovery[0]!.score as { recovery_score: number }).recovery_score).toBe(50);
+
+    const down = await getWeeklySummary(
+      fakeWhoop(declining).client,
+      { week_start: "2026-09-07" },
+      NOW
+    );
+    const up = await getWeeklySummary(
+      fakeWhoop(improving).client,
+      { week_start: "2026-09-07" },
+      NOW
+    );
+
+    expect(down.recovery.trend).toBe("declining");
+    expect(up.recovery.trend).toBe("improving");
+    expect(down.notes.join(" ")).not.toMatch(/Not enough data/);
+  });
+
+  it("computes workout stats with sport breakdown", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, {}, NOW);
+
+    expect(result.workouts).toEqual({
+      count: 3,
+      total_strain: 26,
+      total_calories_kj: 3800,
+      sport_breakdown: { walking: 2, running: 1 },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Failures and data quality
+// ---------------------------------------------------------------------------
+
+describe("getWeeklySummary — failures and data quality", () => {
+  it("makes one offset lookup, then serialized recovery, sleep, workout and cycle calls", async () => {
+    const { client, paths } = fakeWhoop(EMPTY);
+    await getWeeklySummary(client, {}, NOW);
+
+    expect(paths.map((path) => path.split("?")[0])).toEqual([
+      "/v2/cycle",
+      "/v2/recovery",
+      "/v2/activity/sleep",
+      "/v2/activity/workout",
+      "/v2/cycle",
+    ]);
   });
 
   it("returns partial results with warnings when some endpoints fail", async () => {
-    getMock
-      .mockResolvedValueOnce(paginated([makeRecovery()])) // recovery OK
-      .mockRejectedValueOnce(new Error("Sleep endpoint unavailable")) // sleep fails
-      .mockResolvedValueOnce(paginated([])) // workout OK
-      .mockResolvedValueOnce(paginated([])); // cycle OK
+    const { client } = fakeWhoop(calibratingUser(), {
+      fail: { sleep: new Error("Sleep endpoint unavailable"), workout: new Error("down") },
+    });
+    const result = await getWeeklySummary(client, {}, NOW);
 
-    const result = await getWeeklySummary(client, {});
-
-    expect(result.recovery.average_score).toBe(75);
-    expect(result.warnings).toBeDefined();
-    expect(result.warnings!.length).toBeGreaterThan(0);
-    expect(result.warnings![0]).toContain("sleep");
+    expect(result.recovery.average_score).toBe(80.5);
+    expect(result.warnings).toEqual(["sleep: Sleep endpoint unavailable", "workout: down"]);
+    expect(result.sleep.average_duration_hours).toBeNull();
+    expect(result.workouts).toEqual({
+      count: null,
+      total_strain: null,
+      total_calories_kj: null,
+      sport_breakdown: {},
+    });
+    expect(result.notes).toEqual(
+      expect.arrayContaining([
+        "Sleep data could not be loaded from WHOOP.",
+        "Workout data could not be loaded from WHOOP.",
+      ])
+    );
+    expect(result.notes.join(" ")).not.toMatch(/No scored main sleep/);
   });
 
-  it("throws error when ALL 4 endpoints fail", async () => {
-    getMock
-      .mockRejectedValueOnce(new Error("Recovery down"))
-      .mockRejectedValueOnce(new Error("Sleep down"))
-      .mockRejectedValueOnce(new Error("Workout down"))
-      .mockRejectedValueOnce(new Error("Cycle down"));
+  it("dates recoveries through their sleep when cycles fail", async () => {
+    const { client } = fakeWhoop(calibratingUser(), { fail: { cycle: new Error("down") } });
+    const result = await getWeeklySummary(client, {}, NOW);
 
-    await expect(getWeeklySummary(client, {})).rejects.toThrow("All endpoints failed");
+    expect(result.sample_sizes.recovery_days).toBe(2);
+    expect(result.strain).toEqual({ average_daily_strain: null, max_daily_strain: null });
   });
 
-  it("accepts enhanced date expression for week_start", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("rethrows the WHOOP API error when ALL 4 endpoints fail", async () => {
+    const error = new WhoopApiError(404, "Not Found", null);
+    const { client } = fakeWhoop(EMPTY, {
+      fail: { recovery: error, sleep: error, workout: error, cycle: error },
+    });
 
-    await getWeeklySummary(client, { week_start: "last week" });
-
-    // "last week" on Thursday 2026-05-28 → Monday 2026-05-18 to Sunday 2026-05-24
-    const firstCall = getMock.mock.calls[0]?.[0] as string;
-    expect(firstCall).toContain("start=2026-05-18T00%3A00%3A00.000Z");
+    await expect(getWeeklySummary(client, {}, NOW)).rejects.toBe(error);
   });
 
-  it("returns zero values when no scored data available", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("throws a combined error when ALL 4 endpoints fail with unknown errors", async () => {
+    const { client } = fakeWhoop(EMPTY, {
+      fail: {
+        recovery: new Error("Recovery down"),
+        sleep: new Error("Sleep down"),
+        workout: new Error("Workout down"),
+        cycle: new Error("Cycle down"),
+      },
+    });
 
-    const result = await getWeeklySummary(client, {});
-
-    expect(result.recovery.average_score).toBe(0);
-    expect(result.recovery.min_score).toBe(0);
-    expect(result.recovery.max_score).toBe(0);
-    expect(result.recovery.trend).toBe("stable");
-    expect(result.sleep.average_duration_hours).toBe(0);
-    expect(result.workouts.count).toBe(0);
-    expect(result.strain.average_daily_strain).toBe(0);
+    await expect(getWeeklySummary(client, {}, NOW)).rejects.toThrow("All endpoints failed");
   });
 
-  it("uses fetchAllPages with serialized calls (4 sequential calls)", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("surfaces pagination truncation", async () => {
+    const { client } = fakeWhoop(calibratingUser(), { endless: "workout" });
+    const result = await getWeeklySummary(client, {}, NOW);
 
-    await getWeeklySummary(client, {});
-
-    // Should make exactly 4 API calls (one per endpoint)
-    expect(getMock).toHaveBeenCalledTimes(4);
+    expect(result.truncated).toBe(true);
+    expect(result.notes.join(" ")).toMatch(/more workout records than could be fetched/);
   });
 
-  it("includes week_start and week_end in the output", async () => {
-    getMock.mockResolvedValue(paginated([]));
+  it("skips records that do not match the WHOOP format and notes it", async () => {
+    const data = calibratingUser();
+    (data.recovery[0]!.score as Record<string, unknown>).hrv_rmssd_milli = null;
+    const { client } = fakeWhoop(data);
+    const result = await getWeeklySummary(client, {}, NOW);
 
-    const result = await getWeeklySummary(client, {});
-
-    // Current week: Monday 2026-05-25 to Sunday 2026-05-31
-    expect(result.week_start).toBe("2026-05-25T00:00:00.000Z");
-    expect(result.week_end).toContain("2026-05-31");
+    expect(result.sample_sizes.recovery_days).toBe(1);
+    expect(result.notes).toContain(
+      "1 recovery record(s) did not match the expected WHOOP format and were skipped."
+    );
   });
+});
 
-  it("correctly handles week_start as ISO 8601 string", async () => {
-    getMock.mockResolvedValue(paginated([]));
+// ---------------------------------------------------------------------------
+// Output contract (standard and aggregate privacy modes)
+// ---------------------------------------------------------------------------
 
-    await getWeeklySummary(client, { week_start: "2026-05-12T00:00:00.000Z" });
+describe("get_weekly_summary output contract", () => {
+  async function callWeekly(
+    client: WhoopClient,
+    privacyMode: "standard" | "aggregate",
+    args: Record<string, string> = {}
+  ): Promise<{
+    isError?: boolean;
+    structuredContent?: Record<string, unknown>;
+    content?: unknown;
+  }> {
+    const { server } = createWhoopServer(client, { privacyMode });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = new Client({ name: "test", version: "1.0.0" });
+    await Promise.all([server.connect(serverTransport), mcp.connect(clientTransport)]);
+    try {
+      return (await mcp.callTool({ name: "get_weekly_summary", arguments: args })) as {
+        isError?: boolean;
+        structuredContent?: Record<string, unknown>;
+      };
+    } finally {
+      await mcp.close();
+      await server.close();
+    }
+  }
 
-    const firstCall = getMock.mock.calls[0]?.[0] as string;
-    expect(firstCall).toContain("start=2026-05-12T00%3A00%3A00.000Z");
-  });
+  for (const privacyMode of ["standard", "aggregate"] as const) {
+    it(`passes the ${privacyMode} contract for sparse, empty and partially failed weeks`, async () => {
+      const cases: [WhoopClient, Record<string, string>][] = [
+        [fakeWhoop(calibratingUser()).client, {}],
+        [fakeWhoop(calibratingUser()).client, { week_start: "last week" }],
+        [fakeWhoop(calibratingUser()).client, { week_start: "2026-09-14" }],
+        [fakeWhoop(calibratingUser(), { fail: { workout: new Error("down") } }).client, {}],
+      ];
+      for (const [client, args] of cases) {
+        const result = await callWeekly(client, privacyMode, args);
+        expect(result.isError, JSON.stringify(result.content)).toBeFalsy();
+        expect(result.structuredContent).toHaveProperty("notes");
+        expect(result.structuredContent).toHaveProperty("sample_sizes");
+      }
+    });
+  }
 
-  it("excludes naps from sleep duration calculation", async () => {
-    const sleeps = [
-      makeSleep({ nap: false, start: "2026-05-25T22:00:00.000Z", end: "2026-05-26T06:00:00.000Z" }),
-      makeSleep({
-        id: "nap-1",
-        nap: true,
-        start: "2026-05-26T14:00:00.000Z",
-        end: "2026-05-26T14:30:00.000Z",
-      }),
-    ];
+  it("projects week_start to the user's local date in aggregate mode", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await callWeekly(client, "aggregate", { week_start: "2026-09-16" });
 
-    getMock
-      .mockResolvedValueOnce(paginated([])) // recovery
-      .mockResolvedValueOnce(paginated(sleeps)) // sleep
-      .mockResolvedValueOnce(paginated([])) // workout
-      .mockResolvedValueOnce(paginated([])); // cycle
-
-    const result = await getWeeklySummary(client, {});
-
-    // Only 1 non-nap sleep: 8 hours
-    expect(result.sleep.average_duration_hours).toBeCloseTo(8, 1);
+    expect(result.structuredContent?.week_start).toBe("2026-09-14");
+    expect(result.structuredContent?.week_end).toBe("2026-09-20");
+    expect(result.structuredContent).not.toHaveProperty("warnings");
   });
 });

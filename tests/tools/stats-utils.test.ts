@@ -12,6 +12,8 @@ import {
   median,
   standardDeviation,
   linearRegression,
+  linearRegressionXY,
+  MIN_TREND_POINTS,
   detectAnomalies,
   trendDirection,
 } from "../../src/tools/stats-utils.js";
@@ -153,6 +155,49 @@ describe("linearRegression", () => {
     const result = linearRegression([5, 5, 5]);
     expect(Number.isNaN(result.slope)).toBe(false);
     expect(Number.isNaN(result.r2)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// linearRegressionXY
+// ---------------------------------------------------------------------------
+
+describe("linearRegressionXY", () => {
+  it("matches linearRegression when xs are 0..n-1", () => {
+    const values = [1, 3, 2, 4, 3, 5];
+    const indexed = linearRegression(values);
+    const explicit = linearRegressionXY([0, 1, 2, 3, 4, 5], values);
+    expect(explicit.slope).toBeCloseTo(indexed.slope, 10);
+    expect(explicit.r2).toBeCloseTo(indexed.r2, 10);
+  });
+
+  it("respects gaps between xs (slope per unit of x, not per point)", () => {
+    const result = linearRegressionXY([0, 1, 4, 5], [10, 12, 18, 20]);
+    expect(result.slope).toBeCloseTo(2, 10);
+    expect(result.r2).toBeCloseTo(1, 10);
+  });
+
+  it("does not depend on the order of (x, y) pairs", () => {
+    const forward = linearRegressionXY([0, 1, 2, 3], [4, 3, 2, 1]);
+    const reversed = linearRegressionXY([3, 2, 1, 0], [1, 2, 3, 4]);
+    expect(reversed.slope).toBeCloseTo(forward.slope, 10);
+    expect(forward.slope).toBeCloseTo(-1, 10);
+  });
+
+  it("returns zero slope and R² for one point, identical xs or constant ys", () => {
+    expect(linearRegressionXY([3], [42])).toEqual({ slope: 0, r2: 0 });
+    expect(linearRegressionXY([2, 2, 2], [1, 5, 9])).toEqual({ slope: 0, r2: 0 });
+    expect(linearRegressionXY([0, 1, 2], [7, 7, 7])).toEqual({ slope: 0, r2: 0 });
+  });
+
+  it("throws for empty or mismatched arrays and non-finite values", () => {
+    expect(() => linearRegressionXY([], [])).toThrow(/empty/i);
+    expect(() => linearRegressionXY([0, 1], [1])).toThrow(/same length/);
+    expect(() => linearRegressionXY([0, 1], [1, Number.NaN])).toThrow(RangeError);
+  });
+
+  it("exports a minimum of 4 points for trend claims", () => {
+    expect(MIN_TREND_POINTS).toBe(4);
   });
 });
 
