@@ -9,7 +9,6 @@
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http";
 import { createHash, timingSafeEqual } from "node:crypto";
-import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 
 // ---------------------------------------------------------------------------
@@ -252,10 +251,10 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
     sseTimer.unref();
   }
 
-  // Create the SDK transport (stateful with session IDs)
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
+   // Create the SDK transport (stateless — one shared transport, no session IDs)
+ const transport = new StreamableHTTPServerTransport({
+   sessionIdGenerator: undefined,
+ });
 
   // Create HTTP server
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
