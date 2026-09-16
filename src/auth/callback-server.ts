@@ -197,8 +197,8 @@ export function startCallbackServer(options: CallbackServerOptions): CallbackSer
         reject(new Error(msg));
       }
     });
-
-    server.listen(requestedPort, "127.0.0.1", () => {
+    
+    server.listen(requestedPort, process.env.CALLBACK_HOST ?? "127.0.0.1", () => {
       const addr = server.address();
       if (addr && typeof addr === "object") {
         resolvedPort = addr.port;
