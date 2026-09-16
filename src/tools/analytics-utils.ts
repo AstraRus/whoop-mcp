@@ -65,6 +65,17 @@ export function localDay(timestamp: string, offset: string): string {
   return localTime(timestamp, offset).toISOString().slice(0, 10);
 }
 
+/**
+ * The local calendar day a WHOOP cycle belongs to. A cycle starts at sleep
+ * onset — usually the evening before the day it covers — so the day is taken
+ * 12 hours after the start: bedtime at 23:00 counts toward the next day, at
+ * 01:00 toward the same day.
+ */
+export function cycleDay(cycle: { start: string; timezone_offset: string }): string {
+  const midCycle = new Date(Date.parse(cycle.start) + 12 * HOUR_MS).toISOString();
+  return localDay(midCycle, cycle.timezone_offset);
+}
+
 export function asleepHours(sleep: Sleep): number {
   const stages = sleep.score!.stage_summary;
   return (

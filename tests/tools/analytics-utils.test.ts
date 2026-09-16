@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { percentile, circularStats } from "../../src/tools/stats-utils.js";
-import { localDay } from "../../src/tools/analytics-utils.js";
+import { cycleDay, localDay } from "../../src/tools/analytics-utils.js";
 
 describe("analytics primitives", () => {
   it("interpolates percentiles without mutating values", () => {
@@ -24,5 +24,25 @@ describe("analytics primitives", () => {
     expect(localDay("2026-09-10T01:00:00Z", "-05:00")).toBe("2026-09-09");
     expect(localDay("2026-03-08T06:30:00Z", "-05:00")).toBe("2026-03-08");
     expect(localDay("2026-11-01T06:30:00Z", "-04:00")).toBe("2026-11-01");
+  });
+});
+
+describe("cycleDay", () => {
+  it("assigns a cycle to the local day it covers, not the evening it starts", () => {
+    // Live shape: bedtime 23:13 local (+02:00) on the 15th starts the cycle for the 16th
+    expect(cycleDay({ start: "2026-09-15T21:13:31.460Z", timezone_offset: "+02:00" })).toBe(
+      "2026-09-16"
+    );
+    // After-midnight bedtime stays on the same local day
+    expect(cycleDay({ start: "2026-09-15T23:30:00.000Z", timezone_offset: "+02:00" })).toBe(
+      "2026-09-16"
+    );
+    // The first cycle of a new strap starts at local midnight
+    expect(cycleDay({ start: "2026-09-13T22:00:00.000Z", timezone_offset: "+02:00" })).toBe(
+      "2026-09-14"
+    );
+    expect(cycleDay({ start: "2026-09-16T03:00:00.000Z", timezone_offset: "-05:00" })).toBe(
+      "2026-09-15"
+    );
   });
 });
