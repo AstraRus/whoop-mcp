@@ -1,13 +1,14 @@
 /**
  * Tests for stats-utils.ts — statistical functions for analytical tools.
  *
- * Covers: mean, median, standardDeviation, linearRegression,
+ * Covers: isConstant, mean, median, standardDeviation, linearRegression,
  * detectAnomalies, trendDirection. Edge cases: empty arrays,
  * single values, constant data, monotonic sequences.
  */
 
 import { describe, it, expect } from "vitest";
 import {
+  isConstant,
   mean,
   median,
   standardDeviation,
@@ -22,7 +23,23 @@ import {
 // mean
 // ---------------------------------------------------------------------------
 
+describe("isConstant", () => {
+  it("is true only when every value is identical", () => {
+    expect(isConstant([7])).toBe(true);
+    expect(isConstant([70.1, 70.1, 70.1])).toBe(true);
+    expect(isConstant([70.1, 70.1, 70.2])).toBe(false);
+  });
+
+  it("throws for empty array", () => {
+    expect(() => isConstant([])).toThrow(/empty/i);
+  });
+});
+
 describe("mean", () => {
+  it("returns identical decimal values exactly, without rounding drift", () => {
+    expect(mean(Array(21).fill(70.1))).toBe(70.1);
+  });
+
   it("computes the arithmetic mean", () => {
     expect(mean([1, 2, 3, 4, 5])).toBe(3);
   });
@@ -84,6 +101,10 @@ describe("standardDeviation", () => {
   it("computes population standard deviation", () => {
     // [2, 4, 4, 4, 5, 5, 7, 9] → mean=5, pop stddev=2
     expect(standardDeviation([2, 4, 4, 4, 5, 5, 7, 9])).toBe(2);
+  });
+
+  it("returns exactly 0 for identical decimal values", () => {
+    expect(standardDeviation(Array(21).fill(70.1))).toBe(0);
   });
 
   it("returns 0 for constant values", () => {
@@ -188,6 +209,11 @@ describe("linearRegressionXY", () => {
     expect(linearRegressionXY([3], [42])).toEqual({ slope: 0, r2: 0 });
     expect(linearRegressionXY([2, 2, 2], [1, 5, 9])).toEqual({ slope: 0, r2: 0 });
     expect(linearRegressionXY([0, 1, 2], [7, 7, 7])).toEqual({ slope: 0, r2: 0 });
+  });
+
+  it("returns exactly zero slope and R² for identical decimal ys (no rounding drift)", () => {
+    const xs = [0, 2, 6, 5, 6, 9, 7, 7, 9, 13];
+    expect(linearRegressionXY(xs, Array(10).fill(70.1))).toEqual({ slope: 0, r2: 0 });
   });
 
   it("throws for empty or mismatched arrays and non-finite values", () => {

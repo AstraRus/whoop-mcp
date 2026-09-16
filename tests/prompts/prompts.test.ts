@@ -17,8 +17,11 @@ import {
   DATA_GUIDANCE,
   DEFAULT_REVIEW_DAYS,
   MAX_REVIEW_DAYS,
+  RECENT_DAYS,
+  lastDaysExpression,
   parseReviewDays,
 } from "../../src/prompts/index.js";
+import { resolveDateExpression } from "../../src/tools/date-utils.js";
 import { vi } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -196,8 +199,107 @@ describe("MCP Prompts", () => {
 
     expect(text).toContain("past 14 days");
     expect(text).toContain("**get_calendar** with days 14");
-    expect(text).toContain('start "last 14 days"');
+    // "last 13 days" is today plus the 13 previous days: the same 14 days as get_calendar.
+    expect(text).toContain('**get_workout_collection** with start "last 13 days"');
+    expect(text).toContain('**get_sleep_collection** with start "last 13 days"');
+    expect(text).not.toContain("last 14 days");
     expect(text).toContain("**get_baselines**");
+  });
+
+  // Regression: collections used start "last N days" (N + 1 days) next to get_calendar /
+  // get_trend days N, so counts and strain totals covered one day more than the calendar.
+  const NOW = new Date("2026-09-16T13:00:00.000Z"); // 15:00 local
+  const OFFSET = "+02:00";
+
+  /** UTC instant of local midnight at the start of the N-day window ending today (+02:00). */
+  function windowStartUtc(days: number): string {
+    const firstLocalDay = Date.UTC(2026, 8, 16 - (days - 1));
+    return new Date(firstLocalDay - 2 * 60 * 60 * 1000).toISOString();
+  }
+
+  it.each([
+    ["weekly_health_review", { days: "7" }],
+    ["weekly_health_review", { days: "1" }],
+    ["weekly_health_review", { days: "90" }],
+    ["weekly_health_review", {}],
+    ["sleep_analysis", {}],
+    ["recovery_trend", {}],
+    ["workout_recap", {}],
+  ])(
+    "%s %j: collection starts cover the same local days as the paired day windows",
+    async (name, args) => {
+      const text = await promptText(name, args);
+
+      const windows = [
+        ...text.matchAll(/\*\*get_(?:calendar|trend|sleep_debt)\*\*[^\n]*days (\d+)/g),
+      ].map((match) => Number(match[1]));
+      const starts = [...text.matchAll(/\*\*get_[a-z]+_collection\*\*[^\n]*start "([^"]+)"/g)].map(
+        (match) => match[1]!
+      );
+      expect(starts.length).toBeGreaterThan(0);
+      // recovery_trend pairs 30-day trends with 14 days of records, as the text says.
+      const days = name === "recovery_trend" ? RECENT_DAYS : windows[0]!;
+      if (name !== "recovery_trend") {
+        expect(new Set(windows)).toEqual(new Set([days]));
+      }
+      for (const start of starts) {
+        expect(start).toBe(lastDaysExpression(days));
+        expect(resolveDateExpression(start, NOW, OFFSET).start).toBe(windowStartUtc(days));
+      }
+    }
+  );
+
+  it("weekly_health_review days 7 starts collections at the calendar's first local midnight", async () => {
+    const text = await promptText("weekly_health_review", { days: "7" });
+
+    expect(text).toContain("**get_calendar** with days 7");
+    expect(text).toContain('**get_workout_collection** with start "last 6 days"');
+    // 2026-09-10T00:00+02:00, the first row of a 7-day calendar ending 2026-09-16
+    expect(resolveDateExpression("last 6 days", NOW, OFFSET).start).toBe(
+      "2026-09-09T22:00:00.000Z"
+    );
+  });
+
+  it("describes get_weekly_summary as a Monday-to-Sunday week", async () => {
+    const text = await promptText("weekly_health_review", { days: "10" });
+    expect(text).toContain("Monday-to-Sunday week");
+    expect(text).toContain("10-day period");
+  });
+
+  it("tells the model collections are newest first and include ongoing records", () => {
+    expect(DATA_GUIDANCE).toContain("newest first");
+    expect(DATA_GUIDANCE).toContain("still ongoing at the window start");
+  });
+
+  // Regression (R35): start/end "yesterday" on get_cycle_collection returns today's in-progress
+  // cycle first; the collection tools the prompts point to must say so.
+  it.each([
+    "get_cycle_collection",
+    "get_recovery_collection",
+    "get_sleep_collection",
+    "get_workout_collection",
+  ])("%s explains ordering, overlap and where per-day values come from", async (name) => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === name);
+    expect(tool).toBeDefined();
+
+    expect(tool!.description).toContain("newest first");
+    expect(tool!.description).toMatch(/ongoing|neighbouring days/);
+    expect(tool!.description).toContain("get_calendar");
+
+    const properties = tool!.inputSchema.properties as Record<string, { description?: string }>;
+    expect(properties.start!.description).toContain("still ongoing");
+    expect(properties.start!.description).toContain("today plus the N previous days");
+    expect(properties.end!.description).toContain("began before this time (exclusive)");
+  });
+
+  it("get_cycle_collection warns that a day window starts with today's in-progress cycle", async () => {
+    const { tools } = await client.listTools();
+    const description = tools.find((t) => t.name === "get_cycle_collection")!.description!;
+
+    expect(description).toContain("end null");
+    expect(description).toContain("in-progress cycle (begun yesterday evening), which comes first");
+    expect(description).toContain("rather than taking the first record");
   });
 
   it.each([
@@ -247,6 +349,36 @@ describe("MCP Prompts", () => {
     expect(text).toContain("notes field");
     expect(text).toContain("**get_today**");
     expect(text).toContain("provisional while WHOOP is calibrating");
+  });
+
+  it("health_check does not present an earlier cycle's recovery or sleep as today's", async () => {
+    const text = await promptText("health_check");
+
+    expect(text).not.toContain("Current recovery score");
+    expect(text).toContain("Latest recovery score");
+    expect(text).toContain("belongs to an earlier cycle");
+    expect(text).toContain("today's only when their cycle_id equals the cycle resource's id");
+    expect(text).toContain("or the cycle_ids differ without such a note, call **get_today**");
+    expect(text).toContain("or that it is not available yet");
+  });
+});
+
+describe("lastDaysExpression", () => {
+  it.each([
+    [1, "today"],
+    [2, "last 1 days"],
+    [7, "last 6 days"],
+    [14, "last 13 days"],
+    [90, "last 89 days"],
+  ])("covers %i local days with %j", (days, expected) => {
+    expect(lastDaysExpression(days)).toBe(expected);
+  });
+
+  it.each([1, 2, 7, 14, 90])("resolves %i days to exactly that many local days", (days) => {
+    const now = new Date("2026-09-16T13:00:00.000Z");
+    const range = resolveDateExpression(lastDaysExpression(days), now, "+02:00");
+    const spanDays = Math.round((Date.parse(range.end) - Date.parse(range.start)) / 86_400_000);
+    expect(spanDays).toBe(days);
   });
 });
 

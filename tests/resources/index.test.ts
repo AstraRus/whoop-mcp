@@ -7,8 +7,14 @@ import {
   PROFILE_TTL_MS,
   SLEEP_LOOKBACK_LIMIT,
 } from "../../src/resources/index.js";
-import type { WhoopClient } from "../../src/api/client.js";
-import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../../src/api/client.js";
+import type { WhoopClient, WhoopGetOptions } from "../../src/api/client.js";
+import {
+  createWhoopClient,
+  WhoopApiError,
+  WhoopAuthError,
+  WhoopNetworkError,
+} from "../../src/api/client.js";
+import { MemoryCache } from "../../src/cache/memory-cache.js";
 
 // ---------------------------------------------------------------------------
 // Live-shaped fixtures: a user who started wearing WHOOP on Monday evening
@@ -130,14 +136,15 @@ describe("RESOURCE_DEFINITIONS", () => {
     }
   });
 
-  it("recovery and sleep resources use 5-minute TTL", () => {
-    const fiveMinResources = RESOURCE_DEFINITIONS.filter(
+  it("recovery and sleep resources share the cycle resource's 2-minute TTL", () => {
+    const linkedResources = RESOURCE_DEFINITIONS.filter(
       (d) => d.uri === "whoop://v2/user/recovery/latest" || d.uri === "whoop://v2/user/sleep/latest"
     );
-    expect(fiveMinResources).toHaveLength(2);
-    for (const def of fiveMinResources) {
-      expect(def.ttlMs).toBe(DYNAMIC_TTL_MS);
+    expect(linkedResources).toHaveLength(2);
+    for (const def of linkedResources) {
+      expect(def.ttlMs).toBe(CYCLE_TTL_MS);
     }
+    expect(DYNAMIC_TTL_MS).toBeGreaterThan(CYCLE_TTL_MS);
   });
 
   it("cycle resource uses 2-minute TTL", () => {
@@ -164,7 +171,7 @@ describe("RESOURCE_DEFINITIONS", () => {
       expect(result).toEqual({ recovery_score: 85 });
       expect(mockClient.get).toHaveBeenCalledWith("/v2/recovery?limit=1", {
         cache: true,
-        ttlMs: DYNAMIC_TTL_MS,
+        ttlMs: CYCLE_TTL_MS,
       });
     });
 
@@ -236,7 +243,7 @@ describe("RESOURCE_DEFINITIONS", () => {
       expect(result).toEqual(MAIN_SLEEP);
       expect(mockClient.get).toHaveBeenCalledWith(
         `/v2/activity/sleep?limit=${SLEEP_LOOKBACK_LIMIT}`,
-        { cache: true, ttlMs: DYNAMIC_TTL_MS }
+        { cache: true, ttlMs: CYCLE_TTL_MS }
       );
     });
 
@@ -442,5 +449,250 @@ describe("registerResources", () => {
     expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("Resource read failed"));
 
     stderrSpy.mockRestore();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Linkage to the latest cycle (latest recovery/sleep must not pose as today's)
+// ---------------------------------------------------------------------------
+
+type Pages = Record<string, unknown>;
+
+const RECOVERY_PATH = "/v2/recovery?limit=1";
+const SLEEP_PATH = `/v2/activity/sleep?limit=${SLEEP_LOOKBACK_LIMIT}`;
+const CYCLE_PATH = "/v2/cycle?limit=1";
+
+/** Earlier cycle's main sleep and recovery (the night of 14 -> 15 September). */
+const EARLIER_SLEEP = {
+  ...MAIN_SLEEP,
+  id: "0b1c2d3e-4f50-4a61-8b72-9c8d7e6f5a4b",
+  cycle_id: CLOSED_CYCLE.id,
+  start: "2026-09-14T21:15:00.000Z",
+  end: "2026-09-15T05:00:00.000Z",
+};
+const EARLIER_RECOVERY = {
+  ...CALIBRATING_RECOVERY,
+  cycle_id: CLOSED_CYCLE.id,
+  sleep_id: EARLIER_SLEEP.id,
+  score: { ...CALIBRATING_RECOVERY.score, recovery_score: 95 },
+};
+
+/**
+ * A client serving `cached` for cached GETs and `fresh` for GETs that bypass the
+ * cache (what WHOOP returns right now). An Error value is thrown.
+ */
+function linkedClient(cached: Pages, fresh: Pages = cached): WhoopClient {
+  return {
+    get: vi.fn((path: string, options?: WhoopGetOptions) => {
+      const value = (options?.cache === true ? cached : fresh)[path];
+      if (value instanceof Error) return Promise.reject(value);
+      if (value === undefined) return Promise.reject(new Error(`unexpected path ${path}`));
+      return Promise.resolve(value);
+    }),
+  } as unknown as WhoopClient;
+}
+
+function uncachedPaths(client: WhoopClient): string[] {
+  const calls = (client.get as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+  return calls.filter((call) => call[1] === undefined).map((call) => String(call[0]));
+}
+
+describe("latest recovery/sleep linkage to the latest cycle", () => {
+  const recoveryDef = definition("whoop://v2/user/recovery/latest");
+  const sleepDef = definition("whoop://v2/user/sleep/latest");
+
+  it("flags a recovery from an earlier cycle while the current cycle has none yet", async () => {
+    const client = linkedClient({
+      [RECOVERY_PATH]: pageOf(EARLIER_RECOVERY),
+      [CYCLE_PATH]: pageOf(OPEN_CYCLE),
+    });
+
+    const result = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+
+    expect(result).toMatchObject({ cycle_id: CLOSED_CYCLE.id, score: { recovery_score: 95 } });
+    expect(result.notes[0]).toContain("belongs to an earlier cycle (cycle_id 1002)");
+    expect(result.notes[0]).toContain(
+      "the current cycle (id 1003, started 2026-09-15T23:40+02:00)"
+    );
+    expect(result.notes[0]).toContain("not available yet");
+    expect(result.notes[0]).toContain("Don't present it as today's recovery");
+    expect(result.notes[1]).toContain("still calibrating");
+    // The mismatch was re-checked against WHOOP, bypassing the cache.
+    expect(uncachedPaths(client).sort()).toEqual([CYCLE_PATH, RECOVERY_PATH]);
+  });
+
+  it("adds no cycle note and makes no uncached call when the recovery is the current cycle's", async () => {
+    const client = linkedClient({
+      [RECOVERY_PATH]: pageOf(CALIBRATING_RECOVERY),
+      [CYCLE_PATH]: pageOf(OPEN_CYCLE),
+    });
+
+    const result = (await recoveryDef.fetch(client)) as { notes: string[] };
+
+    expect(result.notes).toEqual([expect.stringContaining("still calibrating")]);
+    expect(uncachedPaths(client)).toEqual([]);
+  });
+
+  it("uses the fresh recovery when only the cached recovery is out of step with the cycle", async () => {
+    const client = linkedClient(
+      { [RECOVERY_PATH]: pageOf(EARLIER_RECOVERY), [CYCLE_PATH]: pageOf(OPEN_CYCLE) },
+      { [RECOVERY_PATH]: pageOf(CALIBRATING_RECOVERY), [CYCLE_PATH]: pageOf(OPEN_CYCLE) }
+    );
+
+    const result = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+
+    expect(result).toMatchObject({ cycle_id: OPEN_CYCLE.id, score: { recovery_score: 58 } });
+    expect(JSON.stringify(result.notes)).not.toContain("earlier cycle");
+  });
+
+  it("does not blame the recovery when only the cached cycle is stale", async () => {
+    const staleOpenCycle = { ...CLOSED_CYCLE, end: null };
+    const client = linkedClient(
+      { [RECOVERY_PATH]: pageOf(CALIBRATING_RECOVERY), [CYCLE_PATH]: pageOf(staleOpenCycle) },
+      { [RECOVERY_PATH]: pageOf(CALIBRATING_RECOVERY), [CYCLE_PATH]: pageOf(OPEN_CYCLE) }
+    );
+
+    const result = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+
+    expect(result.cycle_id).toBe(OPEN_CYCLE.id);
+    expect(JSON.stringify(result.notes)).not.toContain("cycle_id");
+  });
+
+  it("says the link could not be confirmed when the re-check fails", async () => {
+    const client = linkedClient(
+      { [RECOVERY_PATH]: pageOf(EARLIER_RECOVERY), [CYCLE_PATH]: pageOf(OPEN_CYCLE) },
+      { [RECOVERY_PATH]: new Error("429"), [CYCLE_PATH]: new Error("429") }
+    );
+
+    const result = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+
+    expect(result.cycle_id).toBe(CLOSED_CYCLE.id);
+    expect(result.notes[0]).toContain("could not be re-checked");
+    expect(result.notes[0]).toContain("get_today");
+  });
+
+  it("still returns the recovery when the cycle cannot be read", async () => {
+    const client = linkedClient({
+      [RECOVERY_PATH]: pageOf(EARLIER_RECOVERY),
+      [CYCLE_PATH]: new Error("503"),
+    });
+
+    const result = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+
+    expect(result.cycle_id).toBe(CLOSED_CYCLE.id);
+    expect(result.notes).toEqual([expect.stringContaining("still calibrating")]);
+  });
+
+  it("names the latest (closed) cycle without calling the recovery today's", async () => {
+    const closedLatest = { ...OPEN_CYCLE, end: "2026-09-16T21:00:00.000Z" };
+    const client = linkedClient({
+      [RECOVERY_PATH]: pageOf(EARLIER_RECOVERY),
+      [CYCLE_PATH]: pageOf(closedLatest),
+    });
+
+    const result = (await recoveryDef.fetch(client)) as { notes: string[] };
+
+    expect(result.notes[0]).toContain("not the latest cycle (id 1003");
+    expect(result.notes[0]).not.toContain("today's");
+  });
+
+  it("flags last night's sleep as missing when the latest main sleep is from an earlier cycle", async () => {
+    const client = linkedClient({
+      [SLEEP_PATH]: pageOf(EARLIER_SLEEP),
+      [CYCLE_PATH]: pageOf(OPEN_CYCLE),
+    });
+
+    const result = (await sleepDef.fetch(client)) as { id: string; notes: string[] };
+
+    expect(result.id).toBe(EARLIER_SLEEP.id);
+    expect(result.notes).toEqual([
+      expect.stringContaining("This sleep belongs to an earlier cycle (cycle_id 1002)"),
+    ]);
+    expect(result.notes[0]).toContain("last night's");
+    expect(result.notes[0]).toContain("Don't present it as today's sleep");
+  });
+
+  it("keeps the nap note next to the earlier-cycle note", async () => {
+    const newerNap = { ...NAP, cycle_id: CLOSED_CYCLE.id, start: "2026-09-15T12:00:00.000Z" };
+    const client = linkedClient({
+      [SLEEP_PATH]: pageOf(newerNap, EARLIER_SLEEP),
+      [CYCLE_PATH]: pageOf(OPEN_CYCLE),
+    });
+
+    const result = (await sleepDef.fetch(client)) as { notes: string[] };
+
+    expect(result.notes).toEqual([
+      expect.stringContaining("earlier cycle"),
+      expect.stringContaining("naps are not shown"),
+    ]);
+  });
+
+  it("does not add a cycle note to a nap-only result or a current main sleep", async () => {
+    const napOnly = await sleepDef.fetch(
+      linkedClient({ [SLEEP_PATH]: pageOf(NAP), [CYCLE_PATH]: pageOf(CLOSED_CYCLE) })
+    );
+    expect(JSON.stringify(napOnly)).not.toContain("earlier cycle");
+
+    const current = await sleepDef.fetch(
+      linkedClient({ [SLEEP_PATH]: pageOf(MAIN_SLEEP), [CYCLE_PATH]: pageOf(OPEN_CYCLE) })
+    );
+    expect(current).toEqual(MAIN_SLEEP);
+  });
+
+  it("serves today's recovery after a morning sync despite an older cached read (real client and cache)", async () => {
+    // Live timeline: the cycle is read (and cached) at 05:16, recovery and sleep at 05:17, all
+    // before the strap syncs; the new cycle, sleep and recovery appear; at 05:18:30 the cycle
+    // entry has expired but the recovery and sleep entries have not.
+    let synced = false;
+    let clock = Date.parse("2026-09-16T05:16:00.000Z");
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const fetchSpy = vi.fn((input: string | URL) => {
+      const path = new URL(String(input)).pathname;
+      const body = path.startsWith("/v2/cycle")
+        ? pageOf(synced ? OPEN_CYCLE : { ...CLOSED_CYCLE, end: null })
+        : path.startsWith("/v2/recovery")
+          ? pageOf(synced ? CALIBRATING_RECOVERY : EARLIER_RECOVERY)
+          : pageOf(synced ? MAIN_SLEEP : EARLIER_SLEEP);
+      return Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        })
+      );
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    try {
+      const client = createWhoopClient({
+        accessToken: "test-token",
+        baseUrl: "https://api.test",
+        cache: new MemoryCache(),
+      });
+      const cycleBefore = (await definition("whoop://v2/user/cycle/latest").fetch(client)) as {
+        id: number;
+      };
+      expect(cycleBefore.id).toBe(CLOSED_CYCLE.id);
+
+      clock += 60_000;
+      const before = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+      const sleepBefore = (await sleepDef.fetch(client)) as { id: string; notes?: string[] };
+      // Consistent with the cycle known at the time: no earlier-cycle note.
+      expect(before.cycle_id).toBe(CLOSED_CYCLE.id);
+      expect(JSON.stringify(before.notes)).not.toContain("earlier cycle");
+      expect(sleepBefore).toMatchObject({ id: EARLIER_SLEEP.id });
+      expect(sleepBefore.notes).toBeUndefined();
+
+      synced = true;
+      clock += 90_000;
+      const after = (await recoveryDef.fetch(client)) as { cycle_id: number; notes: string[] };
+      expect(after).toMatchObject({ cycle_id: OPEN_CYCLE.id, score: { recovery_score: 58 } });
+      expect(JSON.stringify(after.notes)).not.toContain("earlier cycle");
+
+      const sleepAfter = (await sleepDef.fetch(client)) as { id: string; notes?: string[] };
+      expect(sleepAfter.id).toBe(MAIN_SLEEP.id);
+      expect(sleepAfter.notes).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+      nowSpy.mockRestore();
+    }
   });
 });

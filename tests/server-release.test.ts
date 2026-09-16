@@ -46,6 +46,12 @@ describe("release MCP contracts", () => {
         "get_trend",
         "get_weekly_summary",
       ]);
+      // Extremes are always one record's value, so aggregate contracts do not advertise them
+      const advertised = JSON.stringify(
+        tools.filter((tool) => ["get_trend", "get_weekly_summary"].includes(tool.name))
+      );
+      for (const field of ['"min"', '"max"', '"median"', "min_score", "max_score", "max_daily"])
+        expect(advertised).not.toContain(field);
       for (const name of ["get_baselines", "get_sleep_debt"]) {
         const result = await client.callTool({ name, arguments: {} });
         expect(result.isError).not.toBe(true);

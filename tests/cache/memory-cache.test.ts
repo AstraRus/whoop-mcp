@@ -213,6 +213,58 @@ describe("MemoryCache", () => {
     expect(cache.get("a")).toBeUndefined();
   });
 
+  // -------------------------------------------------------------------------
+  // getOrFetch — reader TTL (a shared key never serves data older than asked)
+  // -------------------------------------------------------------------------
+
+  it("getOrFetch refetches when the entry is older than the reader's TTL, even if the writer's TTL is longer", async () => {
+    const cache = new MemoryCache();
+    const hour = vi.fn().mockResolvedValue({ strain: 5 });
+    const twoMin = vi.fn().mockResolvedValue({ strain: 14.2 });
+
+    await cache.getOrFetch("k", 60 * 60_000, hour);
+    vi.advanceTimersByTime(45 * 60_000);
+    const result = await cache.getOrFetch("k", 2 * 60_000, twoMin);
+
+    expect(result).toEqual({ strain: 14.2 });
+    expect(twoMin).toHaveBeenCalledTimes(1);
+  });
+
+  it("getOrFetch serves an entry younger than the reader's TTL written with a longer TTL", async () => {
+    const cache = new MemoryCache();
+    const hour = vi.fn().mockResolvedValue({ strain: 5 });
+    const twoMin = vi.fn().mockResolvedValue({ strain: 14.2 });
+
+    await cache.getOrFetch("k", 60 * 60_000, hour);
+    vi.advanceTimersByTime(60_000);
+
+    expect(await cache.getOrFetch("k", 2 * 60_000, twoMin)).toEqual({ strain: 5 });
+    expect(twoMin).not.toHaveBeenCalled();
+  });
+
+  it("getOrFetch still expires an entry at the writer's TTL for a longer-lived reader", async () => {
+    const cache = new MemoryCache();
+    const short = vi.fn().mockResolvedValue({ v: 1 });
+    const long = vi.fn().mockResolvedValue({ v: 2 });
+
+    await cache.getOrFetch("k", 2 * 60_000, short);
+    vi.advanceTimersByTime(3 * 60_000);
+
+    expect(await cache.getOrFetch("k", 60 * 60_000, long)).toEqual({ v: 2 });
+    expect(long).toHaveBeenCalledTimes(1);
+  });
+
+  it("getOrFetch applies the reader's TTL to entries stored with set()", async () => {
+    const cache = new MemoryCache({ defaultTtlMs: 60 * 60_000 });
+    cache.set("k", { v: "old" });
+    vi.advanceTimersByTime(10 * 60_000);
+    const fetcher = vi.fn().mockResolvedValue({ v: "new" });
+
+    expect(await cache.getOrFetch("k", 5 * 60_000, fetcher)).toEqual({ v: "new" });
+    // The refetch replaced the entry, so get() sees the new value
+    expect(cache.get("k")).toEqual({ v: "new" });
+  });
+
   it("getOrFetch propagates fetch errors and does not cache them", async () => {
     const cache = new MemoryCache();
     const fetcher = vi

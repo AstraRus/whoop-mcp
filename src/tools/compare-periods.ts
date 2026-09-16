@@ -10,10 +10,15 @@
  * - WHOOP's start/end filters return every record that overlaps the window,
  *   so records are fetched with a one-day margin and attributed locally to
  *   exactly one period by the local day they belong to: cycles by cycleDay(),
- *   sleeps by the local day they end, recoveries through their cycle. A day
- *   belongs to a period when the period contains that day's midnight in the
- *   user's current offset, so records keep their own local day across DST and
- *   travel.
+ *   sleeps by the local day they end, recoveries through their cycle. Records
+ *   keep their own local day across DST and travel.
+ * - A local day (in the user's current offset) belongs to a period when most
+ *   of it lies inside the period: each bound is snapped to the nearest local
+ *   midnight, except that a bound later today (at or after now) rounds up so
+ *   today stays included. Date-only bounds already sit on local midnights.
+ *   Snapping is monotone, so two non-overlapping periods never share a day.
+ *   Each period reports the first and last local day it counted; a period
+ *   that covers most of no local day gets an explicit note.
  * - Sleep hours are time asleep (light + slow-wave + REM) on main sleeps.
  * - Strain uses completed cycles; the cycle still in progress is left out.
  * - A metric with fewer than MIN_SAMPLES_PER_PERIOD samples in either period
@@ -34,7 +39,7 @@ import {
 } from "../api/record-schemas.js";
 import type { Cycle, Recovery, Sleep } from "../api/types.js";
 import { InvalidDateExpression, parseUtcOffset, resolveDateExpression } from "./date-utils.js";
-import { resolveUserUtcOffset } from "./collection-utils.js";
+import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import {
   asleepHours,
   cycleDay,
@@ -74,6 +79,10 @@ export interface PeriodSummary {
   end: string;
   /** Length in days */
   days: number;
+  /** First local day (YYYY-MM-DD, user's offset) counted in the period; null when it covers none */
+  first_day: string | null;
+  /** Last local day (YYYY-MM-DD, user's offset) counted in the period; null when it covers none */
+  last_day: string | null;
 }
 
 /** Output shape for compare_periods */
@@ -146,6 +155,12 @@ interface ResolvedPeriod {
   startMs: number;
   /** Exclusive end */
   endMs: number;
+  /** Local midnight (user's offset) starting the first counted day */
+  dayStartMs: number;
+  /** Local midnight (user's offset) after the last counted day; equals dayStartMs when none */
+  dayEndMs: number;
+  /** True when a past bound was moved to a local midnight (not just today's round-up) */
+  snapped: boolean;
   summary: PeriodSummary;
 }
 
@@ -160,6 +175,29 @@ function round(value: number, digits: number): number {
 function formatInstant(ms: number, utcOffset: string): string {
   const wallClock = new Date(ms + parseUtcOffset(utcOffset) * 60_000).toISOString();
   return utcOffset === "Z" ? wallClock : `${wallClock.slice(0, -1)}${utcOffset}`;
+}
+
+/**
+ * Snap an instant to a local midnight in the user's offset so a period counts
+ * the local days most of which it covers. A bound later today (at or after
+ * `nowMs`, before the next local midnight) rounds up so today stays included;
+ * any other bound goes to the nearest local midnight (exact noon rounds up).
+ * The mapping is monotone, so non-overlapping periods never share a day.
+ */
+function snapToLocalMidnight(ms: number, nowMs: number, utcOffset: string): number {
+  const offsetMs = parseUtcOffset(utcOffset) * 60_000;
+  const local = ms + offsetMs;
+  const floor = Math.floor(local / DAY_MS) * DAY_MS;
+  if (local === floor) return ms;
+  const nextLocalMidnight = Math.floor((nowMs + offsetMs) / DAY_MS) * DAY_MS + DAY_MS;
+  const laterToday = ms >= nowMs && local < nextLocalMidnight;
+  const snapped = laterToday || local - floor >= DAY_MS / 2 ? floor + DAY_MS : floor;
+  return snapped - offsetMs;
+}
+
+/** The local calendar day (YYYY-MM-DD) that starts at a local midnight in the user's offset */
+function dayAt(midnightMs: number, utcOffset: string): string {
+  return new Date(midnightMs + parseUtcOffset(utcOffset) * 60_000).toISOString().slice(0, 10);
 }
 
 /**
@@ -197,15 +235,27 @@ function resolvePeriod(
         `${MAX_PERIOD_DAYS} days.`
     );
   }
+  const nowMs = now.getTime();
+  const dayStartMs = snapToLocalMidnight(startMs, nowMs, utcOffset);
+  const dayEndMs = snapToLocalMidnight(endMs, nowMs, utcOffset);
+  const coversDays = dayEndMs > dayStartMs;
+  // An end later today only rounds up to keep today; that is not worth a note
+  const endRoundedUpForToday =
+    endMs >= nowMs && dayEndMs === snapToLocalMidnight(nowMs, nowMs, utcOffset);
   return {
     key,
     label,
     startMs,
     endMs,
+    dayStartMs,
+    dayEndMs,
+    snapped: dayStartMs !== startMs || (dayEndMs !== endMs && !endRoundedUpForToday),
     summary: {
       start: formatInstant(startMs, utcOffset),
       end: formatInstant(inclusiveEndMs, utcOffset),
       days: round(days, 2),
+      first_day: coversDays ? dayAt(dayStartMs, utcOffset) : null,
+      last_day: coversDays ? dayAt(dayEndMs - DAY_MS, utcOffset) : null,
     },
   };
 }
@@ -228,6 +278,14 @@ interface PeriodLoad {
   cycle: SourceLoad<Cycle>;
 }
 
+/** The fetched window: the period and its counted days, plus a margin on both sides */
+function fetchWindow(period: ResolvedPeriod): { start: string; end: string } {
+  return {
+    start: new Date(Math.min(period.startMs, period.dayStartMs) - FETCH_MARGIN_MS).toISOString(),
+    end: new Date(Math.max(period.endMs, period.dayEndMs) + FETCH_MARGIN_MS).toISOString(),
+  };
+}
+
 /**
  * Fetch every record overlapping the period (plus a margin) and keep those
  * matching the record schema. WHOOP API and format errors degrade to an empty
@@ -239,11 +297,7 @@ async function loadSource<T>(
   period: ResolvedPeriod,
   schema: z.ZodType
 ): Promise<SourceLoad<T>> {
-  const query = new URLSearchParams({
-    start: new Date(period.startMs - FETCH_MARGIN_MS).toISOString(),
-    end: new Date(period.endMs + FETCH_MARGIN_MS).toISOString(),
-    limit: String(PAGE_SIZE),
-  });
+  const query = new URLSearchParams({ ...fetchWindow(period), limit: String(PAGE_SIZE) });
   try {
     const result = await fetchAllPages<unknown>(client, `${endpoint}?${query.toString()}`, {
       maxRecords: ABSOLUTE_MAX_RECORDS,
@@ -289,13 +343,12 @@ interface PeriodSamples {
 }
 
 /**
- * Whether a local calendar day (taken in the record's own offset) belongs to
- * the period: the period contains that day's midnight in the user's offset,
- * the offset the period was resolved in.
+ * Whether a local calendar day (taken in the record's own offset) is one of
+ * the local days counted in the period (first_day..last_day inclusive).
  */
-function containsDay(period: ResolvedPeriod, day: string, utcOffset: string): boolean {
-  const midnight = Date.parse(`${day}T00:00:00.000Z`) - parseUtcOffset(utcOffset) * 60_000;
-  return midnight >= period.startMs && midnight < period.endMs;
+function containsDay(period: ResolvedPeriod, day: string): boolean {
+  const { first_day: first, last_day: last } = period.summary;
+  return first !== null && last !== null && day >= first && day <= last;
 }
 
 /**
@@ -327,7 +380,7 @@ function collectSamples(
   const strain: number[] = [];
   let inProgressCycles = 0;
   for (const cycle of cycles.values()) {
-    if (!containsDay(period, cycleDay(cycle), utcOffset)) continue;
+    if (!containsDay(period, cycleDay(cycle))) continue;
     if (cycle.end === null || cycle.end === undefined) {
       inProgressCycles += 1;
       continue;
@@ -335,12 +388,8 @@ function collectSamples(
     if (cycle.score_state === "SCORED" && cycle.score) strain.push(cycle.score.strain);
   }
 
-  const fetchWindow = {
-    start: new Date(period.startMs - FETCH_MARGIN_MS).toISOString(),
-    end: new Date(period.endMs + FETCH_MARGIN_MS).toISOString(),
-  };
-  const sleepHours = mainSleeps(load.sleep.records, fetchWindow, sourceQuality())
-    .filter((sleep) => containsDay(period, localDay(sleep.end, sleep.timezone_offset), utcOffset))
+  const sleepHours = mainSleeps(load.sleep.records, fetchWindow(period), sourceQuality())
+    .filter((sleep) => containsDay(period, localDay(sleep.end, sleep.timezone_offset)))
     .map(asleepHours);
 
   const recovery: number[] = [];
@@ -349,7 +398,7 @@ function collectSamples(
   for (const record of load.recovery.records) {
     if (record.score_state !== "SCORED" || !record.score) continue;
     const day = recoveryDay(record, cycles, sleeps, utcOffset);
-    if (!containsDay(period, day, utcOffset) || seenCycles.has(record.cycle_id)) continue;
+    if (!containsDay(period, day) || seenCycles.has(record.cycle_id)) continue;
     seenCycles.add(record.cycle_id);
     recovery.push(record.score.recovery_score);
     if (record.score.user_calibrating) calibrating += 1;
@@ -422,6 +471,10 @@ function strainDirection(change: Change): StrainDirection {
 // Notes and warnings
 // ---------------------------------------------------------------------------
 
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 function plural(count: number, singular: string, pluralForm: string): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
@@ -465,8 +518,13 @@ function insufficientNote(
   unit: [string, string],
   aCount: number,
   bCount: number,
-  calibrating: boolean
+  calibrating: boolean,
+  emptyPeriods: ResolvedPeriod[]
 ): string {
+  if (emptyPeriods.length > 0) {
+    const labels = emptyPeriods.map((period) => period.label).join(" and ");
+    return `Cannot compare ${metric}: ${labels} ${emptyPeriods.length === 1 ? "covers" : "cover"} no local day.`;
+  }
   const reason =
     aCount === 0 && bCount === 0
       ? `neither period has any ${unit[1]}`
@@ -497,7 +555,7 @@ export async function comparePeriods(
   params: ComparePeriodsParams,
   now: Date = new Date()
 ): Promise<PeriodComparison> {
-  const utcOffset = await resolveUserUtcOffset(client);
+  const { offset: utcOffset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
   const periodA = resolvePeriod("a", params.period_a_start, params.period_a_end, now, utcOffset);
   const periodB = resolvePeriod("b", params.period_b_start, params.period_b_end, now, utcOffset);
 
@@ -526,6 +584,20 @@ export async function comparePeriods(
   const calibrating = samplesA.calibrating + samplesB.calibrating > 0;
   const warnings = [...loadWarnings(periodA, loadA), ...loadWarnings(periodB, loadB)];
   const notes: string[] = [];
+  const emptyPeriods = [periodA, periodB].filter((period) => period.summary.first_day === null);
+
+  for (const period of [periodA, periodB]) {
+    const { first_day: first, last_day: last, start, end } = period.summary;
+    if (first === null || last === null) {
+      notes.push(
+        `${capitalize(period.label)} (${start} to ${end}) does not cover most of any local day, so no days were counted in it. A day counts toward a period when most of that day lies inside it; use YYYY-MM-DD dates to compare whole days.`
+      );
+    } else if (period.snapped) {
+      notes.push(
+        `${capitalize(period.label)} does not start and end at local midnight, so it counts the local days mostly inside it: ${first === last ? first : `${first} to ${last}`}.`
+      );
+    }
+  }
 
   if (recovery.change === "insufficient") {
     notes.push(
@@ -534,7 +606,8 @@ export async function comparePeriods(
         ["scored recovery", "scored recoveries"],
         samplesA.recovery.length,
         samplesB.recovery.length,
-        calibrating
+        calibrating,
+        emptyPeriods
       )
     );
   }
@@ -545,7 +618,8 @@ export async function comparePeriods(
         ["scored night", "scored nights"],
         samplesA.sleepHours.length,
         samplesB.sleepHours.length,
-        calibrating
+        calibrating,
+        emptyPeriods
       )
     );
   }
@@ -556,7 +630,8 @@ export async function comparePeriods(
         ["completed cycle", "completed cycles"],
         samplesA.strain.length,
         samplesB.strain.length,
-        calibrating
+        calibrating,
+        emptyPeriods
       )
     );
   }
@@ -606,7 +681,7 @@ export async function comparePeriods(
       direction: strainDirection(strain.change),
     },
     truncated: sources.some((source) => source.truncated),
-    notes,
+    notes: withOffsetNote(notes, offsetFallback),
     warnings,
   };
 }

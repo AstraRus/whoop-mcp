@@ -33,7 +33,8 @@ vi.mock("../src/auth/token-store.js", () => ({
 
 const mockCreateWhoopClient = vi.fn();
 
-vi.mock("../src/api/client.js", () => ({
+vi.mock("../src/api/client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/api/client.js")>()),
   createWhoopClient: (...args: unknown[]) => mockCreateWhoopClient(...args),
 }));
 
@@ -191,7 +192,8 @@ describe("main() entry point", () => {
         expect.objectContaining({
           clientId: "test-client-id",
           clientSecret: "test-client-secret",
-        })
+        }),
+        expect.objectContaining({ onTokens: expect.any(Function) })
       );
     });
 
@@ -346,6 +348,207 @@ describe("main() entry point", () => {
       await clientOptions.onTokenRefresh();
 
       expect(clearSpy).toHaveBeenCalledOnce();
+    });
+
+    // R20: WHOOP rotates refresh tokens, so tokens it issued must never be lost
+    // because saving them failed.
+    describe("when saving refreshed tokens fails", () => {
+      const tokens = (n: number, expiresAt: number): Record<string, unknown> => ({
+        access_token: `A${n}`,
+        refresh_token: `R${n}`,
+        expires_at: expiresAt,
+        token_type: "Bearer",
+      });
+
+      /** Fake WHOOP: each refresh token works once and yields the next pair. */
+      function rotatingWhoop(): void {
+        mockRefreshAccessToken.mockImplementation(async (refreshToken: string) => {
+          const n = Number(refreshToken.slice(1)) + 1;
+          return { access_token: `A${n}`, refresh_token: `R${n}`, expires_in: 3600 };
+        });
+        let clock = Date.now();
+        mockToOAuthTokens.mockImplementation((response: { access_token: string }) => {
+          clock += 1000;
+          const n = Number(response.access_token.slice(1));
+          return tokens(n, clock + 3_600_000);
+        });
+      }
+
+      async function startAndGetRefresh(): Promise<() => Promise<string>> {
+        const { main } = await importMain();
+        await main();
+        const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
+          onTokenRefresh: () => Promise<string>;
+        };
+        return clientOptions.onTokenRefresh;
+      }
+
+      it("still returns the new access token, logs only the error code, and refreshes from the kept tokens", async () => {
+        setupHappyPath();
+        rotatingWhoop();
+        // Disk keeps R0: every save fails like a rename onto a bind-mounted file
+        mockLoadTokens.mockResolvedValue(tokens(0, Date.now() - 1000));
+        mockSaveTokens.mockRejectedValue(
+          Object.assign(new Error("EBUSY: rename '/home/node/.whoop-mcp/tokens.json.tmp'"), {
+            code: "EBUSY",
+          })
+        );
+        const stderr: string[] = [];
+        const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+          stderr.push(String(chunk));
+          return true;
+        });
+
+        try {
+          const onTokenRefresh = await startAndGetRefresh();
+
+          await expect(onTokenRefresh()).resolves.toBe("A1");
+          await expect(onTokenRefresh()).resolves.toBe("A2");
+        } finally {
+          writeSpy.mockRestore();
+        }
+
+        expect(mockRefreshAccessToken.mock.calls.map((c) => c[0])).toEqual(["R0", "R1"]);
+        const log = stderr.join("");
+        expect(log).toContain("whoop token save failed");
+        expect(log).toContain("EBUSY");
+        expect(log).not.toContain("/home/node");
+        expect(log).not.toMatch(/"R\d"|"A\d"/);
+      });
+
+      it("prefers newer tokens on disk (e.g. written by setup --verify) over the kept ones", async () => {
+        setupHappyPath();
+        rotatingWhoop();
+        mockLoadTokens.mockResolvedValueOnce(tokens(0, Date.now() - 1000));
+        mockSaveTokens.mockRejectedValue(Object.assign(new Error("EPERM"), { code: "EPERM" }));
+
+        const onTokenRefresh = await startAndGetRefresh();
+        await onTokenRefresh(); // keeps A1/R1 in memory, disk still R0
+
+        mockLoadTokens.mockResolvedValueOnce(tokens(40, Date.now() + 10 * 3_600_000));
+        await expect(onTokenRefresh()).resolves.toBe("A41");
+        expect(mockRefreshAccessToken.mock.calls.map((c) => c[0])).toEqual(["R0", "R40"]);
+      });
+
+      it("refreshes from the tokens authenticate() obtained when they never reached disk", async () => {
+        setupHappyPath();
+        rotatingWhoop();
+        mockAuthenticate.mockImplementation(async (...args: unknown[]): Promise<string> => {
+          const options = args[1] as { onTokens: (t: unknown) => void };
+          options.onTokens(tokens(7, Date.now() + 3_600_000));
+          return "A7";
+        });
+        mockLoadTokens.mockResolvedValue(tokens(6, Date.now() - 1000));
+        mockSaveTokens.mockResolvedValue(undefined);
+
+        const onTokenRefresh = await startAndGetRefresh();
+
+        await expect(onTokenRefresh()).resolves.toBe("A8");
+        expect(mockRefreshAccessToken).toHaveBeenCalledWith("R7", expect.anything());
+      });
+    });
+
+    // R24: a restart must reach the sign-in flow after WHOOP rejected the refresh
+    // token, even while the cached access token has not expired yet.
+    describe("when WHOOP rejects the refresh token", () => {
+      const stored = {
+        access_token: "A0",
+        refresh_token: "R0",
+        expires_at: Date.now() + 50 * 60_000,
+        token_type: "Bearer",
+      };
+
+      async function refreshFn(): Promise<() => Promise<string>> {
+        const { main } = await importMain();
+        await main();
+        return (mockCreateWhoopClient.mock.calls[0][0] as { onTokenRefresh: () => Promise<string> })
+          .onTokenRefresh;
+      }
+
+      it("marks the stored tokens expired so the next start signs in again", async () => {
+        setupHappyPath();
+        mockLoadTokens.mockResolvedValue(stored);
+        mockSaveTokens.mockResolvedValue(undefined);
+        const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+        const rejection = new TokenRefreshError(400, "invalid_grant");
+        mockRefreshAccessToken.mockRejectedValue(rejection);
+
+        const onTokenRefresh = await refreshFn();
+
+        await expect(onTokenRefresh()).rejects.toBe(rejection);
+        expect(mockSaveTokens).toHaveBeenCalledOnce();
+        expect(mockSaveTokens).toHaveBeenCalledWith({ ...stored, expires_at: 0 });
+      });
+
+      it("leaves the stored tokens alone on a network failure", async () => {
+        setupHappyPath();
+        mockLoadTokens.mockResolvedValue(stored);
+        const { WhoopNetworkError } = await import("../src/api/client.js");
+        mockRefreshAccessToken.mockRejectedValue(new WhoopNetworkError(new TypeError("fetch")));
+
+        const onTokenRefresh = await refreshFn();
+
+        await expect(onTokenRefresh()).rejects.toBeInstanceOf(WhoopNetworkError);
+        expect(mockSaveTokens).not.toHaveBeenCalled();
+      });
+
+      it.each([429, 500, 503])(
+        "keeps every token after a transient %i from the token endpoint",
+        async (status) => {
+          setupHappyPath();
+          const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+          mockLoadTokens.mockResolvedValue(stored);
+          mockRefreshAccessToken.mockRejectedValue(new TokenRefreshError(status, "unavailable"));
+
+          const onTokenRefresh = await refreshFn();
+
+          await expect(onTokenRefresh()).rejects.toThrow(`(${status})`);
+          expect(mockSaveTokens).not.toHaveBeenCalled();
+        }
+      );
+
+      it("keeps a rotated in-memory refresh token through a transient 503 after a failed save", async () => {
+        setupHappyPath();
+        const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+        mockLoadTokens.mockResolvedValue({ ...stored, expires_at: Date.now() - 1000 });
+        mockSaveTokens.mockRejectedValue(Object.assign(new Error("EBUSY"), { code: "EBUSY" }));
+        mockToOAuthTokens.mockImplementation(
+          (response: { access_token: string; refresh_token: string }) => ({
+            access_token: response.access_token,
+            refresh_token: response.refresh_token,
+            expires_at: Date.now() + 3_600_000,
+            token_type: "Bearer",
+          })
+        );
+        mockRefreshAccessToken
+          .mockResolvedValueOnce({ access_token: "A1", refresh_token: "R1", expires_in: 3600 })
+          .mockRejectedValueOnce(new TokenRefreshError(503, "unavailable"))
+          .mockResolvedValueOnce({ access_token: "A2", refresh_token: "R2", expires_in: 3600 });
+
+        const onTokenRefresh = await refreshFn();
+
+        await expect(onTokenRefresh()).resolves.toBe("A1"); // save failed: R1 only in memory
+        await expect(onTokenRefresh()).rejects.toThrow("(503)");
+        await expect(onTokenRefresh()).resolves.toBe("A2");
+        expect(mockRefreshAccessToken.mock.calls.map((call) => call[0])).toEqual([
+          "R0",
+          "R1",
+          "R1",
+        ]);
+      });
+
+      it("does not mark newer tokens another process saved meanwhile", async () => {
+        setupHappyPath();
+        const newer = { ...stored, refresh_token: "R9", expires_at: stored.expires_at + 60_000 };
+        mockLoadTokens.mockResolvedValueOnce(stored).mockResolvedValueOnce(newer);
+        const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+        mockRefreshAccessToken.mockRejectedValue(new TokenRefreshError(400, "invalid_grant"));
+
+        const onTokenRefresh = await refreshFn();
+
+        await expect(onTokenRefresh()).rejects.toThrow("Token refresh failed");
+        expect(mockSaveTokens).not.toHaveBeenCalled();
+      });
     });
   });
 

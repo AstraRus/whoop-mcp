@@ -18,8 +18,9 @@
 
 import { authenticate, refreshAccessToken, toOAuthTokens } from "./auth/oauth.js";
 import type { OAuthConfig } from "./auth/oauth.js";
-import { loadTokens, saveTokens } from "./auth/token-store.js";
+import { loadTokens, saveTokens, type OAuthTokens } from "./auth/token-store.js";
 import { createWhoopClient } from "./api/client.js";
+import { TokenRefreshError } from "./auth/token-refresh-error.js";
 import { MemoryCache } from "./cache/memory-cache.js";
 import { createWhoopServer } from "./server.js";
 import { connectStdioTransport } from "./transport/stdio.js";
@@ -96,6 +97,30 @@ function parseAllowedOrigins(): string[] {
     .filter((s) => s.length > 0);
 }
 
+/** The `code` of a failed file operation, for logging without paths or token values */
+function errorCode(error: unknown): string {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code: unknown }).code;
+    if (typeof code === "string") return code;
+  }
+  return error instanceof Error ? error.name : "unknown";
+}
+
+/**
+ * The token set to refresh from: the one on disk, unless the one kept in
+ * memory is newer (its save failed, so disk still holds a refresh token WHOOP
+ * already rotated). Tokens written by another process (e.g. setup --verify)
+ * are newer than the in-memory ones and win.
+ */
+export function newestTokens(
+  stored: OAuthTokens | null,
+  inMemory: OAuthTokens | null
+): OAuthTokens | null {
+  if (stored === null) return inMemory;
+  if (inMemory === null) return stored;
+  return inMemory.expires_at > stored.expires_at ? inMemory : stored;
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -116,7 +141,16 @@ export async function main(): Promise<void> {
 
   // 3. Authenticate with WHOOP — uses cached tokens, refreshes, or runs full flow
   console.error("Authenticating with WHOOP...");
-  const accessToken = await authenticate(oauthConfig);
+  /**
+   * Newest tokens WHOOP issued to this process. WHOOP rotates refresh tokens,
+   * so these must survive a failed save to disk.
+   */
+  let latestTokens: OAuthTokens | null = null;
+  const accessToken = await authenticate(oauthConfig, {
+    onTokens: (tokens) => {
+      latestTokens = tokens;
+    },
+  });
   console.error("Authentication successful.");
   logger.info("whoop authentication complete");
 
@@ -125,17 +159,60 @@ export async function main(): Promise<void> {
   // and the MCP resources; it is cleared whenever tokens are refreshed.
   const cache = new MemoryCache();
 
+  /**
+   * WHOOP rejected `rejected`: make the stored tokens look expired so the next
+   * start refreshes instead of reusing the cached access token, and so signs in
+   * again (OAuth flow) when WHOOP still rejects the refresh. Tokens another
+   * process saved in the meantime are left alone.
+   */
+  const markStoredTokensRejected = async (rejected: OAuthTokens): Promise<void> => {
+    if (latestTokens?.refresh_token === rejected.refresh_token) {
+      latestTokens = null;
+    }
+    try {
+      const stored = await loadTokens();
+      if (
+        stored !== null &&
+        stored.expires_at > 0 &&
+        (stored.refresh_token === rejected.refresh_token ||
+          stored.expires_at <= rejected.expires_at)
+      ) {
+        await saveTokens({ ...stored, expires_at: 0 });
+      }
+    } catch (error: unknown) {
+      logger.error("whoop token store update failed", { code: errorCode(error) });
+    }
+  };
+
   const onTokenRefresh = async (): Promise<string> => {
-    const tokens = await loadTokens();
+    const tokens = newestTokens(await loadTokens(), latestTokens);
     if (!tokens) {
       throw new Error(
         "Token refresh failed: no stored tokens found. Re-authentication may be required."
       );
     }
 
-    const refreshed = await refreshAccessToken(tokens.refresh_token, oauthConfig);
+    let refreshed: Awaited<ReturnType<typeof refreshAccessToken>>;
+    try {
+      refreshed = await refreshAccessToken(tokens.refresh_token, oauthConfig);
+    } catch (error: unknown) {
+      // Only a refusal of the refresh token itself means signing in again; a
+      // network error or a transient 429/5xx leaves every token usable (and
+      // the in-memory ones may be the only copy of a rotated refresh token).
+      if (error instanceof TokenRefreshError && error.rejected) {
+        await markStoredTokensRejected(tokens);
+      }
+      throw error;
+    }
     const newTokens = toOAuthTokens(refreshed, tokens.refresh_token);
-    await saveTokens(newTokens);
+    // WHOOP has now invalidated the old refresh token: keep the new tokens in
+    // memory first, so a failed save cannot lose them.
+    latestTokens = newTokens;
+    try {
+      await saveTokens(newTokens);
+    } catch (error: unknown) {
+      logger.error("whoop token save failed", { code: errorCode(error) });
+    }
 
     cache.clear();
     logger.info("whoop token refreshed");

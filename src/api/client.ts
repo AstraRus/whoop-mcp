@@ -9,6 +9,7 @@
 import { WHOOP_API_BASE_URL } from "./endpoints.js";
 import type { Logger } from "../logging/logger.js";
 import { MemoryCache, DEFAULT_TTL_MS } from "../cache/memory-cache.js";
+import { TokenRefreshError } from "../auth/token-refresh-error.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -105,15 +106,28 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
+/**
+ * How to sign in to WHOOP again once the stored tokens are unusable. The
+ * server only runs the WHOOP authorization flow at startup, when tokens.json is
+ * missing or its access token has expired and cannot be refreshed; a local
+ * setup --verify runs the same check. When WHOOP rejects a refresh, the server
+ * marks the stored tokens expired, so a restart is enough.
+ */
+const SIGN_IN_FLOW =
+  "it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server)";
+
+/** Remediation that forces a new sign-in: needed when refreshing still works but WHOOP refuses the tokens. */
+const SIGN_IN_AFTER_DELETING_TOKENS = `To sign in again, delete tokens.json from the server's token folder (~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): ${SIGN_IN_FLOW}.`;
+
 function describeApiStatus(statusCode: number): string {
   if (statusCode === 400) {
     return "WHOOP rejected the request parameters (HTTP 400). Check the ids and dates: use ISO 8601 dates or a supported date expression, and make sure start is before end.";
   }
   if (statusCode === 401) {
-    return "WHOOP rejected the authorization (HTTP 401). Run setup --verify to reconnect.";
+    return `WHOOP rejected the authorization (HTTP 401). ${SIGN_IN_AFTER_DELETING_TOKENS}`;
   }
   if (statusCode === 403) {
-    return "WHOOP denied access (HTTP 403). The connection may be missing a required permission; run setup --verify to reconnect.";
+    return `WHOOP denied access (HTTP 403). The connection may be missing a required permission. ${SIGN_IN_AFTER_DELETING_TOKENS}`;
   }
   if (statusCode === 404) {
     return "WHOOP found no matching record (HTTP 404). Check the ids and dates: use an id taken from a collection response (sleep and workout ids are UUIDs, cycle ids are numbers).";
@@ -158,7 +172,12 @@ function describeWhoopErrorAt(error: unknown, depth: number): string | undefined
     if (error.cause instanceof WhoopNetworkError) {
       return describeWhoopErrorAt(error.cause, depth + 1);
     }
-    return "WHOOP authentication failed: the access token could not be refreshed. Run setup --verify to reconnect.";
+    if (error.cause instanceof TokenRefreshError && !error.cause.rejected) {
+      return error.cause.statusCode === 429
+        ? "WHOOP rate-limited the token refresh. Your sign-in is still valid; retry in a minute."
+        : "WHOOP's sign-in service is temporarily unavailable. Your sign-in is still valid; retry shortly.";
+    }
+    return `WHOOP authentication failed: the access token could not be refreshed. To sign in again, restart the server (locally, setup --verify also works): ${SIGN_IN_FLOW}. If it starts without asking you to sign in, delete tokens.json from its token folder (~/.whoop-mcp; on a hosted server, its mounted volume) and restart it again.`;
   }
   if (error instanceof WhoopNetworkError) {
     const cause = error.cause;
@@ -167,6 +186,9 @@ function describeWhoopErrorAt(error: unknown, depth: number): string | undefined
     }
     if (isTimeoutError(cause)) {
       return "Network error: the WHOOP API did not respond in time. Retry shortly.";
+    }
+    if (cause instanceof SyntaxError) {
+      return "WHOOP API returned an unreadable response. Retry later.";
     }
     return "Network error: Unable to reach the WHOOP API. Check your internet connection.";
   }
@@ -299,6 +321,24 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
     }
   }
 
+  /**
+   * Parse a successful response body. The request timeout also covers reading
+   * the body, so a reset, a timeout mid-body or a non-JSON body (e.g. a proxy
+   * page) is reported as a WhoopNetworkError like a failed fetch.
+   */
+  async function readJson<T>(response: Response, url: string): Promise<T> {
+    try {
+      return (await response.json()) as T;
+    } catch (error: unknown) {
+      // Log the error name only: a SyntaxError message can quote the body.
+      logger?.error(
+        "whoop api response read failed",
+        logExtras({ url, error: error instanceof Error ? error.name : typeof error })
+      );
+      throw new WhoopNetworkError(error);
+    }
+  }
+
   async function parseErrorBody(response: Response): Promise<unknown> {
     try {
       const rawBody = await response.text();
@@ -372,7 +412,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
       const response = await doFetch(url, sentToken);
 
       if (response.ok) {
-        return (await response.json()) as T;
+        return await readJson<T>(response, url);
       }
 
       const body = await parseErrorBody(response);
@@ -407,7 +447,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
         // Retry with the new token
         const retryResponse = await doFetch(url, newToken);
         if (retryResponse.ok) {
-          return (await retryResponse.json()) as T;
+          return await readJson<T>(retryResponse, url);
         }
 
         // Retry also failed — throw the original error

@@ -15,6 +15,7 @@ import {
   WHOOP_REQUIRED_SCOPES,
 } from "../api/endpoints.js";
 import { WhoopNetworkError } from "../api/client.js";
+import { TokenRefreshError } from "./token-refresh-error.js";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -119,7 +120,12 @@ export async function exchangeCodeForTokens(
     throw new Error(`Token exchange failed (${response.status}): ${description}`);
   }
 
-  return (await response.json()) as TokenResponse;
+  try {
+    return (await response.json()) as TokenResponse;
+  } catch (error) {
+    // A reset, timeout or non-JSON body after WHOOP accepted the code
+    throw new WhoopNetworkError(error);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -160,10 +166,16 @@ export async function refreshAccessToken(
       typeof errorBody.error_description === "string"
         ? errorBody.error_description
         : "unknown error";
-    throw new Error(`Token refresh failed (${response.status}): ${description}`);
+    throw new TokenRefreshError(response.status, description);
   }
 
-  return (await response.json()) as TokenResponse;
+  try {
+    return (await response.json()) as TokenResponse;
+  } catch (error) {
+    // The connection dropped, timed out or returned a non-JSON body after WHOOP
+    // accepted the request: a transport problem, not a rejected refresh token.
+    throw new WhoopNetworkError(error);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -237,14 +249,51 @@ export function openBrowser(url: string): void {
 // authenticate
 // ---------------------------------------------------------------------------
 
+/** Options for {@link authenticate} */
+export interface AuthenticateOptions {
+  /**
+   * Receives the token set authenticate() settled on (cached, refreshed or
+   * newly authorized), so the caller can keep it in memory. WHOOP rotates
+   * refresh tokens: when saving to disk fails, this is the only copy.
+   */
+  onTokens?: (tokens: OAuthTokens) => void;
+}
+
+/**
+ * Save tokens after WHOOP issued them, tolerating a failed save.
+ *
+ * WHOOP has already invalidated the previous refresh token at this point, so a
+ * save failure must not discard the new tokens. The failure is logged by error
+ * code only (never the path or token values).
+ */
+async function saveIssuedTokens(tokens: OAuthTokens, tokenDir: string | undefined): Promise<void> {
+  try {
+    await saveTokens(tokens, tokenDir);
+  } catch (error: unknown) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { code: unknown }).code)
+        : "unknown";
+    console.error(
+      `Could not save the new WHOOP tokens (${code}); they are kept in memory for this run only.`
+    );
+  }
+}
+
 /**
  * Main entry point. Returns a valid access token.
  *
  * - If valid (non-expired) tokens exist on disk → returns `access_token`
  * - If tokens exist but are expired → refreshes and returns new `access_token`
- * - If no tokens or refresh fails → starts full OAuth flow
+ * - If no tokens or WHOOP rejects the refresh → starts full OAuth flow
+ *
+ * A failure to save refreshed tokens does not start the OAuth flow: the new
+ * tokens are returned (and passed to `options.onTokens`) anyway.
  */
-export async function authenticate(config: OAuthConfig): Promise<string> {
+export async function authenticate(
+  config: OAuthConfig,
+  options: AuthenticateOptions = {}
+): Promise<string> {
   // Validate required credentials
   if (!config.clientId) {
     throw new Error("Missing WHOOP_CLIENT_ID. Set it in your environment variables.");
@@ -260,17 +309,15 @@ export async function authenticate(config: OAuthConfig): Promise<string> {
     // 2a. If valid, return immediately
     if (!isTokenExpired(existing)) {
       console.error("Using cached WHOOP tokens (not expired).");
+      options.onTokens?.(existing);
       return existing.access_token;
     }
 
     // 2b. If expired, try to refresh
     console.error("Cached tokens expired, attempting refresh...");
+    let refreshed: TokenResponse | undefined;
     try {
-      const refreshed = await refreshAccessToken(existing.refresh_token, config);
-      const tokens = toOAuthTokens(refreshed, existing.refresh_token);
-      await saveTokens(tokens, config.tokenDir);
-      console.error("Token refresh successful.");
-      return tokens.access_token;
+      refreshed = await refreshAccessToken(existing.refresh_token, config);
     } catch (error: unknown) {
       // Network failures shouldn't force the user through a fresh OAuth flow — let the caller retry.
       if (error instanceof WhoopNetworkError) {
@@ -280,19 +327,30 @@ export async function authenticate(config: OAuthConfig): Promise<string> {
       const message = error instanceof Error ? error.message : "unknown error";
       console.error(`Token refresh failed, starting full OAuth flow: ${message}`);
     }
+    if (refreshed !== undefined) {
+      // Outside the try above: the refresh token is already rotated, so a save
+      // failure must never fall through to a full OAuth flow.
+      const tokens = toOAuthTokens(refreshed, existing.refresh_token);
+      options.onTokens?.(tokens);
+      await saveIssuedTokens(tokens, config.tokenDir);
+      console.error("Token refresh successful.");
+      return tokens.access_token;
+    }
   } else {
     console.error("No cached tokens found, starting OAuth flow...");
   }
 
   // 3. Full OAuth flow
-  return performOAuthFlow(config);
+  const tokens = await performOAuthFlow(config);
+  options.onTokens?.(tokens);
+  return tokens.access_token;
 }
 
 /**
  * Run the full OAuth Authorization Code flow:
  * start callback server → open browser → wait for code → exchange → save.
  */
-async function performOAuthFlow(config: OAuthConfig): Promise<string> {
+async function performOAuthFlow(config: OAuthConfig): Promise<OAuthTokens> {
   const state = randomBytes(16).toString("hex");
   const pkce = generatePkcePair();
   const port = config.port ?? 3000;
@@ -320,9 +378,9 @@ async function performOAuthFlow(config: OAuthConfig): Promise<string> {
   // Exchange the code for tokens
   const tokenResponse = await exchangeCodeForTokens(code, config, pkce.codeVerifier);
   const tokens = toOAuthTokens(tokenResponse);
-  await saveTokens(tokens, config.tokenDir);
+  await saveIssuedTokens(tokens, config.tokenDir);
 
-  return tokens.access_token;
+  return tokens;
 }
 
 function generatePkcePair(): PkcePair {

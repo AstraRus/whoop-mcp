@@ -52,11 +52,24 @@ export function circularStats(minutes: number[]): { mean: number | null; sd: num
 // ---------------------------------------------------------------------------
 
 /**
- * Arithmetic mean.
+ * Whether every value is identical (true for a single value).
+ * @throws Error if values is empty
+ */
+export function isConstant(values: number[]): boolean {
+  assertNonEmpty(values, "isConstant");
+  return values.every((value) => value === values[0]);
+}
+
+/**
+ * Arithmetic mean. Identical values return that value exactly (summing
+ * decimals such as 70.1 would otherwise drift to 70.09999999999998).
  * @throws Error if values is empty
  */
 export function mean(values: number[]): number {
   assertNonEmpty(values, "mean");
+  if (isConstant(values)) {
+    return values[0]!;
+  }
   let sum = 0;
   for (const v of values) {
     sum += v;
@@ -86,7 +99,7 @@ export function median(values: number[]): number {
  */
 export function standardDeviation(values: number[]): number {
   assertNonEmpty(values, "standardDeviation");
-  if (values.length === 1) {
+  if (isConstant(values)) {
     return 0;
   }
   const avg = mean(values);
@@ -207,7 +220,8 @@ export function linearRegressionXY(xs: number[], ys: number[]): LinearRegression
     sxy += dx * dy;
     syy += dy * dy;
   }
-  if (n === 1 || sxx === 0) {
+  // Constant ys are checked exactly: rounding in the mean leaves syy tiny but non-zero
+  if (n === 1 || sxx === 0 || isConstant(ys)) {
     return { slope: 0, r2: 0 };
   }
   const slope = sxy / sxx;

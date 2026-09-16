@@ -13,19 +13,28 @@ import {
   DISCLAIMER,
   exclude,
   finishQuality,
+  formatLocalTimestamp,
+  localMidnightMs,
   loadAnalyticsSource,
   mostRelevantError,
   localDay,
   mainSleeps,
-  observedPeriod,
   periodSchema,
   asleepHours,
   type SourceQuality,
 } from "./analytics-utils.js";
+import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import { mean, median, percentile, standardDeviation } from "./stats-utils.js";
 
 /** Earlier observations (besides the most recent one and today) a baseline needs. */
 export const BASELINE_MIN_SAMPLES = 14;
+
+/**
+ * Days read beyond `baseline_days`: the most recent observation and the current
+ * local day are never part of a baseline, so the window reaches back two more
+ * days and `baseline_days` earlier days fit in it.
+ */
+export const BASELINE_EXTRA_DAYS = 2;
 
 export const baselinesInputSchema = z.object({
   baseline_days: z
@@ -35,7 +44,7 @@ export const baselinesInputSchema = z.object({
     .max(180)
     .optional()
     .describe(
-      "Days of history to build baselines from, ending now (14-180). Default: 30. Each baseline needs at least 14 earlier days with data; until then its metric_status explains why (e.g. 'calibrating')."
+      "Earlier days to build baselines from (14-180). Default: 30. The most recent observation and today are not part of a baseline, so the window read reaches 2 days further back (baseline_days + 2 days, ending now). Each baseline needs at least 14 earlier days with data; until then its metric_status explains why (e.g. 'calibrating')."
     ),
 });
 const metricNameSchema = z.enum([
@@ -103,6 +112,21 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
+/**
+ * The local days the baselines were built from: local midnight of the earliest
+ * day to the last millisecond of the latest day, each in its record's offset.
+ */
+function observedDays(observations: Observation[]): { start: string; end: string } | null {
+  if (!observations.length) return null;
+  const byDay = [...observations].sort((left, right) => left.day.localeCompare(right.day));
+  const first = byDay[0]!;
+  const last = byDay[byDay.length - 1]!;
+  return {
+    start: formatLocalTimestamp(localMidnightMs(first.day, first.offset), first.offset),
+    end: formatLocalTimestamp(localMidnightMs(last.day, last.offset) + DAY_MS - 1, last.offset),
+  };
+}
+
 /** Explanatory notes for records a source skipped (safe for aggregate mode: counts only). */
 function sourceNotes(
   label: string,
@@ -134,15 +158,15 @@ export async function getBaselines(
   now: Date = new Date()
 ): Promise<BaselineReport> {
   const { baseline_days = 30 } = baselinesInputSchema.parse(params);
-  const period = {
-    start: new Date(now.getTime() - baseline_days * DAY_MS).toISOString(),
-    end: now.toISOString(),
-  };
-  const [recovery, sleep, cycle] = await Promise.all([
+  const windowStartMs = now.getTime() - (baseline_days + BASELINE_EXTRA_DAYS) * DAY_MS;
+  const period = { start: new Date(windowStartMs).toISOString(), end: now.toISOString() };
+  const [recovery, sleep, cycle, offsetInfo] = await Promise.all([
     loadAnalyticsSource(client, ENDPOINT_RECOVERY, period, recoveryRecordSchema),
     loadAnalyticsSource(client, ENDPOINT_SLEEP, period, sleepRecordSchema),
     loadAnalyticsSource(client, ENDPOINT_CYCLE, period, cycleRecordSchema),
+    resolveUserUtcOffsetInfo(client),
   ]);
+  const utcOffset = offsetInfo.offset;
   if ([recovery, sleep, cycle].every((source) => source.quality.status === "fetch_failed"))
     throw mostRelevantError([recovery.error, sleep.error, cycle.error]);
   const observations: Record<Metric, Observation[]> = {
@@ -227,7 +251,7 @@ export async function getBaselines(
   }
   const metrics = {} as BaselineReport["metrics"];
   const metricStatus = {} as BaselineReport["metric_status"];
-  const usedTimestamps: string[] = [];
+  const usedDays: Observation[] = [];
   const units: Record<Metric, string> = {
     hrv: "ms",
     rhr: "bpm",
@@ -292,7 +316,7 @@ export async function getBaselines(
       .slice(1)
       .filter((item) => item.day !== localDay(now.toISOString(), item.offset));
     const values = historical.map((item) => item.value);
-    usedTimestamps.push(...historical.map((item) => item.timestamp));
+    usedDays.push(...historical);
     metricStatus[metric] = {
       ...statusFor(metric, values.length),
       sample_size: values.length,
@@ -333,8 +357,17 @@ export async function getBaselines(
     ["calibrating", "pending", "unscored"].includes(recovery.quality.status)
   )
     cycle.quality.status = recovery.quality.status;
-  const observed = observedPeriod(usedTimestamps);
+  const observed = observedDays(usedDays);
   const truncated = [recovery, sleep, cycle].some((source) => source.quality.truncated);
+  const partialSources = (
+    [
+      ["recovery", recovery],
+      ["sleep", sleep],
+      ["cycle", cycle],
+    ] as const
+  )
+    .filter(([, source]) => source.partialError !== undefined)
+    .map(([label]) => label);
   const notes: string[] = [];
   const recoveryReason = metricStatus.hrv.reason;
   if (recoveryReason) notes.push(`HRV, resting heart rate and recovery score: ${recoveryReason}`);
@@ -351,7 +384,14 @@ export async function getBaselines(
     ...sourceNotes("sleep", ["sleep", "sleeps"], sleep.quality),
     ...sourceNotes("cycle", ["cycle", "cycles"], cycle.quality)
   );
-  if (truncated)
+  if (partialSources.length)
+    notes.push(
+      `Partial history: a later page of ${partialSources.join(", ")} data could not be read from WHOOP, so older records in the window were not included. Retry for a complete result.`
+    );
+  const limitReached = [recovery, sleep, cycle].some(
+    (source) => source.quality.truncated && source.partialError === undefined
+  );
+  if (limitReached)
     notes.push(
       "Partial history: the WHOOP pagination limit was reached, so the oldest records in the window were not read."
     );
@@ -359,12 +399,15 @@ export async function getBaselines(
     period: observed,
     metrics,
     metric_status: metricStatus,
-    notes,
+    notes: withOffsetNote(notes, offsetInfo.fallback),
     truncated,
     disclaimer: DISCLAIMER,
     data_quality: {
       evaluated_at: now.toISOString(),
-      requested_period: period,
+      requested_period: {
+        start: formatLocalTimestamp(windowStartMs, utcOffset),
+        end: formatLocalTimestamp(now.getTime(), utcOffset),
+      },
       observed_period: observed,
       sources: { recovery: recovery.quality, sleep: sleep.quality, cycle: cycle.quality },
       method_version: "baselines-2",
@@ -372,7 +415,7 @@ export async function getBaselines(
         "Descriptive personal distributions, not population norms or diagnosis.",
         "Latest observation and current local day are excluded from each baseline.",
         "Recoveries WHOOP flags as calibrating are not used for baselines.",
-        ...(truncated ? ["Partial history: upstream pagination limit reached."] : []),
+        ...(truncated ? ["Partial history: not every page in the window was read."] : []),
       ],
     },
   };

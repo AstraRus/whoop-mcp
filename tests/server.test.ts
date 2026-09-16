@@ -36,7 +36,7 @@ const BODY_MEASUREMENT_FIXTURE: BodyMeasurement = {
 const RECOVERY_FIXTURE: RecoveryCollection = {
   records: [
     {
-      cycle_id: 100,
+      cycle_id: 200,
       sleep_id: "sleep-1",
       user_id: 12345,
       created_at: "2026-04-10T08:00:00.000Z",
@@ -58,7 +58,7 @@ const SLEEP_FIXTURE: SleepCollection = {
   records: [
     {
       id: "sleep-1",
-      cycle_id: 100,
+      cycle_id: 200,
       user_id: 12345,
       created_at: "2026-04-10T06:00:00.000Z",
       updated_at: "2026-04-10T06:30:00.000Z",
@@ -752,6 +752,73 @@ describe("createWhoopServer (error handling)", () => {
     expect(text).not.toMatch(/\p{Cc}/u);
     expect(text).toContain("…");
     expect(text).toContain('Supported: "today", "yesterday".');
+  });
+
+  // R22: the shortening must only cut long quoted values, never the message
+  // text between two quoted values (which starts at a closing quote).
+  it("keeps the text between two quoted values intact", async () => {
+    const { InvalidDateExpression } = await import("../src/tools/date-utils.js");
+    const message =
+      'The end of period A must be after its start: period_a_end "2026-09-10" resolves to ' +
+      '2026-09-10T23:59:59.999+02:00, which is not after period_a_start "2026-09-12" ' +
+      "(2026-09-12T00:00:00.000+02:00).";
+
+    expect(await errorText(new InvalidDateExpression(message))).toBe(message);
+  });
+
+  it("names the wrong parameter for a reversed compare_periods period", async () => {
+    const cycle = {
+      id: 1,
+      user_id: 1,
+      created_at: "2026-09-15T20:00:00.000Z",
+      updated_at: "2026-09-15T20:00:00.000Z",
+      start: "2026-09-15T20:00:00.000Z",
+      end: null,
+      timezone_offset: "+02:00",
+      score_state: "PENDING_SCORE",
+      score: null,
+    };
+    const fakeClient: WhoopClient = {
+      get: async <T>(path: string): Promise<T> =>
+        ({ records: path.startsWith("/v2/cycle") ? [cycle] : [], next_token: null }) as T,
+    };
+    const { server } = createWhoopServer(fakeClient);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcpClient = new Client({ name: "reversed-period-client", version: "1.0.0" });
+    await Promise.all([mcpClient.connect(clientTransport), server.connect(serverTransport)]);
+
+    try {
+      const result = await mcpClient.callTool({
+        name: "compare_periods",
+        arguments: {
+          period_a_start: "2026-09-12",
+          period_a_end: "2026-09-10",
+          period_b_start: "2026-09-13",
+          period_b_end: "2026-09-15",
+        },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+      expect(text).toContain('period_a_end "2026-09-10"');
+      expect(text).toContain('period_a_start "2026-09-12"');
+      expect(text).not.toContain("…");
+    } finally {
+      await mcpClient.close();
+      await server.close();
+    }
+  });
+
+  it("still shortens a long quoted value that contains quotes or sits in parentheses", async () => {
+    const { InvalidDateExpression } = await import("../src/tools/date-utils.js");
+    const long = "z".repeat(200);
+    const text = await errorText(
+      new InvalidDateExpression(`Invalid date string: start="${long}", end=("${long}").`)
+    );
+
+    expect(text).toBe(
+      `Invalid date string: start="${"z".repeat(60)}…", end=("${"z".repeat(60)}…").`
+    );
   });
 
   it("names the failing fields for zod errors without echoing values", async () => {

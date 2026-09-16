@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { getBaselines, baselinesOutputSchema } from "../../src/tools/get-baselines.js";
-import type { WhoopClient } from "../../src/api/client.js";
+import { WhoopApiError, type WhoopClient } from "../../src/api/client.js";
 import type { Cycle, Recovery, Sleep } from "../../src/api/types.js";
 import { createWhoopServer } from "../../src/server.js";
 import { aggregateOutputSchemas } from "../../src/tools/output-contracts.js";
@@ -422,5 +422,132 @@ describe("get_baselines through the MCP server", () => {
     expect(data.notes[0]).toContain("WHOOP is still calibrating");
     for (const hidden of ["latest", "user_id", "sleep_id", "observed_period", "T05:13", "T21:13"])
       expect(result.text).not.toContain(hidden);
+    // Local days at +02:00: the one earlier night (09-15) and the window read (30 + 2 days,
+    // from 08-15 12:00 local: the start is labelled with its nearest local midnight, 08-16).
+    expect(result.structuredContent).toMatchObject({
+      period: { start: "2026-09-15", end: "2026-09-15" },
+      data_quality: { requested_period: { start: "2026-08-16", end: "2026-09-16" } },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A regular schedule at +02:00: bed 23:00 local (21:00Z), wake 07:00 local
+// (05:00Z), one scored cycle, sleep and non-calibrating recovery per day.
+// Only records that exist at `now` are served, newest first.
+// ---------------------------------------------------------------------------
+
+const DAY = 86_400_000;
+const HOUR = 3_600_000;
+
+function regularClient(
+  now: Date,
+  days = 40,
+  overrides: Record<string, (path: string) => unknown> = {}
+): WhoopClient {
+  const cycles: Cycle[] = [];
+  const sleeps: Sleep[] = [];
+  const recoveries: Recovery[] = [];
+  for (let index = -1; index < days; index += 1) {
+    const bed = Date.parse("2026-09-15T21:00:00.000Z") - index * DAY;
+    const wake = bed + 8 * HOUR;
+    if (bed > now.getTime()) continue;
+    const id = 5000 - index;
+    const iso = (ms: number): string => new Date(ms).toISOString();
+    const cycle = liveCycle(id, iso(bed), bed + DAY <= now.getTime() ? iso(bed + DAY) : null);
+    cycles.push(cycle);
+    if (wake > now.getTime()) continue;
+    sleeps.push(liveSleep(`sleep-${id}`, id, iso(bed), iso(wake)));
+    recoveries.push(liveRecovery(id, `sleep-${id}`, iso(wake + 10 * 60_000), false));
+  }
+  const data: Record<string, unknown[]> = {
+    "/v2/cycle": cycles,
+    "/v2/activity/sleep": sleeps,
+    "/v2/recovery": recoveries,
+  };
+  return {
+    get: vi.fn(async (path: string) => {
+      const base = path.split("?")[0]!;
+      const override = overrides[base];
+      if (override) return override(path);
+      return { records: data[base] ?? [], next_token: null };
+    }),
+  } as unknown as WhoopClient;
+}
+
+describe("getBaselines at its minimum baseline_days", () => {
+  it.each(["2026-09-16T13:00:00.000Z", "2026-09-16T22:00:00.000Z", "2026-09-16T03:00:00.000Z"])(
+    "produces every baseline with baseline_days 14 at %s",
+    async (nowIso) => {
+      const now = new Date(nowIso);
+      const result = await getBaselines(regularClient(now), { baseline_days: 14 }, now);
+      for (const metric of [
+        "hrv",
+        "rhr",
+        "recovery_score",
+        "sleep_hours",
+        "respiratory_rate",
+      ] as const) {
+        expect(result.metric_status[metric].status, metric).toBe("available");
+        expect(result.metric_status[metric].sample_size).toBeGreaterThanOrEqual(14);
+        expect(result.metrics[metric]).not.toBeNull();
+      }
+      expect(result.notes).toEqual([]);
+    }
+  );
+
+  it("reads baseline_days + 2 days and reports local-offset periods", async () => {
+    const now = new Date("2026-09-16T13:00:00.000Z"); // 15:00 local
+    const result = await getBaselines(regularClient(now), { baseline_days: 14 }, now);
+    expect(result.data_quality.requested_period).toEqual({
+      start: "2026-08-31T15:00:00.000+02:00",
+      end: "2026-09-16T15:00:00.000+02:00",
+    });
+    // Local days 09-01..09-15: the recovery for 09-01 belongs to the cycle that began on
+    // the evening of 08-31, and today (09-16, also the latest observation) is left out.
+    expect(result.period).toEqual({
+      start: "2026-09-01T00:00:00.000+02:00",
+      end: "2026-09-15T23:59:59.999+02:00",
+    });
+    expect(result.data_quality.observed_period).toEqual(result.period);
+    expect(result.metric_status.hrv.sample_size).toBe(15);
+  });
+});
+
+describe("getBaselines with a failing later page", () => {
+  it.each([
+    [
+      "a rate-limited",
+      (): never => {
+        throw new WhoopApiError(429, "Too Many Requests", null);
+      },
+    ],
+    ["a malformed", (): unknown => ({ records: null, next_token: null })],
+  ])("keeps the sleeps already read when %s page follows", async (_label, laterPage) => {
+    const now = new Date("2026-09-16T13:00:00.000Z");
+    const full = regularClient(now, 40);
+    const all = (await full.get<{ records: Sleep[] }>("/v2/activity/sleep")).records;
+    const client = regularClient(now, 40, {
+      "/v2/activity/sleep": (path) =>
+        path.includes("nextToken=") ? laterPage() : { records: all.slice(0, 25), next_token: "p2" },
+    });
+    const result = await getBaselines(client, { baseline_days: 45 }, now);
+    expect(result.metric_status.sleep_hours).toMatchObject({
+      status: "available",
+      sample_size: 24,
+    });
+    expect(result.metric_status.hrv.sample_size).toBeGreaterThan(24);
+    expect(result.truncated).toBe(true);
+    expect(result.data_quality.sources.sleep).toMatchObject({
+      status: "available",
+      records_fetched: 25,
+      truncated: true,
+    });
+    expect(result.notes).toEqual([
+      "Partial history: a later page of sleep data could not be read from WHOOP, so older records in the window were not included. Retry for a complete result.",
+    ]);
+    expect(result.data_quality.limitations).toContain(
+      "Partial history: not every page in the window was read."
+    );
   });
 });

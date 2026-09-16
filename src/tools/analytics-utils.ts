@@ -67,6 +67,23 @@ export function localDay(timestamp: string, offset: string): string {
 }
 
 /**
+ * An instant written as ISO 8601 wall-clock time in `offset` (e.g.
+ * "2026-09-15T00:00:00.000+02:00"; "Z" stays UTC), so its first 10
+ * characters are the local date there.
+ *
+ * @throws InvalidDateExpression for a malformed offset
+ */
+export function formatLocalTimestamp(ms: number, offset: string): string {
+  const wallClock = new Date(ms + parseUtcOffset(offset) * 60_000).toISOString().slice(0, 23);
+  return `${wallClock}${offset === "Z" ? "Z" : offset}`;
+}
+
+/** The UTC instant of local midnight starting `day` (YYYY-MM-DD) in `offset`. */
+export function localMidnightMs(day: string, offset: string): number {
+  return Date.parse(`${day}T00:00:00.000Z`) - parseUtcOffset(offset) * 60_000;
+}
+
+/**
  * The local calendar day a WHOOP cycle belongs to. A cycle starts at sleep
  * onset — usually the evening before the day it covers — so the day is taken
  * 12 hours after the start: bedtime at 23:00 counts toward the next day, at
@@ -132,34 +149,62 @@ export function mostRelevantError(reasons: unknown[]): Error {
     : new Error("All WHOOP requests failed.", { cause: reason });
 }
 
+/** A loaded analytics source. */
+export interface AnalyticsSource<T> {
+  records: T[];
+  quality: SourceQuality;
+  /** The first page failed (status "fetch_failed"): the original error. */
+  error?: unknown;
+  /**
+   * A later page failed or was malformed: the records already read are kept,
+   * `quality.truncated` is true, and this holds the original error.
+   */
+  partialError?: unknown;
+}
+
 /**
- * Fetch and validate every page of an analytics source. A fetch failure is
- * reported as status "fetch_failed" with the original `error`, so callers
- * that cannot continue can rethrow it and the user sees the real cause
- * (authorization, rate limit, network) instead of a generic message.
+ * Fetch and validate every page of an analytics source. A failure on the
+ * first page is reported as status "fetch_failed" with the original `error`
+ * (or "invalid" for a malformed page), so callers that cannot continue can
+ * rethrow it and the user sees the real cause (authorization, rate limit,
+ * network) instead of a generic message. A failure on a later page keeps the
+ * records already read, marks the source truncated and sets `partialError`.
  */
 export async function loadAnalyticsSource<T>(
   client: WhoopClient,
   endpoint: string,
   period: { start: string; end: string },
   schema: z.ZodType<T>
-): Promise<{ records: T[]; quality: SourceQuality; error?: unknown }> {
+): Promise<AnalyticsSource<T>> {
   const query = new URLSearchParams({ ...period, limit: "25" });
   const pageSchema = z.object({
     records: z.array(z.unknown()),
     next_token: z.string().max(4096).nullish(),
   });
+  let pagesRead = 0;
+  let partialError: unknown;
   const validatedClient: WhoopClient = {
-    get: async <Result>(path: string): Promise<Result> =>
-      pageSchema.parse(await client.get<unknown>(path)) as Result,
+    get: async <Result>(path: string): Promise<Result> => {
+      try {
+        const page = pageSchema.parse(await client.get<unknown>(path));
+        pagesRead += 1;
+        return page as Result;
+      } catch (error: unknown) {
+        if (pagesRead === 0) throw error;
+        // A later page failed: end pagination here and keep what was read.
+        partialError = error;
+        return { records: [], next_token: null } as Result;
+      }
+    },
   };
   try {
     const result = await fetchAllPages<unknown>(validatedClient, `${endpoint}?${query}`, {
       maxRecords: ABSOLUTE_MAX_RECORDS,
     });
-    const quality = sourceQuality(result.records.length, result.truncated);
+    const partial = partialError !== undefined;
+    const quality = sourceQuality(result.records.length, result.truncated || partial);
     const records = parseRecords(result.records, schema, quality);
-    return { records, quality };
+    return partial ? { records, quality, partialError } : { records, quality };
   } catch (error: unknown) {
     if (error instanceof z.ZodError) {
       return { records: [], quality: { ...sourceQuality(), status: "invalid" } };

@@ -10,7 +10,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { WhoopClient } from "../../src/api/client.js";
 import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../../src/api/client.js";
-import { getToday, MAX_OPEN_CYCLE_MS } from "../../src/tools/get-today.js";
+import {
+  getToday,
+  LONG_CYCLE_MS,
+  MAX_SYNC_GAP_MS,
+  STALE_SLEEP_MS,
+} from "../../src/tools/get-today.js";
 import { outputSchemas } from "../../src/tools/output-contracts.js";
 import type { Recovery, Sleep, Cycle, Workout } from "../../src/api/types.js";
 
@@ -301,7 +306,7 @@ describe("getToday", () => {
         start: CURRENT_CYCLE_START,
         end: latestWorkout.end,
       });
-      expect(result.data_quality.method_version).toBe("today-3");
+      expect(result.data_quality.method_version).toBe("today-4");
     });
 
     it("keeps today's sleep, recovery and strain after local midnight until the next sleep", async () => {
@@ -356,48 +361,6 @@ describe("getToday", () => {
       expect(result.strain?.day_strain).toBe(8.4);
     });
 
-    it("marks an open cycle older than the staleness guard as stale", async () => {
-      const cycle: Cycle = { ...currentCycle, start: "2026-09-13T21:00:00.000Z" };
-      const sleep: Sleep = {
-        ...currentSleep,
-        start: cycle.start,
-        end: "2026-09-14T05:00:00.000Z",
-      };
-      const result = await getToday(
-        createMockClient({
-          cycle: page([cycle]),
-          sleep: page([sleep]),
-          recovery: page([currentRecovery]),
-        })
-      );
-
-      expect(result.strain).toBeNull();
-      expect(result.sleep).toBeNull();
-      expect(result.recovery).toBeNull();
-      expect(result.data_quality.sources.cycle?.status).toBe("stale");
-      expect(result.data_quality.sources.sleep?.status).toBe("stale");
-      expect(result.notes.join(" ")).toContain("no open WHOOP cycle covers the current time");
-      expect(result.notes.join(" ")).toContain("2026-09-13 23:00 (UTC+02:00)");
-      expectValidContract(result);
-    });
-
-    it("applies the staleness guard at 48 hours", async () => {
-      const at = (ageMs: number): Cycle => ({
-        ...currentCycle,
-        start: new Date(FIXED_NOW.getTime() - ageMs).toISOString(),
-      });
-      const fresh = await getToday(
-        createMockClient({ cycle: page([at(MAX_OPEN_CYCLE_MS - 60_000)]) })
-      );
-      const stale = await getToday(
-        createMockClient({ cycle: page([at(MAX_OPEN_CYCLE_MS + 60_000)]) })
-      );
-
-      expect(fresh.strain?.day_strain).toBe(8.4);
-      expect(stale.strain).toBeNull();
-      expect(stale.data_quality.sources.cycle?.status).toBe("stale");
-    });
-
     it("never promotes a closed cycle to today's strain", async () => {
       const result = await getToday(
         createMockClient({
@@ -407,6 +370,11 @@ describe("getToday", () => {
 
       expect(result.strain).toBeNull();
       expect(result.data_quality.sources.cycle?.status).toBe("stale");
+      expect(result.notes).toContain(
+        "Today's strain is not available: the latest WHOOP cycle ended 2026-09-16 11:00 (UTC+02:00), when WHOOP detected a new sleep, and the next cycle has not synced yet (WHOOP creates it once that sleep is processed)."
+      );
+      expect(result.notes.join(" ")).not.toContain("no open WHOOP cycle");
+      expectValidContract(result);
     });
 
     it("ignores records that start in the future", async () => {
@@ -418,6 +386,201 @@ describe("getToday", () => {
       );
 
       expect(result.strain?.day_strain).toBe(8.4);
+    });
+  });
+
+  describe("long cycles, unprocessed sleep and sync gaps", () => {
+    /** 23:30 local on 09-17: no sleep detected on the night of 09-16, cycle open ~48.3h */
+    const DAY_TWO_LATE = new Date("2026-09-17T21:30:00.000Z");
+    const NO_NEWER_SLEEP = "No newer sleep has been processed since";
+
+    it("keeps showing an open cycle older than 48 hours that WHOOP just updated", async () => {
+      const cycle: Cycle = {
+        ...currentCycle,
+        updated_at: "2026-09-17T21:20:00.000Z",
+        score: { ...currentCycle.score!, strain: 17.2 },
+      };
+      const result = await getToday(
+        createMockClient({ cycle: page([cycle, previousCycle, firstCycle]) }),
+        DAY_TWO_LATE
+      );
+
+      expect(result.strain?.day_strain).toBe(17.2);
+      expect(result.data_quality.sources.cycle).toMatchObject({
+        status: "available",
+        source_updated_at: cycle.updated_at,
+      });
+      expect(result.data_quality.requested_period.start).toBe(CURRENT_CYCLE_START);
+      expect(result.summary).not.toContain("No data available");
+      expect(result.notes).toContain(
+        "The current WHOOP cycle started 2026-09-15 23:13 (UTC+02:00), about 48 hours ago. A cycle only ends when WHOOP detects the next sleep, so the strain shown covers that whole period."
+      );
+      const text = result.notes.join(" ");
+      expect(text).not.toContain("no open WHOOP cycle");
+      expect(text).not.toContain("may not have synced");
+      expectValidContract(result);
+    });
+
+    it("keeps showing the open cycle after two missed nights", async () => {
+      const cycle: Cycle = {
+        ...currentCycle,
+        updated_at: "2026-09-18T09:55:00.000Z",
+        score: { ...currentCycle.score!, strain: 18.4 },
+      };
+      const result = await getToday(
+        createMockClient({ cycle: page([cycle, previousCycle]) }),
+        new Date("2026-09-18T10:00:00.000Z") // 12:00 local on 09-18, cycle ~60.8h
+      );
+
+      expect(result.strain?.day_strain).toBe(18.4);
+      expect(result.data_quality.sources.cycle?.status).toBe("available");
+      expect(result.notes.join(" ")).toContain("about 61 hours ago");
+    });
+
+    it("notes the long cycle only after LONG_CYCLE_MS", async () => {
+      const start = Date.parse(CURRENT_CYCLE_START);
+      const before = await getToday(createMockClient(), new Date(start + LONG_CYCLE_MS - 60_000));
+      const after = await getToday(createMockClient(), new Date(start + LONG_CYCLE_MS + 60_000));
+
+      expect(before.notes.join(" ")).not.toContain("The current WHOOP cycle started");
+      expect(after.notes.join(" ")).toContain("The current WHOOP cycle started");
+    });
+
+    it("shows the strain of a cycle WHOOP has not updated for a day, flagged as possibly not synced", async () => {
+      const cycle: Cycle = { ...currentCycle, updated_at: "2026-09-16T05:30:00.000Z" };
+      const result = await getToday(
+        createMockClient({ cycle: page([cycle, previousCycle]) }),
+        DAY_TWO_LATE
+      );
+
+      expect(result.strain?.day_strain).toBe(8.4);
+      expect(result.data_quality.sources.cycle).toMatchObject({
+        status: "stale",
+        source_updated_at: cycle.updated_at,
+      });
+      expect(result.summary).toContain("cycle: stale");
+      expect(result.notes).toContain(
+        "WHOOP has not updated the current cycle since 2026-09-16 07:30 (UTC+02:00), about 40 hours ago; the strap may not have synced recently, so the strain shown may be incomplete."
+      );
+      expectValidContract(result);
+    });
+
+    it("applies the sync gap at MAX_SYNC_GAP_MS since the cycle's last update", async () => {
+      const updated = Date.parse(currentCycle.updated_at);
+      const synced = await getToday(
+        createMockClient(),
+        new Date(updated + MAX_SYNC_GAP_MS - 60_000)
+      );
+      const unsynced = await getToday(
+        createMockClient(),
+        new Date(updated + MAX_SYNC_GAP_MS + 60_000)
+      );
+
+      expect(synced.data_quality.sources.cycle?.status).toBe("available");
+      expect(synced.notes.join(" ")).not.toContain("may not have synced");
+      expect(unsynced.strain?.day_strain).toBe(8.4);
+      expect(unsynced.data_quality.sources.cycle?.status).toBe("stale");
+      expect(unsynced.notes.join(" ")).toContain("may not have synced");
+    });
+
+    it("flags yesterday morning's sleep and recovery while the wake-up is not processed yet", async () => {
+      // 07:40 local on 09-17: the user is awake, WHOOP has not processed the night yet,
+      // so the 09-16 cycle is still open and its sleep/recovery are a day old.
+      const result = await getToday(createMockClient(), new Date("2026-09-17T05:40:00.000Z"));
+
+      expect(result.recovery).toMatchObject({ score: 72, user_calibrating: true });
+      expect(result.sleep?.asleep_hours).toBe(6.5);
+      expect(result.strain?.day_strain).toBe(8.4);
+      expect(result.data_quality.sources.recovery?.status).toBe("stale");
+      expect(result.data_quality.sources.sleep?.status).toBe("stale");
+      expect(result.data_quality.sources.cycle?.status).toBe("available");
+      expect(result.summary).toBe(
+        "Recovery 72% (green, calibrating), 6.5h sleep, strain 8.4. recovery: stale, sleep: stale. No newer sleep processed since 2026-09-16 06:43 (UTC+02:00), so sleep and recovery are from that morning"
+      );
+      expect(result.notes).toContain(
+        "No newer sleep has been processed since the sleep that ended 2026-09-16 06:43 (UTC+02:00), about 25 hours ago, so the sleep and recovery shown are from that morning, not from last night. If you have slept since then, WHOOP has not processed that sleep yet (or did not detect it); opening the WHOOP app to sync may help."
+      );
+      expect(result.notes.join(" ")).toContain("Recovery is still calibrating");
+      expectValidContract(result);
+    });
+
+    it("flags the previous cycle's sleep and recovery before WHOOP creates today's cycle", async () => {
+      // Live shape before processing: the 09-15 cycle is still open, the 09-16 sleep,
+      // recovery and cycle do not exist yet. 07:40 local on 09-16.
+      const result = await getToday(
+        createMockClient({
+          recovery: page([previousRecovery]),
+          sleep: page([previousSleep]),
+          cycle: page([{ ...previousCycle, end: null }, firstCycle]),
+          workout: page([olderWorkout]),
+        }),
+        new Date("2026-09-16T05:40:00.000Z")
+      );
+
+      expect(result.recovery?.score).toBe(50);
+      expect(result.strain?.day_strain).toBe(14.2);
+      expect(result.data_quality.sources.recovery?.status).toBe("stale");
+      expect(result.data_quality.sources.sleep?.status).toBe("stale");
+      expect(result.notes.join(" ")).toContain(
+        `${NO_NEWER_SLEEP} the sleep that ended 2026-09-15 08:09 (UTC+02:00), about 24 hours ago`
+      );
+      expect(result.summary).toContain("No newer sleep processed since 2026-09-15 08:09");
+      expectValidContract(result);
+    });
+
+    it("dates the recovery by the cycle start when the sleep endpoint failed", async () => {
+      const result = await getToday(
+        createMockClient({ sleep: new WhoopApiError(503, "Unavailable", null) }),
+        new Date("2026-09-17T05:40:00.000Z")
+      );
+
+      expect(result.recovery?.score).toBe(72);
+      expect(result.data_quality.sources.recovery?.status).toBe("stale");
+      expect(result.notes).toContain(
+        "No newer sleep has been processed since the sleep that began 2026-09-15 23:13 (UTC+02:00), so the recovery shown is from that morning, not from last night. If you have slept since then, WHOOP has not processed that sleep yet (or did not detect it); opening the WHOOP app to sync may help."
+      );
+      expect(result.summary).toContain(
+        "No newer sleep processed since the current cycle began, so recovery is from an earlier morning"
+      );
+      expectValidContract(result);
+    });
+
+    it("does not call a sleep that is still pending a day later last night's", async () => {
+      const result = await getToday(
+        createMockClient({
+          sleep: page([{ ...currentSleep, score_state: "PENDING_SCORE", score: null }]),
+        }),
+        new Date("2026-09-17T05:40:00.000Z")
+      );
+
+      expect(result.recovery).toBeNull();
+      expect(result.notes).toContain(
+        "The latest recovery is held back until the latest sleep is scored."
+      );
+      expect(result.notes).toContain("The latest sleep is still being scored by WHOOP.");
+      expect(result.notes.join(" ")).toContain(
+        "so the sleep and recovery linked to the current cycle are from that morning"
+      );
+    });
+
+    it("does not flag this morning's sleep at midday or just after local midnight", async () => {
+      for (const now of [FIXED_NOW, new Date("2026-09-16T22:30:00.000Z")]) {
+        const result = await getToday(createMockClient(), now);
+        expect(result.notes.join(" ")).not.toContain(NO_NEWER_SLEEP);
+        expect(result.summary).not.toContain("No newer sleep");
+        expect(result.data_quality.sources.sleep?.status).toBe("available");
+        expect(result.data_quality.sources.recovery?.status).toBe("calibrating");
+      }
+    });
+
+    it("applies the stale-sleep threshold at STALE_SLEEP_MS after the sleep ended", async () => {
+      const end = Date.parse(currentSleep.end);
+      const fresh = await getToday(createMockClient(), new Date(end + STALE_SLEEP_MS - 60_000));
+      const stale = await getToday(createMockClient(), new Date(end + STALE_SLEEP_MS + 60_000));
+
+      expect(fresh.data_quality.sources.sleep?.status).toBe("available");
+      expect(stale.data_quality.sources.sleep?.status).toBe("stale");
+      expect(stale.sleep).not.toBeNull();
     });
   });
 
@@ -511,6 +674,28 @@ describe("getToday", () => {
       expect(result.notes).toContain(
         "Today's recovery is held back until last night's sleep is scored."
       );
+      expectValidContract(result);
+    });
+
+    it("shows a scored recovery whose sleep WHOOP could not score", async () => {
+      const result = await getToday(
+        createMockClient({
+          sleep: page([{ ...currentSleep, score_state: "UNSCORABLE", score: null }]),
+        })
+      );
+
+      expect(result.recovery).toMatchObject({ score: 72, user_calibrating: true });
+      expect(result.sleep).toBeNull();
+      expect(result.data_quality.sources.sleep?.status).toBe("unscored");
+      expect(result.data_quality.sources.recovery).toMatchObject({
+        status: "calibrating",
+        records_used: 1,
+      });
+      expect(result.summary).toBe("Recovery 72% (green, calibrating), strain 8.4. sleep: unscored");
+      expect(result.notes).toContain(
+        "Last night's sleep could not be scored by WHOOP, but WHOOP did score the recovery that follows it, so that recovery is shown."
+      );
+      expect(result.notes.join(" ")).not.toContain("held back");
       expectValidContract(result);
     });
 

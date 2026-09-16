@@ -10,6 +10,12 @@
  * until the next sleep, so it is selected by containment rather than by the
  * calendar date of its start. Last night's main sleep and this morning's
  * recovery are joined to it by cycle_id / sleep_id.
+ *
+ * A cycle has no maximum length: until WHOOP processes a new sleep (the wake-up
+ * is not synced yet, or no sleep was detected) the previous cycle stays open.
+ * It is still shown, but sleep and recovery from a morning older than
+ * STALE_SLEEP_MS are marked "stale" and dated in a note, and a cycle WHOOP has
+ * not updated for MAX_SYNC_GAP_MS is flagged as possibly not synced.
  */
 
 import type { WhoopClient } from "../api/client.js";
@@ -35,6 +41,7 @@ import {
 import {
   asleepHours,
   DAY_MS,
+  HOUR_MS,
   localDay,
   localTime,
   mostRelevantError,
@@ -103,8 +110,18 @@ export interface TodaySnapshot {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** An open cycle that started longer ago than this is stale (strap off or not synced). */
-export const MAX_OPEN_CYCLE_MS = 2 * DAY_MS;
+/**
+ * The linked sleep ended longer ago than this: no newer sleep has been processed, so
+ * the sleep and recovery shown are from an earlier morning, not last night. Long
+ * enough not to flag an evening or just-after-midnight query on a normal day.
+ */
+export const STALE_SLEEP_MS = 20 * HOUR_MS;
+
+/** An open cycle older than this gets a note that its strain spans more than a day. */
+export const LONG_CYCLE_MS = 30 * HOUR_MS;
+
+/** WHOOP has not updated the open cycle for this long: the strap may not have synced. */
+export const MAX_SYNC_GAP_MS = DAY_MS;
 
 const FETCH_LIMIT = 25;
 const MILLI_PER_HOUR = 1000 * 60 * 60;
@@ -151,7 +168,8 @@ function buildSummary(
     sleep: TodaySleep | null;
     strain: TodayStrain | null;
   },
-  sources: Record<SourceName, SourceQuality>
+  sources: Record<SourceName, SourceQuality>,
+  qualifier?: string
 ): string {
   const parts: string[] = [];
 
@@ -167,7 +185,7 @@ function buildSummary(
   }
 
   if (snapshot.strain) {
-    parts.push(`strain ${snapshot.strain.day_strain}`);
+    parts.push(`strain ${Math.round(snapshot.strain.day_strain * 10) / 10}`);
   }
 
   const statuses = Object.entries(sources);
@@ -181,7 +199,13 @@ function buildSummary(
   const unavailable = statuses
     .filter(([, quality]) => quality.status !== "available" && quality.status !== "calibrating")
     .map(([name, quality]) => `${name}: ${quality.status}`);
-  return unavailable.length ? `${summary}. ${unavailable.join(", ")}` : summary;
+  const withStatuses = unavailable.length ? `${summary}. ${unavailable.join(", ")}` : summary;
+  return qualifier ? `${withStatuses}. ${qualifier}` : withStatuses;
+}
+
+/** Whole hours from one instant to a later one, for plain-language notes */
+function hoursBetween(fromMs: number, toMs: number): number {
+  return Math.round((toMs - fromMs) / HOUR_MS);
 }
 
 /** Classify a selected record's scoring state into its source quality. */
@@ -276,8 +300,9 @@ export async function getToday(
   const ended = (record: { start: string; end: string }): boolean =>
     Date.parse(record.end) <= nowMs && Date.parse(record.end) > Date.parse(record.start);
 
-  // Cycle: the newest cycle, if it contains now and is not implausibly old. A closed
-  // newest cycle is never promoted to "today" (that would show a finished day's strain).
+  // Cycle: the newest cycle, if it is still open. A cycle only ends at the next detected
+  // sleep, so an open cycle is today's however long it has run. A closed newest cycle is
+  // never promoted to "today" (that would show a finished day's strain).
   const cycles = parseRecords(
     cycleData.records,
     cycleRecordSchema.omit({ score: true }),
@@ -287,9 +312,7 @@ export async function getToday(
     .sort((left, right) => Date.parse(right.start) - Date.parse(left.start));
   const latestCycle = cycles[0];
   const cycleCandidate =
-    latestCycle &&
-    (latestCycle.end == null || Date.parse(latestCycle.end) > nowMs) &&
-    nowMs - Date.parse(latestCycle.start) <= MAX_OPEN_CYCLE_MS
+    latestCycle && (latestCycle.end == null || Date.parse(latestCycle.end) > nowMs)
       ? latestCycle
       : undefined;
   const cycle = cycleCandidate
@@ -362,12 +385,11 @@ export async function getToday(
   const recoveryScored = mark(recoveryRecord, recoveryData.quality);
   const workoutAvailable = mark(latestWorkout, workoutData.quality);
 
-  // A recovery is provisional while its sleep is still pending or unscorable.
+  // A recovery is held back while its sleep is still being scored. An UNSCORABLE sleep
+  // will never be scored, so the recovery WHOOP scored for it is shown.
   const sleepStatus = sleepData.quality.status;
   const recoveryHeldBack =
-    recoveryScored &&
-    currentSleep !== undefined &&
-    (sleepStatus === "pending" || sleepStatus === "unscored");
+    recoveryScored && currentSleep !== undefined && sleepStatus === "pending";
   if (recoveryHeldBack) {
     recoveryData.quality.status = sleepStatus;
     recoveryData.quality.records_used = 0;
@@ -422,6 +444,28 @@ export async function getToday(
     };
   }
 
+  // Until WHOOP processes the next sleep, the previous morning's sleep and recovery stay
+  // linked to the open cycle. A linked sleep that ended long ago means they are from an
+  // earlier morning, not last night. Without the sleep record, the cycle's own age (it
+  // started at that sleep's onset) stands in.
+  const morningEndMs = sleepCandidate ? Date.parse(sleepCandidate.end) : undefined;
+  const cycleStartMs = cycleCandidate ? Date.parse(cycleCandidate.start) : undefined;
+  const morningOutdated =
+    cycleStartMs !== undefined &&
+    (morningEndMs !== undefined
+      ? nowMs - morningEndMs > STALE_SLEEP_MS
+      : nowMs - cycleStartMs > LONG_CYCLE_MS);
+  if (morningOutdated) {
+    if (recovery) recoveryData.quality.status = "stale";
+    if (sleep) sleepData.quality.status = "stale";
+  }
+  const cycleUpdatedMs = strain && cycle ? Date.parse(cycle.updated_at) : undefined;
+  const cycleSyncGap = cycleUpdatedMs !== undefined && nowMs - cycleUpdatedMs > MAX_SYNC_GAP_MS;
+  if (cycleSyncGap) cycleData.quality.status = "stale";
+  const labels: Record<SourceName, string> = morningOutdated
+    ? { ...SECTION_LABELS, recovery: "The latest recovery", sleep: "The latest sleep" }
+    : SECTION_LABELS;
+
   const sources: Record<SourceName, SourceQuality> = {
     recovery: recoveryData.quality,
     sleep: sleepData.quality,
@@ -452,32 +496,69 @@ export async function getToday(
   }
   if (!recovery) {
     if (recoveryHeldBack) {
-      notes.push(`${SECTION_LABELS.recovery} is held back until last night's sleep is scored.`);
+      notes.push(
+        `${labels.recovery} is held back until ${morningOutdated ? "the latest" : "last night's"} sleep is scored.`
+      );
     } else if (!cycleCandidate && !sleepCandidate && recoveryData.quality.status === "missing") {
       notes.push(
-        `${SECTION_LABELS.recovery} is not available: there is no current cycle or sleep to link it to.`
+        `${labels.recovery} is not available: there is no current cycle or sleep to link it to.`
       );
     } else {
       const reason = UNAVAILABLE_REASONS[recoveryData.quality.status];
-      if (reason) notes.push(`${SECTION_LABELS.recovery} ${reason}.`);
+      if (reason) notes.push(`${labels.recovery} ${reason}.`);
     }
   }
   if (!sleep) {
     if (sleepData.quality.status === "stale" && latestSleep) {
       notes.push(
-        `${SECTION_LABELS.sleep} is not available: the latest main sleep ended ${localStamp(latestSleep.end, latestSleep.timezone_offset)}.`
+        `${labels.sleep} is not available: the latest main sleep ended ${localStamp(latestSleep.end, latestSleep.timezone_offset)}.`
       );
     } else if (sleepData.quality.status === "missing" && cycleCandidate) {
       notes.push("No main sleep is linked to the current cycle yet.");
+    } else if (sleepData.quality.status === "unscored" && recovery) {
+      notes.push(
+        `${labels.sleep} could not be scored by WHOOP, but WHOOP did score the recovery that follows it, so that recovery is shown.`
+      );
     } else {
       const reason = UNAVAILABLE_REASONS[sleepData.quality.status];
-      if (reason) notes.push(`${SECTION_LABELS.sleep} ${reason}.`);
+      if (reason) notes.push(`${labels.sleep} ${reason}.`);
     }
+  }
+  if (morningOutdated && cycleCandidate && (sleepCandidate || recoveryCandidate)) {
+    const since =
+      sleepCandidate && morningEndMs !== undefined
+        ? `the sleep that ended ${localStamp(sleepCandidate.end, sleepCandidate.timezone_offset)}, about ${hoursBetween(morningEndMs, nowMs)} hours ago`
+        : `the sleep that began ${localStamp(cycleCandidate.start, cycleCandidate.timezone_offset)}`;
+    const shown =
+      recovery && sleep
+        ? "the sleep and recovery shown are"
+        : recovery
+          ? "the recovery shown is"
+          : sleep
+            ? "the sleep shown is"
+            : "the sleep and recovery linked to the current cycle are";
+    notes.push(
+      `No newer sleep has been processed since ${since}, so ${shown} from that morning, not from last night. If you have slept since then, WHOOP has not processed that sleep yet (or did not detect it); opening the WHOOP app to sync may help.`
+    );
+  }
+  if (cycleCandidate && cycleStartMs !== undefined && nowMs - cycleStartMs > LONG_CYCLE_MS) {
+    notes.push(
+      `The current WHOOP cycle started ${localStamp(cycleCandidate.start, cycleCandidate.timezone_offset)}, about ${hoursBetween(cycleStartMs, nowMs)} hours ago. A cycle only ends when WHOOP detects the next sleep, so ${strain ? "the strain shown covers" : "its strain accumulates over"} that whole period.`
+    );
+  }
+  if (cycleSyncGap && cycle && cycleUpdatedMs !== undefined) {
+    notes.push(
+      `WHOOP has not updated the current cycle since ${localStamp(cycle.updated_at, cycle.timezone_offset)}, about ${hoursBetween(cycleUpdatedMs, nowMs)} hours ago; the strap may not have synced recently, so the strain shown may be incomplete.`
+    );
   }
   if (!strain) {
     if (cycleData.quality.status === "stale" && latestCycle) {
+      const lastCycle =
+        latestCycle.end != null
+          ? `ended ${localStamp(latestCycle.end, latestCycle.timezone_offset)}, when WHOOP detected a new sleep`
+          : `started ${localStamp(latestCycle.start, latestCycle.timezone_offset)}`;
       notes.push(
-        `${SECTION_LABELS.cycle} is not available: no open WHOOP cycle covers the current time (the latest cycle started ${localStamp(latestCycle.start, latestCycle.timezone_offset)}); the strap may not have synced recently.`
+        `${labels.cycle} is not available: the latest WHOOP cycle ${lastCycle}, and the next cycle has not synced yet (WHOOP creates it once that sleep is processed).`
       );
     } else {
       const reason = UNAVAILABLE_REASONS[cycleData.quality.status];
@@ -493,13 +574,22 @@ export async function getToday(
     );
   }
 
+  let summaryQualifier: string | undefined;
+  if (morningOutdated && (recovery || sleep)) {
+    const shown =
+      recovery && sleep ? "sleep and recovery are" : recovery ? "recovery is" : "sleep is";
+    summaryQualifier = sleepCandidate
+      ? `No newer sleep processed since ${localStamp(sleepCandidate.end, sleepCandidate.timezone_offset)}, so ${shown} from that morning`
+      : `No newer sleep processed since the current cycle began, so ${shown} from an earlier morning`;
+  }
+
   const fallbackOffset = latestSleep?.timezone_offset ?? latestCycle?.timezone_offset ?? "Z";
   const snapshot: TodaySnapshot = {
     timestamp: nowIso,
     recovery,
     sleep,
     strain,
-    summary: buildSummary({ recovery, sleep, strain }, sources),
+    summary: buildSummary({ recovery, sleep, strain }, sources, summaryQualifier),
     notes,
     data_quality: {
       evaluated_at: nowIso,
@@ -513,9 +603,10 @@ export async function getToday(
         ...(strain?.last_workout && latestWorkout ? [latestWorkout.start, latestWorkout.end] : []),
       ]),
       sources,
-      method_version: "today-3",
+      method_version: "today-4",
       limitations: [
-        "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until the next sleep; an open cycle older than 48 hours is treated as stale.",
+        "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
+        "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
         "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
         "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
         "The latest workout may be from before the current cycle.",

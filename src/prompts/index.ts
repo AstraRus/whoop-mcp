@@ -31,7 +31,7 @@ export const DATA_GUIDANCE =
   `- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n` +
   `- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n` +
   `- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n` +
-  `- Collection tools return at most 25 records per call, newest first. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n` +
+  `- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n` +
   `- State which days the numbers cover, and don't give medical diagnoses.`;
 
 /**
@@ -49,6 +49,19 @@ export function parseReviewDays(value: string | undefined): number {
   }
   return Math.min(days, MAX_REVIEW_DAYS);
 }
+
+/**
+ * A collection-tool `start` expression covering exactly `days` local days, today
+ * included, so collection results line up with get_calendar / get_trend `days`.
+ * "last N days" means today plus the N previous days (N + 1 days), so N = days - 1;
+ * a single day is "today" ("last 0 days" is not a valid expression).
+ */
+export function lastDaysExpression(days: number): string {
+  return days <= 1 ? "today" : `last ${days - 1} days`;
+}
+
+/** Day window shared by sleep_analysis, recovery_trend and workout_recap */
+export const RECENT_DAYS = 14;
 
 function userMessage(text: string): {
   messages: Array<{ role: "user"; content: { type: "text"; text: string } }>;
@@ -92,10 +105,10 @@ export function registerPrompts(server: McpServer): void {
         `Please provide a comprehensive health review for the past ${days} days. ` +
           `Use the following tools to gather data:\n\n` +
           `1. **get_calendar** with days ${days} — Day-by-day recovery, sleep and strain for the period\n` +
-          `2. **get_weekly_summary** — Weekly averages for recovery, HRV, resting heart rate, sleep and workouts (pass week_start for an earlier week)\n` +
+          `2. **get_weekly_summary** — Averages for recovery, HRV, resting heart rate, sleep and workouts over the current Monday-to-Sunday week (pass week_start for an earlier week); these are calendar weeks, so say so when they don't match the ${days}-day period\n` +
           `3. **get_baselines** — The user's personal ranges, to put the period in context\n` +
-          `4. **get_workout_collection** with start "last ${days} days" — Workouts (strain, sport type, calories)\n` +
-          `5. **get_recovery_collection** / **get_sleep_collection** with start "last ${days} days" — Record-level detail, only if needed\n\n` +
+          `4. **get_workout_collection** with start "${lastDaysExpression(days)}" — Workouts (strain, sport type, calories) for the same ${days} days\n` +
+          `5. **get_recovery_collection** / **get_sleep_collection** with start "${lastDaysExpression(days)}" — Record-level detail, only if needed\n\n` +
           `Analyze the data and provide:\n` +
           `- Overall recovery direction (improving, declining, stable), or why there is not enough data yet to tell\n` +
           `- Sleep quality assessment and patterns\n` +
@@ -118,11 +131,11 @@ export function registerPrompts(server: McpServer): void {
       userMessage(
         `Analyze my recent sleep patterns and quality. ` +
           `Use the following tools:\n\n` +
-          `1. **get_sleep_debt** with days 14 — Nightly time asleep against need, and bedtime consistency\n` +
-          `2. **get_calendar** with days 14 — Each night's sleep next to recovery and strain\n` +
-          `3. **get_trend** with metric "sleep_duration" and days 14 — Sleep duration direction\n` +
-          `4. **get_trend** with metric "sleep_performance" and days 14 — Sleep performance direction\n` +
-          `5. **get_sleep_collection** with start "last 14 days" — Stage-level detail, only if needed\n\n` +
+          `1. **get_sleep_debt** with days ${RECENT_DAYS} — Nightly time asleep against need, and bedtime consistency\n` +
+          `2. **get_calendar** with days ${RECENT_DAYS} — Each night's sleep next to recovery and strain\n` +
+          `3. **get_trend** with metric "sleep_duration" and days ${RECENT_DAYS} — Sleep duration direction\n` +
+          `4. **get_trend** with metric "sleep_performance" and days ${RECENT_DAYS} — Sleep performance direction\n` +
+          `5. **get_sleep_collection** with start "${lastDaysExpression(RECENT_DAYS)}" — Stage-level detail for the same ${RECENT_DAYS} days, only if needed\n\n` +
           `Provide insights on:\n` +
           `- Average time asleep vs recommended (7-9 hours)\n` +
           `- Sleep performance and efficiency patterns\n` +
@@ -148,7 +161,7 @@ export function registerPrompts(server: McpServer): void {
           `2. **get_trend** with metric "recovery" and days 30 — Recovery score direction\n` +
           `3. **get_trend** with metric "hrv" and days 30 — HRV direction\n` +
           `4. **get_trend** with metric "rhr" and days 30 — Resting heart rate direction\n` +
-          `5. **get_recovery_collection** with start "last 14 days" — Recent recovery records for context\n\n` +
+          `5. **get_recovery_collection** with start "${lastDaysExpression(RECENT_DAYS)}" — Recovery records from the last ${RECENT_DAYS} days (today included) for context\n\n` +
           `Analyze and explain:\n` +
           `- Is recovery improving, declining, or stable — or is there not enough data yet to tell?\n` +
           `- How recent HRV and resting heart rate compare with the personal ranges (for resting heart rate, lower is usually the favourable direction)\n` +
@@ -170,9 +183,9 @@ export function registerPrompts(server: McpServer): void {
       userMessage(
         `Summarize my recent workouts and training strain. ` +
           `Use the following tools:\n\n` +
-          `1. **get_workout_collection** with start "last 14 days" — Recent workouts\n` +
-          `2. **get_calendar** with days 14 — Daily strain alongside recovery and sleep\n` +
-          `3. **get_trend** with metric "strain" and days 14 — Strain direction\n\n` +
+          `1. **get_workout_collection** with start "${lastDaysExpression(RECENT_DAYS)}" — Workouts from the last ${RECENT_DAYS} days (today included)\n` +
+          `2. **get_calendar** with days ${RECENT_DAYS} — Daily strain alongside recovery and sleep for the same days\n` +
+          `3. **get_trend** with metric "strain" and days ${RECENT_DAYS} — Strain direction\n\n` +
           `Provide a recap including:\n` +
           `- Total workouts and sport type breakdown\n` +
           `- Total and average strain levels\n` +
@@ -194,14 +207,16 @@ export function registerPrompts(server: McpServer): void {
       userMessage(
         `Give me a quick health status check. ` +
           `Use the following MCP resources for instant data (no tool calls needed for these):\n\n` +
-          `1. **resource: whoop://v2/user/recovery/latest** — Current recovery score, HRV, resting heart rate\n` +
+          `1. **resource: whoop://v2/user/recovery/latest** — Latest recovery score, HRV, resting heart rate\n` +
           `2. **resource: whoop://v2/user/sleep/latest** — Latest main sleep\n` +
           `3. **resource: whoop://v2/user/cycle/latest** — Current cycle and strain so far\n\n` +
-          `Read each resource's notes field when present (not scored yet, still calibrating, cycle in progress). ` +
-          `If a resource is unavailable, call **get_today** instead.\n\n` +
+          `Read each resource's notes field when present (not scored yet, still calibrating, cycle in progress, belongs to an earlier cycle). ` +
+          `The recovery and sleep are today's only when their cycle_id equals the cycle resource's id. ` +
+          `If a note says one belongs to an earlier cycle, today's recovery or last night's sleep is not available yet: say so instead of reporting the older values as today's. ` +
+          `If a resource is unavailable, or the cycle_ids differ without such a note, call **get_today**, which links sleep and recovery to the current cycle.\n\n` +
           `Provide a brief status update:\n` +
-          `- Current recovery level (green/yellow/red) and what it means, marked provisional while WHOOP is calibrating\n` +
-          `- Last night's sleep quality\n` +
+          `- Today's recovery level (green/yellow/red) and what it means, marked provisional while WHOOP is calibrating, or that it is not available yet\n` +
+          `- Last night's sleep quality, or that last night's sleep has not synced yet\n` +
           `- Today's strain so far\n` +
           `- One actionable recommendation for today`
       )

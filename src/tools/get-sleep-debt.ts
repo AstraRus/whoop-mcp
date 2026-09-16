@@ -2,8 +2,8 @@ import { z } from "zod";
 import type { WhoopClient } from "../api/client.js";
 import { ENDPOINT_SLEEP } from "../api/endpoints.js";
 import { sleepRecordSchema } from "../api/record-schemas.js";
-import { dependsOnLocalDay, resolveUserUtcOffset } from "./collection-utils.js";
-import { resolveDateExpression } from "./date-utils.js";
+import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
+import { InvalidDateExpression, resolveDateExpression } from "./date-utils.js";
 import { circularStats, mean } from "./stats-utils.js";
 import {
   asleepHours,
@@ -16,14 +16,17 @@ import {
   mainSleeps,
   localDay,
   localTime,
-  observedPeriod,
   periodSchema,
   finishQuality,
   exclude,
+  formatLocalTimestamp,
 } from "./analytics-utils.js";
 
 /** Scored main sleeps needed before deficit totals and consistency are reported. */
 export const SLEEP_DEBT_MIN_NIGHTS = 3;
+
+/** Longest sleep window, in days; a range expression may add the partial current day. */
+export const SLEEP_DEBT_MAX_DAYS = 90;
 
 export const sleepDebtInputSchema = z.object({
   days: z
@@ -33,14 +36,14 @@ export const sleepDebtInputSchema = z.object({
     .max(90)
     .optional()
     .describe(
-      "Window length in days (3-90). Default: 14. Without `start` the window ends now; with `start` it runs forward from `start`, clamped to now."
+      "Window length in days (3-90). Default: 14. Without `start` the window ends now. With `start` it runs forward from `start` for this many days, clamped to now; this also overrides the end of a range expression in `start`."
     ),
   start: z
     .string()
     .max(100)
     .optional()
     .describe(
-      'Window start: a date (YYYY-MM-DD, from local midnight), a date-time with offset, or a relative expression such as "yesterday" or "last 7 days" (its first day is used). Default: `days` before now.'
+      'Window start. A single day (YYYY-MM-DD from local midnight, "today", "yesterday") or a date-time with offset starts a window of `days` (default 14), clamped to now. A range expression ("last 7 days", "last 2 weeks", "this week", "last week", "this month", "last month", "YYYY-MM") covers exactly that range, ending at its end or now, unless `days` is also given, in which case the window is its first day plus `days`. Ranges longer than 90 days plus today are rejected. Default: `days` before now.'
     ),
 });
 const nightSchema = z.object({
@@ -82,20 +85,59 @@ function plural(count: number, singular: string, pluralForm = `${singular}s`): s
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
+/**
+ * The sleep window [startTime, endTime) in UTC milliseconds. A single day or
+ * date-time `start` runs for `days`; a range expression covers its own range
+ * unless `days` was given explicitly. The end is clamped to now.
+ *
+ * @throws InvalidDateExpression for unparseable or oversized windows
+ * @throws RangeError when the window would begin at or after now
+ */
+function resolveSleepWindow(
+  start: string | undefined,
+  requestedDays: number | undefined,
+  days: number,
+  now: Date,
+  utcOffset: string
+): { startTime: number; endTime: number } {
+  const nowMs = now.getTime();
+  if (start === undefined) return { startTime: nowMs - days * DAY_MS, endTime: nowMs };
+  const range = resolveDateExpression(start, now, utcOffset);
+  const startTime = Date.parse(range.start);
+  // A resolved range ends at 23:59:59.999 local: its exclusive end is one millisecond later.
+  const rangeEnd = Date.parse(range.end) + 1;
+  const isRange = rangeEnd - startTime > DAY_MS;
+  const endTime = Math.min(
+    isRange && requestedDays === undefined ? rangeEnd : startTime + days * DAY_MS,
+    nowMs
+  );
+  if (!Number.isFinite(startTime) || startTime >= endTime)
+    throw new RangeError("Sleep window must begin before the evaluation time.");
+  const spanDays = (endTime - startTime) / DAY_MS;
+  if (spanDays > SLEEP_DEBT_MAX_DAYS + 1)
+    throw new InvalidDateExpression(
+      `The sleep window "${start}" spans ${Math.ceil(spanDays)} days; get_sleep_debt covers at most ${SLEEP_DEBT_MAX_DAYS} days (plus today). Use a shorter range, or a start date with days.`
+    );
+  return { startTime, endTime };
+}
+
 export async function getSleepDebt(
   client: WhoopClient,
   params: z.infer<typeof sleepDebtInputSchema> = {},
   now: Date = new Date()
 ): Promise<SleepDebtReport> {
-  const { days = 14, start } = sleepDebtInputSchema.parse(params);
-  const utcOffset = dependsOnLocalDay(start) ? await resolveUserUtcOffset(client) : "Z";
-  const startTime = start
-    ? Date.parse(resolveDateExpression(start, now, utcOffset).start)
-    : now.getTime() - days * DAY_MS;
-  const endTime = Math.min(startTime + days * DAY_MS, now.getTime());
-  if (!Number.isFinite(startTime) || startTime >= endTime)
-    throw new RangeError("Sleep window must begin before the evaluation time.");
+  const { days: requestedDays, start } = sleepDebtInputSchema.parse(params);
+  const days = requestedDays ?? 14;
+  // The user's current offset resolves local days in `start` and labels the reported period.
+  const { offset: utcOffset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
+  const { startTime, endTime } = resolveSleepWindow(start, requestedDays, days, now, utcOffset);
+  // Fetching and night selection use UTC instants; the reported period uses the user's offset.
   const period = { start: new Date(startTime).toISOString(), end: new Date(endTime).toISOString() };
+  const reportedPeriod = {
+    start: formatLocalTimestamp(startTime, utcOffset),
+    // A bound before now is exclusive: report its last millisecond so the date is the last day covered.
+    end: formatLocalTimestamp(endTime < now.getTime() ? endTime - 1 : endTime, utcOffset),
+  };
   const source = await loadAnalyticsSource(client, ENDPOINT_SLEEP, period, sleepRecordSchema);
   if (source.quality.status === "fetch_failed") throw mostRelevantError([source.error]);
   const readable = source.quality.status !== "invalid";
@@ -144,7 +186,15 @@ export async function getSleepDebt(
     weekdayMean === null || weekendMean === null ? null : Math.abs(weekdayMean - weekendMean);
   const sufficient = nights.length >= SLEEP_DEBT_MIN_NIGHTS;
   finishQuality(source.quality, selected);
-  const observed = observedPeriod(selected.map((night) => night.end));
+  const newestNight = selected[0];
+  const oldestNight = selected[selected.length - 1];
+  const observed =
+    newestNight && oldestNight
+      ? {
+          start: formatLocalTimestamp(Date.parse(oldestNight.end), oldestNight.timezone_offset),
+          end: formatLocalTimestamp(Date.parse(newestNight.end), newestNight.timezone_offset),
+        }
+      : null;
   const status = !readable ? "unavailable" : sufficient ? "available" : "insufficient_data";
 
   // Notes carry counts only (no dates or values), so they are kept in aggregate privacy mode.
@@ -172,7 +222,12 @@ export async function getSleepDebt(
     notes.push(
       `${plural(invalidNeed, "sleep")} with an invalid WHOOP sleep-need value ${invalidNeed === 1 ? "was" : "were"} skipped.`
     );
-  if (source.quality.truncated)
+  const partial = source.partialError !== undefined;
+  if (partial)
+    notes.push(
+      "Partial history: a later page of sleep data could not be read from WHOOP, so older sleeps in the window were not included. Retry for a complete result."
+    );
+  else if (source.quality.truncated)
     notes.push(
       "Partial history: the WHOOP pagination limit was reached, so the oldest sleeps in the window were not read."
     );
@@ -184,7 +239,7 @@ export async function getSleepDebt(
       ? " Standing debt is WHOOP's own figure from the most recent night."
       : "";
   return {
-    period,
+    period: reportedPeriod,
     nights_analyzed: nights.length,
     status,
     nights_required: SLEEP_DEBT_MIN_NIGHTS,
@@ -207,12 +262,12 @@ export async function getSleepDebt(
     nights: nights.slice(0, 30),
     output_capped: nights.length > 30,
     truncated: source.quality.truncated,
-    summary: `${lead}${standing}${status === "available" ? " Social jetlag is a circular midpoint heuristic." : ""}${source.quality.truncated ? " Partial history: pagination limit reached." : ""}`,
-    notes,
+    summary: `${lead}${standing}${status === "available" ? " Social jetlag is a circular midpoint heuristic." : ""}${partial ? " Partial history: older sleeps could not be read." : source.quality.truncated ? " Partial history: pagination limit reached." : ""}`,
+    notes: withOffsetNote(notes, offsetFallback),
     disclaimer: DISCLAIMER,
     data_quality: {
       evaluated_at: now.toISOString(),
-      requested_period: period,
+      requested_period: reportedPeriod,
       observed_period: observed,
       sources: { sleep: source.quality },
       method_version: "sleep-debt-2",

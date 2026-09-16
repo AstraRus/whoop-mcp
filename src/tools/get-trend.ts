@@ -30,7 +30,7 @@ import {
   parseRecords,
   sourceQuality,
 } from "./analytics-utils.js";
-import { resolveUserUtcOffset } from "./collection-utils.js";
+import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import { parseUtcOffset } from "./date-utils.js";
 import {
   mean,
@@ -39,6 +39,7 @@ import {
   linearRegressionXY,
   trendDirection,
   detectAnomalies,
+  isConstant,
   MIN_TREND_POINTS,
 } from "./stats-utils.js";
 import type { TrendDirectionResult } from "./stats-utils.js";
@@ -121,6 +122,8 @@ interface Observation {
 
 interface LoadedObservations {
   observations: Observation[];
+  /** Records in the window that had no value for the metric (e.g. a scored night without a performance score) */
+  skipped: number;
   truncated: boolean;
   notes: string[];
 }
@@ -151,8 +154,10 @@ interface MetricDefinition {
   betterWhen: BetterWhen;
   /** Values come from recoveries, which carry WHOOP's calibration flag */
   recoveryBased: boolean;
-  /** Singular and plural name of one data point */
+  /** Singular and plural name of one source record (e.g. a scored night) */
   unit: [string, string];
+  /** Singular and plural name of a record that has a value, when not every record has one */
+  valueUnit?: [string, string];
   load: (client: WhoopClient, window: TrendWindow) => Promise<LoadedObservations>;
 }
 
@@ -256,7 +261,7 @@ function recoveryLoader(
         calibrating: record.score!.user_calibrating,
       });
     }
-    return { observations, truncated: page.truncated, notes };
+    return { observations, skipped: 0, truncated: page.truncated, notes };
   };
 }
 
@@ -297,7 +302,7 @@ function sleepLoader(
     }
     const notes = invalidNote(quality.exclusions.invalid ?? 0, "sleep");
     if (missing) notes.push(missingNote(missing));
-    return { observations, truncated: page.truncated, notes };
+    return { observations, skipped: missing, truncated: page.truncated, notes };
   };
 }
 
@@ -319,7 +324,7 @@ async function loadStrain(client: WhoopClient, window: TrendWindow): Promise<Loa
       value: cycle.score!.strain,
       calibrating: false,
     }));
-  return { observations, truncated: page.truncated, notes };
+  return { observations, skipped: 0, truncated: page.truncated, notes };
 }
 
 const METRICS: Record<TrendMetric, MetricDefinition> = {
@@ -351,6 +356,7 @@ const METRICS: Record<TrendMetric, MetricDefinition> = {
     betterWhen: "higher",
     recoveryBased: false,
     unit: ["scored night", "scored nights"],
+    valueUnit: ["night with a sleep performance score", "nights with a sleep performance score"],
     load: sleepLoader(
       (sleep) => sleep.score?.sleep_performance_percentage,
       (count) => `${count} scored night(s) had no sleep performance score and were skipped.`
@@ -368,10 +374,15 @@ const METRICS: Record<TrendMetric, MetricDefinition> = {
 // Trend classification
 // ---------------------------------------------------------------------------
 
-/** Classify R² into a confidence level, capped by how many points there are */
-function trendConfidence(r2: number, sampleSize: number): TrendConfidence {
-  const fromFit: TrendConfidence = r2 > 0.7 ? "high" : r2 > 0.4 ? "medium" : "low";
+/**
+ * Classify R² into a confidence level, capped by how many points there are.
+ * Identical values have no variance for R² to explain (it is reported as 0),
+ * yet a flat line fits them exactly, so they are rated on sample size alone.
+ */
+function trendConfidence(r2: number, sampleSize: number, constant: boolean): TrendConfidence {
   if (sampleSize < LOW_CONFIDENCE_BELOW) return "low";
+  const fit = constant ? 1 : r2;
+  const fromFit: TrendConfidence = fit > 0.7 ? "high" : fit > 0.4 ? "medium" : "low";
   if (sampleSize < MEDIUM_CONFIDENCE_BELOW && fromFit === "high") return "medium";
   return fromFit;
 }
@@ -407,7 +418,7 @@ export async function getTrend(
 ): Promise<TrendAnalysis> {
   const days = params.days ?? DEFAULT_DAYS;
   const definition = METRICS[params.metric];
-  const offset = await resolveUserUtcOffset(client);
+  const { offset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
   const lastDay = localDay(now.toISOString(), offset);
   const firstDay = addDays(lastDay, -(days - 1));
   const windowStartMs = localMidnightMs(firstDay, offset);
@@ -449,21 +460,36 @@ export async function getTrend(
   if (sampleSize >= MIN_TREND_POINTS) {
     const xs = dates.map((day) => daysBetween(dates[0]!, day));
     const regression = linearRegressionXY(xs, values);
-    const change = toChange(trendDirection(regression.slope, regression.r2));
+    const constant = isConstant(values);
+    const change = constant ? "stable" : toChange(trendDirection(regression.slope, regression.r2));
+    const confidence = trendConfidence(regression.r2, sampleSize, constant);
     trend = {
       direction: interpretChange(change, definition.betterWhen),
       change,
       better_when: definition.betterWhen,
       slope: regression.slope,
-      confidence: trendConfidence(regression.r2, sampleSize),
+      confidence,
     };
+    if (constant) {
+      notes.push(
+        `All ${sampleSize} values were identical (${values[0]}), so the metric was flat over this period.`
+      );
+    } else if (change === "stable" && confidence === "low") {
+      notes.push(
+        "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+      );
+    }
     anomalies = detectAnomalies(values, 2).map((anomaly) => ({
       date: dates[anomaly.index]!,
       value: anomaly.value,
       deviation_from_mean: anomaly.deviation,
     }));
   } else {
-    const found = sampleSize ? plural(sampleSize, definition.unit) : `no ${definition.unit[1]}`;
+    // "no scored nights" only when there were none; scored nights without a value are counted apart
+    const valueUnit = definition.valueUnit ?? definition.unit;
+    const found = sampleSize
+      ? plural(sampleSize, valueUnit)
+      : `no ${(loaded.skipped ? valueUnit : definition.unit)[1]}`;
     notes.unshift(
       `Not enough data yet: ${found} in the last ${days} days; a trend needs at least ${MIN_TREND_POINTS}.`
     );
@@ -499,6 +525,6 @@ export async function getTrend(
     statistics,
     trend,
     anomalies,
-    notes,
+    notes: withOffsetNote(notes, offsetFallback),
   };
 }

@@ -376,6 +376,18 @@ describe("refreshAccessToken", () => {
       WhoopNetworkError
     );
   });
+
+  it.each([
+    ["a connection reset mid-body", new TypeError("terminated")],
+    ["a non-JSON 200 body", new SyntaxError("Unexpected token '<'")],
+  ])("wraps a failure reading the success body (%s) in WhoopNetworkError", async (_, cause) => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.reject(cause) });
+
+    const error = await refreshAccessToken("any-refresh", TEST_CONFIG).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(WhoopNetworkError);
+    expect((error as WhoopNetworkError).cause).toBe(cause);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -835,5 +847,77 @@ describe("authenticate", () => {
     expect(token).toBe("access-token-123");
     expect(mockStartCallbackServer).toHaveBeenCalledOnce();
     expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  // R20: WHOOP rotates the refresh token on refresh, so once a refresh succeeded
+  // the old one is dead. A failed save must not start a full OAuth flow.
+  it("returns the refreshed token without starting OAuth when saving it fails", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockLoadTokens.mockResolvedValueOnce({ ...VALID_TOKENS, expires_at: Date.now() - 1000 });
+    mockIsTokenExpired.mockReturnValueOnce(true);
+    mockSaveTokens.mockRejectedValueOnce(
+      Object.assign(new Error("EBUSY: resource busy or locked, rename 'x' -> '/secret/path'"), {
+        code: "EBUSY",
+      })
+    );
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(MOCK_TOKEN_RESPONSE) });
+    const onTokens = vi.fn();
+
+    const token = await authenticate(TEST_CONFIG, { onTokens });
+
+    expect(token).toBe("access-token-123");
+    expect(mockStartCallbackServer).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledOnce();
+    expect(onTokens).toHaveBeenCalledWith(
+      expect.objectContaining({
+        access_token: "access-token-123",
+        refresh_token: "refresh-token-456",
+      })
+    );
+    const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("EBUSY");
+    expect(logged).not.toContain("/secret/path");
+    expect(logged).not.toContain("refresh-token-456");
+  });
+
+  it("does not start OAuth when the refresh response body cannot be read", async () => {
+    mockLoadTokens.mockResolvedValueOnce({ ...VALID_TOKENS, expires_at: Date.now() - 1000 });
+    mockIsTokenExpired.mockReturnValueOnce(true);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.reject(new TypeError("terminated")),
+    });
+
+    await expect(authenticate(TEST_CONFIG)).rejects.toBeInstanceOf(WhoopNetworkError);
+    expect(mockStartCallbackServer).not.toHaveBeenCalled();
+  });
+
+  it("passes the cached tokens to onTokens", async () => {
+    mockLoadTokens.mockResolvedValueOnce(VALID_TOKENS);
+    mockIsTokenExpired.mockReturnValueOnce(false);
+    const onTokens = vi.fn();
+
+    await authenticate(TEST_CONFIG, { onTokens });
+
+    expect(onTokens).toHaveBeenCalledWith(VALID_TOKENS);
+  });
+
+  it("returns and passes on newly authorized tokens even when saving them fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    mockLoadTokens.mockResolvedValueOnce(null);
+    mockSaveTokens.mockRejectedValueOnce(Object.assign(new Error("EACCES"), { code: "EACCES" }));
+    mockStartCallbackServer.mockReturnValueOnce({
+      port: 3000,
+      result: Promise.resolve({ code: "auth-code", state: "mock-state" }),
+    });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(MOCK_TOKEN_RESPONSE) });
+    const onTokens = vi.fn();
+
+    const token = await authenticate(TEST_CONFIG, { onTokens });
+
+    expect(token).toBe("access-token-123");
+    expect(onTokens).toHaveBeenCalledWith(
+      expect.objectContaining({ refresh_token: "refresh-token-456" })
+    );
   });
 });

@@ -23,9 +23,14 @@ import { createInterface, type Interface } from "node:readline";
 
 import { authenticate } from "../auth/oauth.js";
 import type { OAuthConfig } from "../auth/oauth.js";
-import { loadTokens, saveTokens } from "../auth/token-store.js";
+import { deleteTokens, loadTokens, saveTokens, type OAuthTokens } from "../auth/token-store.js";
 import { refreshAccessToken, toOAuthTokens } from "../auth/oauth.js";
-import { createWhoopClient } from "../api/client.js";
+import {
+  createWhoopClient,
+  WhoopApiError,
+  WhoopAuthError,
+  WhoopNetworkError,
+} from "../api/client.js";
 import { getProfile } from "../tools/get-profile.js";
 
 import {
@@ -229,6 +234,8 @@ export interface RunSetupDeps {
   readonly authenticate?: (config: OAuthConfig) => Promise<string>;
   /** Fetch the profile after authenticate() to prove the access token works. */
   readonly fetchProfile?: (accessToken: string) => Promise<unknown>;
+  /** Delete the stored WHOOP tokens so authenticate() runs a new authorization. */
+  readonly deleteTokens?: () => Promise<void>;
   readonly fs?: {
     readFile: (path: string, encoding: "utf8") => Promise<string>;
     writeFile: (path: string, data: string) => Promise<void>;
@@ -241,6 +248,7 @@ const DEFAULT_DEPS: Required<Omit<RunSetupDeps, "io">> & { io: PromptIO } = {
   io: { input: process.stdin, output: process.stdout },
   authenticate,
   fetchProfile: defaultFetchProfile,
+  deleteTokens: () => deleteTokens(),
   fs: {
     readFile: (p, enc) => fs.readFile(p, enc),
     writeFile: (p, d) => fs.writeFile(p, d, { mode: 0o600 }),
@@ -254,15 +262,29 @@ const DEFAULT_DEPS: Required<Omit<RunSetupDeps, "io">> & { io: PromptIO } = {
 async function defaultFetchProfile(accessToken: string): Promise<unknown> {
   // Build a real client that supports refresh, in case the cached token
   // expired between authenticate() and now. This mirrors src/index.ts.
+  // Newest tokens issued during this run, in case saving them fails.
+  let latest: OAuthTokens | null = null;
   const onTokenRefresh = async (): Promise<string> => {
-    const tokens = await loadTokens();
+    const stored = await loadTokens();
+    const tokens =
+      latest !== null && (stored === null || latest.expires_at > stored.expires_at)
+        ? latest
+        : stored;
     if (!tokens) throw new Error("No stored tokens to refresh");
     const refreshed = await refreshAccessToken(tokens.refresh_token, {
       clientId: process.env.WHOOP_CLIENT_ID ?? "",
       clientSecret: process.env.WHOOP_CLIENT_SECRET ?? "",
     });
     const fresh = toOAuthTokens(refreshed, tokens.refresh_token);
-    await saveTokens(fresh);
+    // WHOOP has already rotated the refresh token: a failed save must not turn
+    // a working refresh into a verification failure.
+    latest = fresh;
+    try {
+      await saveTokens(fresh);
+    } catch (error: unknown) {
+      const code = (error as NodeJS.ErrnoException | undefined)?.code ?? "unknown";
+      console.error(`Could not save the refreshed WHOOP tokens (${code}).`);
+    }
     return fresh.access_token;
   };
   const client = createWhoopClient({ accessToken, onTokenRefresh });
@@ -427,14 +449,50 @@ async function verifyCredentials(
     );
   }
   out.write("OAuth flow complete. Fetching profile...\n");
+  let profile: unknown;
   try {
-    const profile = await deps.fetchProfile(accessToken);
-    out.write(`Profile OK: ${JSON.stringify(profile)}\n\n`);
+    profile = await deps.fetchProfile(accessToken);
   } catch (err) {
-    throw new Error(
-      `Verification failed fetching profile: ${err instanceof Error ? err.message : String(err)}`
-    );
+    if (!isRejectedSignIn(err)) {
+      throw profileError(err);
+    }
+    // authenticate() reuses an unexpired cached access token, so a revoked
+    // grant or a missing permission would never reach the consent screen.
+    // Discard the stored tokens and authorize once more.
+    out.write("WHOOP rejected the stored sign-in. Starting a new WHOOP authorization...\n");
+    await deps.deleteTokens();
+    try {
+      accessToken = await deps.authenticate(creds);
+    } catch (authErr) {
+      throw new Error(
+        `Verification failed during OAuth: ${authErr instanceof Error ? authErr.message : String(authErr)}`
+      );
+    }
+    try {
+      profile = await deps.fetchProfile(accessToken);
+    } catch (retryErr) {
+      throw profileError(retryErr);
+    }
   }
+  out.write(`Profile OK: ${JSON.stringify(profile)}\n\n`);
+}
+
+/**
+ * Whether WHOOP refused the stored sign-in itself (not a network problem): the
+ * refresh token was rejected, or the access token is unauthorized (401) or
+ * lacks a permission (403).
+ */
+function isRejectedSignIn(error: unknown): boolean {
+  if (error instanceof WhoopAuthError) {
+    return !(error.cause instanceof WhoopNetworkError);
+  }
+  return error instanceof WhoopApiError && (error.statusCode === 401 || error.statusCode === 403);
+}
+
+function profileError(err: unknown): Error {
+  return new Error(
+    `Verification failed fetching profile: ${err instanceof Error ? err.message : String(err)}`
+  );
 }
 
 async function writeClaudeDesktopConfig(

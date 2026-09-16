@@ -41,7 +41,7 @@ import {
   parseRecords,
   sourceQuality,
 } from "./analytics-utils.js";
-import { resolveUserUtcOffset } from "./collection-utils.js";
+import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import { parseUtcOffset, resolveDateExpression } from "./date-utils.js";
 import { mean, linearRegressionXY, trendDirection, MIN_TREND_POINTS } from "./stats-utils.js";
 import type { TrendDirectionResult } from "./stats-utils.js";
@@ -146,6 +146,27 @@ function formatLocal(ms: number, offset: string): string {
   return `${wallClock}${offset === "Z" ? "Z" : offset}`;
 }
 
+/** A date-time written as midnight in its own zone (or without a zone), e.g. 2026-09-14T00:00:00Z */
+const WRITTEN_MIDNIGHT_REGEX =
+  /^(\d{4}-\d{2}-\d{2})T00:00(?::00(?:\.0{1,3})?)?(?:Z|[+-]\d{2}:\d{2})?$/;
+
+/**
+ * The local day week_start names. A date-time written as midnight names the
+ * date as written: "2026-09-14T00:00:00Z" is Monday 14 September in every
+ * timezone, although at a negative offset that instant is still Sunday
+ * evening locally. This agrees with snapping the bound to its nearest local
+ * midnight (D11) wherever the written zone is within 12 hours of the user's.
+ * Any other date-time names the local day it falls on, so a noon or evening
+ * timestamp never moves to the next week. Date-only and relative values
+ * already sit on a local midnight.
+ */
+function requestedLocalDay(weekStart: string, now: Date, offset: string): string {
+  // Resolve first: it rejects invalid calendar dates such as 2026-02-30T00:00:00Z
+  const resolved = resolveDateExpression(weekStart, now, offset);
+  const midnight = weekStart.trim().match(WRITTEN_MIDNIGHT_REGEX);
+  return midnight ? midnight[1]! : localDay(resolved.start, offset);
+}
+
 /**
  * Resolve week_start to the local Monday-to-Sunday week containing it.
  * Without week_start, the week containing today.
@@ -158,7 +179,7 @@ function resolveWeek(
   const requestedDay =
     weekStart === undefined
       ? localDay(now.toISOString(), offset)
-      : localDay(resolveDateExpression(weekStart, now, offset).start, offset);
+      : requestedLocalDay(weekStart, now, offset);
   const monday = mondayOf(requestedDay);
   const offsetMs = parseUtcOffset(offset) * 60_000;
   return {
@@ -247,7 +268,7 @@ export async function getWeeklySummary(
   params: WeeklySummaryParams,
   now: Date = new Date()
 ): Promise<WeeklySummary> {
-  const offset = await resolveUserUtcOffset(client);
+  const { offset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
   const week = resolveWeek(params.week_start, now, offset);
   const inWeek = (day: string): boolean => day >= week.monday && day <= week.sunday;
   const notes: string[] = [];
@@ -402,17 +423,46 @@ export async function getWeeklySummary(
     totalCaloriesKj += workout.score!.kilojoule;
     sportBreakdown[workout.sport_name] = (sportBreakdown[workout.sport_name] ?? 0) + 1;
   }
-  const workouts = sources.workout.ok
-    ? {
-        count: scoredWorkouts.length,
-        total_strain: totalStrain,
-        total_calories_kj: totalCaloriesKj,
-        sport_breakdown: sportBreakdown,
-      }
-    : { count: null, total_strain: null, total_calories_kj: null, sport_breakdown: {} };
+  // A worn day always produces a cycle, so a week without any cycle, sleep,
+  // recovery or workout record (or one that has not started) was not recorded:
+  // its workout totals are unknown, not 0.
+  const weekCycles = cycles.filter((cycle) => inWeek(cycleDay(cycle)));
+  const weekNotStarted = week.monday > today;
+  const noWeekData =
+    weekNotStarted ||
+    (sources.cycle.ok &&
+      weekCycles.length === 0 &&
+      weekRecoveries.length === 0 &&
+      !sleeps.some((record) => inWeek(localDay(record.end, record.timezone_offset))) &&
+      !recordsOf(sources.workout).some((record) =>
+        inWeek(localDay(record.start, record.timezone_offset))
+      ));
+  const unknownWorkouts = {
+    count: null,
+    total_strain: null,
+    total_calories_kj: null,
+    sport_breakdown: {},
+  };
+  let workouts: WeeklySummary["workouts"];
+  if (!sources.workout.ok) {
+    workouts = unknownWorkouts;
+  } else if (noWeekData) {
+    workouts = unknownWorkouts;
+    if (!weekNotStarted) {
+      notes.push(
+        "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0."
+      );
+    }
+  } else {
+    workouts = {
+      count: scoredWorkouts.length,
+      total_strain: totalStrain,
+      total_calories_kj: totalCaloriesKj,
+      sport_breakdown: sportBreakdown,
+    };
+  }
 
   // --- Strain: completed cycles by cycleDay ---
-  const weekCycles = cycles.filter((cycle) => inWeek(cycleDay(cycle)));
   const strainValues = weekCycles
     .filter((cycle) => cycle.end != null && cycle.score_state === "SCORED" && cycle.score)
     .map((cycle) => cycle.score!.strain);
@@ -441,7 +491,7 @@ export async function getWeeklySummary(
     },
     calibrating: calibratingCount > 0,
     truncated,
-    notes,
+    notes: withOffsetNote(notes, offsetFallback),
   };
 
   if (warnings.length > 0) {

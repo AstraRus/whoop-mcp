@@ -12,6 +12,10 @@
  * - `getOrFetch` adds stampede prevention (concurrent misses share one fetch)
  *   and a generation counter so a `clear()` mid-flight cannot repopulate the
  *   cache with stale data.
+ * - `getOrFetch` honours the reading caller's TTL as well as the writer's: an
+ *   entry older than the reader's `ttlMs` is a miss. Callers that share a key
+ *   with different freshness needs (e.g. a 2-minute resource and a longer-lived
+ *   lookup) are never served data older than they asked for.
  * - No tokens or auth data should ever be used as cache keys (caller's
  *   responsibility — keys are endpoint + sorted params).
  */
@@ -40,7 +44,10 @@ export interface MemoryCacheOptions {
 
 interface CacheEntry {
   value: unknown;
+  /** Epoch ms after which the entry is expired for every reader (the writer's TTL). */
   expiry: number;
+  /** Epoch ms when the entry was written, so each reader can apply its own TTL. */
+  storedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +117,8 @@ export class MemoryCache<T = unknown> {
   set(key: string, value: T, ttlMs?: number): void {
     // Treat a write to an existing key as a use (move to MRU).
     this.store.delete(key);
-    this.store.set(key, { value, expiry: Date.now() + (ttlMs ?? this.defaultTtlMs) });
+    const now = Date.now();
+    this.store.set(key, { value, expiry: now + (ttlMs ?? this.defaultTtlMs), storedAt: now });
     this.evictIfNeeded();
   }
 
@@ -137,11 +145,23 @@ export class MemoryCache<T = unknown> {
   /**
    * Return the cached value for `key`, or run `fetcher` to populate it.
    * Concurrent misses for the same key share a single in-flight request.
+   *
+   * `ttlMs` is both the TTL stored on a freshly fetched entry and the maximum
+   * age this caller accepts: an entry written `ttlMs` or more ago is refetched,
+   * even when another caller stored it with a longer TTL.
    */
   async getOrFetch<R>(key: string, ttlMs: number, fetcher: () => Promise<R>): Promise<R> {
-    const cached = this.get(key);
-    if (cached !== undefined) {
-      return cached as R;
+    const entry = this.store.get(key);
+    if (entry !== undefined) {
+      const now = Date.now();
+      if (now >= entry.expiry) {
+        this.store.delete(key);
+      } else if (now - entry.storedAt < ttlMs) {
+        // Fresh enough for this reader: refresh the LRU position and serve it.
+        this.store.delete(key);
+        this.store.set(key, entry);
+        return entry.value as R;
+      }
     }
 
     const existing = this.inflight.get(key);

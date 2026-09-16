@@ -7,6 +7,7 @@ import {
   describeWhoopError,
 } from "../../src/api/client.js";
 import type { WhoopClient } from "../../src/api/client.js";
+import { TokenRefreshError } from "../../src/auth/token-refresh-error.js";
 
 // ---------------------------------------------------------------------------
 // Task 4a: WhoopApiError
@@ -47,6 +48,18 @@ describe("WhoopApiError", () => {
 // ---------------------------------------------------------------------------
 
 describe("describeWhoopError", () => {
+  it("tells the user to retry, not to sign in again, after a transient token-endpoint failure", () => {
+    expect(
+      describeWhoopError(new WhoopAuthError(new TokenRefreshError(503, "unavailable")))
+    ).toMatch(/temporarily unavailable.*still valid/);
+    expect(describeWhoopError(new WhoopAuthError(new TokenRefreshError(429, "slow down")))).toMatch(
+      /rate-limited.*still valid/
+    );
+    expect(
+      describeWhoopError(new WhoopAuthError(new TokenRefreshError(400, "invalid_grant")))
+    ).toMatch(/sign in again/);
+  });
+
   const SECRET_BODY = { error_description: "token abc.def.ghi for jane@example.com", hrv: 61.2 };
 
   it.each([
@@ -89,6 +102,38 @@ describe("describeWhoopError", () => {
     expect(message).toContain("authentication failed");
     expect(message).toContain("setup --verify");
     expect(message).not.toContain("secret");
+  });
+
+  // R24: the advice must match how the server actually signs in again. It runs
+  // the WHOOP authorization flow only at startup (or in a local setup --verify),
+  // when tokens.json is missing or its expired access token cannot be refreshed.
+  it("tells the user to restart the server (local or hosted) after a failed refresh", () => {
+    const message = describeWhoopError(new WhoopAuthError(new Error("invalid_grant")));
+
+    expect(message).toContain("restart the server");
+    expect(message).toContain("authorization link in the server logs");
+    expect(message).toContain("hosted server");
+    // Fallback when the stored tokens could not be marked expired
+    expect(message).toContain("delete tokens.json");
+    expect(message).not.toContain("to reconnect");
+  });
+
+  it.each([401, 403])(
+    "tells the user to delete tokens.json and restart for HTTP %i (refreshing cannot fix it)",
+    (status) => {
+      const message = describeWhoopError(new WhoopApiError(status, "x", null)) ?? "";
+
+      expect(message).toMatch(/delete tokens\.json .*then restart the server/);
+      expect(message).toContain("~/.whoop-mcp");
+      expect(message).toContain("mounted volume");
+      expect(message).toContain("authorization link in the server logs");
+    }
+  );
+
+  it("describes an unreadable response body separately from an unreachable API", () => {
+    expect(describeWhoopError(new WhoopNetworkError(new SyntaxError("Unexpected token")))).toBe(
+      "WHOOP API returned an unreadable response. Retry later."
+    );
   });
 
   it("describes a token refresh that could not reach WHOOP as a network problem", () => {
@@ -589,6 +634,82 @@ describe("createWhoopClient", () => {
 
       await expect(client.get("/v2/recovery")).rejects.toThrow(WhoopApiError);
       await expect(client.get("/v2/recovery")).rejects.not.toThrow(WhoopNetworkError);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // R23: failures while reading a 200 body are network errors too
+  // -------------------------------------------------------------------------
+
+  describe("get (response body read failures)", () => {
+    /** A 200 response whose body stream sends a partial JSON chunk, then fails. */
+    function brokenBodyResponse(cause: Error): Response {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller): void {
+          controller.enqueue(new TextEncoder().encode('{"records":['));
+          controller.error(cause);
+        },
+      });
+      return new Response(body, { status: 200 });
+    }
+
+    it("wraps a connection reset mid-body in WhoopNetworkError", async () => {
+      const reset = new TypeError("terminated");
+      mockFetch.mockResolvedValue(brokenBodyResponse(reset));
+      const client = createWhoopClient({ accessToken: TEST_TOKEN, baseUrl: TEST_BASE_URL });
+
+      const error = await client.get("/v2/recovery").catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(WhoopNetworkError);
+      expect((error as WhoopNetworkError).cause).toBe(reset);
+      expect(describeWhoopError(error)).toBe(
+        "Network error: Unable to reach the WHOOP API. Check your internet connection."
+      );
+    });
+
+    it("describes a timeout while reading the body as a timeout", async () => {
+      const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+      mockFetch.mockResolvedValue(brokenBodyResponse(timeout));
+      const client = createWhoopClient({ accessToken: TEST_TOKEN, baseUrl: TEST_BASE_URL });
+
+      const error = await client.get("/v2/recovery").catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(WhoopNetworkError);
+      expect(describeWhoopError(error)).toContain("did not respond in time");
+    });
+
+    it("describes a non-JSON 200 body (e.g. a proxy page) as an unreadable response", async () => {
+      mockFetch.mockResolvedValue(
+        new Response("<html>SECRET proxy page</html>", {
+          status: 200,
+          headers: { "content-type": "text/html" },
+        })
+      );
+      const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const client = createWhoopClient({ accessToken: TEST_TOKEN, baseUrl: TEST_BASE_URL, logger });
+
+      const error = await client.get("/v2/recovery").catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(WhoopNetworkError);
+      expect(describeWhoopError(error)).toBe(
+        "WHOOP API returned an unreadable response. Retry later."
+      );
+      expect(JSON.stringify(logger.error.mock.calls)).toContain("SyntaxError");
+      expect(JSON.stringify(logger.error.mock.calls)).not.toContain("SECRET");
+    });
+
+    it("wraps a body read failure on the retry after a token refresh", async () => {
+      mockFetch
+        .mockResolvedValueOnce(new Response("{}", { status: 401, statusText: "Unauthorized" }))
+        .mockResolvedValueOnce(brokenBodyResponse(new TypeError("terminated")));
+      const client = createWhoopClient({
+        accessToken: TEST_TOKEN,
+        baseUrl: TEST_BASE_URL,
+        onTokenRefresh: vi.fn().mockResolvedValue("new_token"),
+      });
+
+      await expect(client.get("/v2/recovery")).rejects.toBeInstanceOf(WhoopNetworkError);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

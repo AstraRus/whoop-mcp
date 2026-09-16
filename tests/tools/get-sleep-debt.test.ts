@@ -2,9 +2,10 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { getSleepDebt, sleepDebtOutputSchema } from "../../src/tools/get-sleep-debt.js";
-import { WhoopNetworkError, type WhoopClient } from "../../src/api/client.js";
+import { WhoopApiError, WhoopNetworkError, type WhoopClient } from "../../src/api/client.js";
 import type { Sleep } from "../../src/api/types.js";
 import { createWhoopServer } from "../../src/server.js";
+import { InvalidDateExpression } from "../../src/tools/date-utils.js";
 import { aggregateOutputSchemas } from "../../src/tools/output-contracts.js";
 import { analyticsClient, ANALYTICS_NOW, sleepFixture } from "../helpers/analytics-fixtures.js";
 
@@ -117,7 +118,8 @@ describe("getSleepDebt", () => {
       { start: "yesterday", days: 3 },
       new Date("2026-08-10T12:00:00Z")
     );
-    expect(result.period.start).toBe("2026-08-09T00:00:00.000Z");
+    // The fixtures' newest cycle is at +00:00, so the period is written in that offset.
+    expect(result.period.start).toBe("2026-08-09T00:00:00.000+00:00");
   });
 
   it.each([
@@ -253,10 +255,12 @@ describe("getSleepDebt", () => {
       { start: "2026-09-01", days: 3 },
       ANALYTICS_NOW
     );
+    // The exclusive window end (09-04 00:00) is reported as the last millisecond it covers.
     expect(result.period).toEqual({
-      start: "2026-09-01T00:00:00.000Z",
-      end: "2026-09-04T00:00:00.000Z",
+      start: "2026-09-01T00:00:00.000+00:00",
+      end: "2026-09-03T23:59:59.999+00:00",
     });
+    expect(result.data_quality.requested_period).toEqual(result.period);
   });
   it("surfaces pagination truncation in notes", async () => {
     const result = await getSleepDebt(
@@ -335,24 +339,132 @@ describe("getSleepDebt with a new, calibrating user (live shape)", () => {
       { start: "2026-09-14", days: 3 },
       LIVE_NOW
     );
-    expect(result.period.start).toBe("2026-09-13T22:00:00.000Z");
+    expect(result.period.start).toBe("2026-09-14T00:00:00.000+02:00");
+    expect(result.period.end).toBe("2026-09-16T12:00:00.000+02:00");
     expect(result.nights_analyzed).toBe(2);
+    expect(result.data_quality.observed_period).toEqual({
+      start: "2026-09-15T06:30:00.000+02:00",
+      end: "2026-09-16T07:13:59.350+02:00",
+    });
+  });
+
+  describe("a range expression in start covers that range", () => {
+    const AFTERNOON = new Date("2026-09-16T13:00:00.000Z"); // 15:00 local, Wednesday
+
+    it.each(["last 14 days", "this month", "this week", "last 2 weeks", "last 7 days"])(
+      "%s includes this morning's night and ends now",
+      async (start) => {
+        const result = await getSleepDebt(
+          liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
+          { start },
+          AFTERNOON
+        );
+        expect(result.nights_analyzed).toBe(2);
+        expect(result.standing_debt_date).toBe("2026-09-16");
+        expect(result.period.end).toBe("2026-09-16T15:00:00.000+02:00");
+      }
+    );
+
+    it("this month starts on the 1st at local midnight", async () => {
+      const result = await getSleepDebt(
+        liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
+        { start: "this month" },
+        AFTERNOON
+      );
+      expect(result.period.start).toBe("2026-09-01T00:00:00.000+02:00");
+    });
+
+    it("last week covers last Monday to Sunday only", async () => {
+      const result = await getSleepDebt(
+        liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
+        { start: "last week" },
+        AFTERNOON
+      );
+      expect(result.period).toEqual({
+        start: "2026-09-07T00:00:00.000+02:00",
+        end: "2026-09-13T23:59:59.999+02:00",
+      });
+      expect(result.nights_analyzed).toBe(0);
+      expect(result.standing_debt_date).toBeNull();
+    });
+
+    it("uses the range's first day plus an explicit days", async () => {
+      const result = await getSleepDebt(
+        liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
+        { start: "last week", days: 9 },
+        AFTERNOON
+      );
+      expect(result.period).toEqual({
+        start: "2026-09-07T00:00:00.000+02:00",
+        end: "2026-09-15T23:59:59.999+02:00",
+      });
+      expect(result.nights.map((night) => night.date)).toEqual(["2026-09-15"]);
+    });
+
+    it("keeps start + days for a single day", async () => {
+      const result = await getSleepDebt(
+        liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
+        { start: "yesterday" },
+        AFTERNOON
+      );
+      expect(result.period.start).toBe("2026-09-15T00:00:00.000+02:00");
+      expect(result.nights_analyzed).toBe(2);
+    });
+
+    it("rejects a range longer than 90 days plus today", async () => {
+      const client = liveClient({ "/v2/activity/sleep": [liveSleeps()] });
+      await expect(getSleepDebt(client, { start: "last 6 months" }, AFTERNOON)).rejects.toThrow(
+        InvalidDateExpression
+      );
+      const longest = await getSleepDebt(client, { start: "last 90 days" }, AFTERNOON);
+      expect(longest.period.start).toBe("2026-06-18T00:00:00.000+02:00");
+    });
+  });
+
+  it.each([
+    ["a rate-limited", new WhoopApiError(429, "Too Many Requests", null)],
+    ["a malformed", { records: null, next_token: null }],
+  ])("keeps the sleeps already read when %s later page fails", async (_label, failure) => {
+    const [newest, older] = liveSleeps();
+    const client = {
+      get: vi.fn(async (path: string) => {
+        if (path.startsWith("/v2/cycle")) return { records: [LIVE_CYCLE], next_token: null };
+        if (!path.includes("nextToken=")) return { records: [newest, older], next_token: "p2" };
+        if (failure instanceof Error) throw failure;
+        return failure;
+      }),
+    } as unknown as WhoopClient;
+    const result = await getSleepDebt(client, {}, LIVE_NOW);
+    expect(result.status).toBe("insufficient_data");
+    expect(result.nights_analyzed).toBe(2);
+    expect(result.truncated).toBe(true);
+    expect(result.data_quality.sources.sleep).toMatchObject({
+      status: "available",
+      records_fetched: 2,
+      truncated: true,
+    });
+    expect(result.notes).toContain(
+      "Partial history: a later page of sleep data could not be read from WHOOP, so older sleeps in the window were not included. Retry for a complete result."
+    );
+    expect(result.summary).toContain("Partial history: older sleeps could not be read.");
   });
 });
 
 describe("get_sleep_debt through the MCP server", () => {
   async function call(
     whoop: WhoopClient,
-    privacyMode: "standard" | "aggregate"
+    privacyMode: "standard" | "aggregate",
+    args: Record<string, unknown> = {},
+    now: Date = LIVE_NOW
   ): Promise<{ isError?: boolean; structuredContent?: unknown; text: string }> {
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(LIVE_NOW);
+    vi.setSystemTime(now);
     const { server } = createWhoopServer(whoop, { privacyMode, disableResources: true });
     const client = new Client({ name: "sleep-debt-test", version: "1" });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
     try {
-      const result = await client.callTool({ name: "get_sleep_debt", arguments: {} });
+      const result = await client.callTool({ name: "get_sleep_debt", arguments: args });
       const text = (result.content as Array<{ text: string }>)[0]!.text;
       return {
         isError: result.isError as boolean | undefined,
@@ -386,6 +498,30 @@ describe("get_sleep_debt through the MCP server", () => {
       expect(result.text).not.toContain(hidden);
   });
 
+  it.each([
+    [{ start: "2026-09-14", days: 3 }, LIVE_NOW, { start: "2026-09-14", end: "2026-09-16" }],
+    [{ start: "yesterday", days: 3 }, LIVE_NOW, { start: "2026-09-15", end: "2026-09-16" }],
+    [{ days: 3 }, new Date("2026-09-16T23:30:00.000Z"), { start: "2026-09-14", end: "2026-09-17" }],
+    [{ start: "last week" }, LIVE_NOW, { start: "2026-09-07", end: "2026-09-13" }],
+  ])(
+    "labels the aggregate period for %j with the user's local days",
+    async (args, now, expected) => {
+      const result = await call(
+        liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
+        "aggregate",
+        args,
+        now
+      );
+      expect(result.isError, result.text).toBeFalsy();
+      const data = result.structuredContent as {
+        period: unknown;
+        data_quality: { requested_period: unknown };
+      };
+      expect(data.period).toEqual(expected);
+      expect(data.data_quality.requested_period).toEqual(expected);
+    }
+  );
+
   it("explains unreadable data in aggregate mode", async () => {
     const result = await call(
       { get: vi.fn(async () => ({ records: "invalid" })) } as unknown as WhoopClient,
@@ -394,7 +530,11 @@ describe("get_sleep_debt through the MCP server", () => {
     expect(result.isError, result.text).toBeFalsy();
     expect(result.structuredContent).toMatchObject({
       status: "unavailable",
-      notes: [expect.stringContaining("Sleep data could not be read")],
+      // Every request fails here, so the time-zone fallback note is added too
+      notes: expect.arrayContaining([
+        expect.stringContaining("Sleep data could not be read"),
+        expect.stringContaining("time zone could not be read"),
+      ]),
     });
   });
 });

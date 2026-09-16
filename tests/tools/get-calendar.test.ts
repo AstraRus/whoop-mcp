@@ -8,9 +8,12 @@
  * cycle (end: null).
  *
  * Covers: local-day grid, cycle/recovery/sleep joins (strain on the right
- * row, today's in-progress strain), no cycle lost to a day collision, asleep
- * hours, calibrating flags and notes, sparse averages, the start parameter,
- * partial stream failure, truncation, invalid records and the output contract.
+ * row, today's in-progress strain), no cycle lost to a day collision and no
+ * cascade from a second main sleep on one day, asleep hours, calibrating flags
+ * and notes, the partial first strap day, sparse averages, today's row after
+ * local midnight before the next sleep, the start parameter (single days,
+ * date-times and range expressions), partial stream failure, truncation,
+ * invalid records and the output contract.
  */
 
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -402,6 +405,7 @@ describe("getCalendar", () => {
         sleep_performance_pct: null,
         day_strain: 7.9,
         day_strain_in_progress: false,
+        day_strain_partial: true,
       });
     });
 
@@ -419,6 +423,7 @@ describe("getCalendar", () => {
         sleep_performance_pct: 88,
         day_strain: 7.8,
         day_strain_in_progress: true,
+        day_strain_partial: false,
       });
       expect(result.notes.join(" ")).toMatch(/2026-09-16 is still accumulating/);
     });
@@ -580,19 +585,26 @@ describe("getCalendar", () => {
           sleep_performance_pct: null,
           day_strain: null,
           day_strain_in_progress: false,
+          day_strain_partial: false,
         });
       }
+      // 09-14 is the partial first strap day: its strain is shown but not averaged
+      expect(rowFor(result, "2026-09-14")).toMatchObject({
+        day_strain: 7.9,
+        day_strain_partial: true,
+      });
       expect(result.averages).toEqual({
         recovery: 62.5,
         sleep_hours: 6.8,
-        strain: 13.5,
-        sample_sizes: { recovery: 2, sleep_hours: 2, strain: 2 },
+        strain: 19.0,
+        sample_sizes: { recovery: 2, sleep_hours: 2, strain: 1 },
       });
       expect(result.notes).toEqual([
         "WHOOP is still calibrating: recovery for 2026-09-15, 2026-09-16 is provisional (recovery_calibrating: true) and is included in averages.recovery.",
         "Strain for 2026-09-16 is still accumulating (day_strain_in_progress: true) and is left out of averages.strain.",
+        "Strain for 2026-09-14 covers only part of the day (WHOOP was first worn partway through it; day_strain_partial: true) and is left out of averages.strain.",
         "No WHOOP data before 2026-09-14 in this range; the 4 earlier day(s) are null.",
-        "Not enough data yet for reliable averages: recovery 2 of 7 days, sleep 2 of 7 days, strain 2 of 6 completed days. An average is null when no day has data.",
+        "Not enough data yet for reliable averages: recovery 2 of 7 days, sleep 2 of 7 days, strain 1 of 5 completed days. An average is null when no day has data.",
       ]);
       expect(result.warnings).toEqual([]);
     });
@@ -700,6 +712,91 @@ describe("getCalendar", () => {
       expect(result.period.end).toBe("2026-09-16");
     });
 
+    it("shows the whole range for a range expression, ending today", async () => {
+      const { client } = createMockClient(LIVE);
+
+      const lastFourteen = await getCalendar(client, { start: "last 14 days" }, NOW);
+      const thisMonth = await getCalendar(client, { start: "this month" }, NOW);
+      const monthLiteral = await getCalendar(client, { start: "2026-09" }, NOW);
+
+      // "last 14 days" is today plus the previous 14 days
+      expect(lastFourteen.period).toMatchObject({
+        start: "2026-09-02",
+        end: "2026-09-16",
+        days: 15,
+      });
+      expect(rowFor(lastFourteen, "2026-09-16")).toMatchObject({
+        recovery_score: 70,
+        day_strain: 7.8,
+      });
+      expect(lastFourteen.averages.sample_sizes.recovery).toBe(2);
+      expect(lastFourteen.notes.join(" ")).not.toMatch(/No WHOOP data for any day/);
+      expect(thisMonth.period).toMatchObject({ start: "2026-09-01", end: "2026-09-16", days: 16 });
+      expect(monthLiteral.period).toMatchObject({ start: "2026-09-01", end: "2026-09-16" });
+    });
+
+    it('includes today for "last 7 days" without days', async () => {
+      const { client } = createMockClient(LIVE);
+
+      const result = await getCalendar(client, { start: "last 7 days" }, NOW);
+
+      expect(result.period).toMatchObject({ start: "2026-09-09", end: "2026-09-16", days: 8 });
+      expect(result.days[result.days.length - 1]?.date).toBe("2026-09-16");
+    });
+
+    it('keeps a past range such as "last week" to its own days', async () => {
+      const { client } = createMockClient(LIVE);
+
+      const result = await getCalendar(client, { start: "last week" }, NOW);
+
+      expect(result.period).toMatchObject({ start: "2026-09-07", end: "2026-09-13", days: 7 });
+    });
+
+    it("uses the range's first day plus days when days is also given, with a note", async () => {
+      const { client } = createMockClient(LIVE);
+
+      const result = await getCalendar(client, { start: "last 7 days", days: 7 }, NOW);
+
+      expect(result.period).toMatchObject({ start: "2026-09-09", end: "2026-09-15", days: 7 });
+      expect(result.notes[0]).toBe(
+        '"last 7 days" covers 2026-09-09 to 2026-09-16; with days 7 the grid shows only 2026-09-09 to 2026-09-15. Leave out days to show the whole range.'
+      );
+    });
+
+    it("shows the last 90 days of a longer range, with a note and throttled paging", async () => {
+      const spy = vi
+        .spyOn(pagination, "fetchAllPages")
+        .mockResolvedValue({ records: [], truncated: false });
+      const { client } = createMockClient({ offsetLookup: [CYCLE_3] });
+
+      const result = await getCalendar(client, { start: "last year" }, NOW);
+
+      expect(result.period).toMatchObject({ start: "2025-10-03", end: "2025-12-31", days: 90 });
+      expect(result.notes[0]).toBe(
+        '"last year" covers 2025-01-01 to 2025-12-31, more than the 90-day maximum; the grid shows its last 90 days (2025-10-03 to 2025-12-31).'
+      );
+      expect(spy).toHaveBeenCalledTimes(3);
+      for (const call of spy.mock.calls) {
+        expect(call[2]?.interPageDelayMs).toBe(100);
+      }
+    });
+
+    it("starts a date-time at its nearest local midnight", async () => {
+      const { client } = createMockClient(LIVE);
+
+      // 00:00 UTC is 02:00 local: most of 09-14 lies after it
+      const early = await getCalendar(client, { start: "2026-09-14T00:00:00Z", days: 2 }, NOW);
+      // 13:00 local: most of 09-14 lies before it, so the grid starts on 09-15
+      const afternoon = await getCalendar(
+        client,
+        { start: "2026-09-14T13:00:00+02:00", days: 2 },
+        NOW
+      );
+
+      expect(early.period).toMatchObject({ start: "2026-09-14", end: "2026-09-15" });
+      expect(afternoon.period).toMatchObject({ start: "2026-09-15", end: "2026-09-16" });
+    });
+
     it("returns an empty grid with a note when start is in the future", async () => {
       const { client } = createMockClient(LIVE);
 
@@ -716,6 +813,243 @@ describe("getCalendar", () => {
       expect(result.averages.sleep_hours).toBeNull();
       expect(result.averages.strain).toBeNull();
       expect(result.notes[0]).toMatch(/after today/);
+    });
+  });
+
+  describe("two cycles on one day (second main sleep)", () => {
+    /** A week of normal nights; recovery = day of month + 30, strain = day of month */
+    function numberedWeek(): { cycle: Cycle[]; sleep: Sleep[]; recovery: Recovery[] } {
+      return history(
+        ["10", "11", "12", "13", "14", "15", "16"].map((day) => ({
+          date: `2026-09-${day}`,
+          recovery: Number(day) + 30,
+          strain: Number(day),
+          asleep: 7,
+        }))
+      );
+    }
+
+    it("keeps every other day's own data when a daytime main sleep adds a cycle mid-grid", async () => {
+      const week = numberedWeek();
+      // 09-13: the night cycle ends at a 14:00 main sleep (nap: false), which starts its own cycle
+      const cycle13 = week.cycle.find((c) => c.start === at("2026-09-12T23:00"))!;
+      cycle13.end = at("2026-09-13T14:00");
+      const extra = makeCycle({
+        id: 999,
+        start: at("2026-09-13T14:00"),
+        end: at("2026-09-13T23:00"),
+        strain: 3.3,
+      });
+      const extraSleep = makeSleep({
+        id: "day-sleep",
+        cycleId: 999,
+        start: extra.start,
+        end: at("2026-09-13T19:00"),
+        asleepHours: 4.5,
+      });
+      const extraRecovery = makeRecovery({
+        cycleId: 999,
+        sleepId: "day-sleep",
+        createdAt: at("2026-09-13T19:10"),
+        score: 99,
+      });
+      const { client } = createMockClient({
+        cycle: [...week.cycle.slice(0, 3), extra, ...week.cycle.slice(3)],
+        sleep: [...week.sleep.slice(0, 3), extraSleep, ...week.sleep.slice(3)],
+        recovery: [...week.recovery.slice(0, 3), extraRecovery, ...week.recovery.slice(3)],
+      });
+
+      const result = await getCalendar(client, {}, NOW);
+
+      expect(result.days.map((d) => d.date)).toEqual([
+        "2026-09-16",
+        "2026-09-15",
+        "2026-09-14",
+        "2026-09-13",
+        "2026-09-12",
+        "2026-09-11",
+        "2026-09-10",
+      ]);
+      expect(result.days.map((d) => d.recovery_score)).toEqual([46, 45, 44, 43, 42, 41, 40]);
+      expect(result.days.map((d) => d.day_strain)).toEqual([16, 15, 14, 13, 12, 11, 10]);
+      expect(result.days.map((d) => d.sleep_hours)).toEqual([7, 7, 7, 7, 7, 7, 7]);
+      expect(result.averages.sample_sizes).toEqual({ recovery: 7, sleep_hours: 7, strain: 6 });
+      expect(result.warnings).toEqual([
+        "Two WHOOP cycles belong to 2026-09-13 (for example, a second main sleep ended that day). The row shows the cycle that started 2026-09-12 23:00; the cycle that started 2026-09-13 14:00 (strain 3.3) is left out of the grid and its averages.",
+      ]);
+    });
+
+    it("does not shift older days when the second main sleep is today", async () => {
+      const week = numberedWeek();
+      const cycle16 = week.cycle[0]!;
+      cycle16.end = at("2026-09-16T12:00");
+      const shift = makeCycle({ id: 998, start: at("2026-09-16T12:00"), end: null, strain: 2 });
+      const shiftSleep = makeSleep({
+        id: "shift",
+        cycleId: 998,
+        start: shift.start,
+        end: at("2026-09-16T18:00"),
+        asleepHours: 5.5,
+      });
+      const { client } = createMockClient({
+        cycle: [shift, ...week.cycle],
+        sleep: [shiftSleep, ...week.sleep],
+        recovery: week.recovery,
+      });
+
+      const result = await getCalendar(client, {}, new Date("2026-09-16T19:00:00Z"));
+
+      expect(result.days.map((d) => d.recovery_score)).toEqual([46, 45, 44, 43, 42, 41, 40]);
+      expect(result.days.map((d) => d.day_strain)).toEqual([16, 15, 14, 13, 12, 11, 10]);
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(
+        /^Two WHOOP cycles belong to 2026-09-16 .*started 2026-09-16 12:00 \(strain 2 so far\) is left out/
+      );
+    });
+  });
+
+  describe("partial first strap day", () => {
+    it("keeps the first day's strain on its row but leaves it out of averages.strain", async () => {
+      const { client } = createMockClient(LIVE);
+
+      const result = await getCalendar(client, { start: "2026-09-14", days: 3 }, NOW);
+
+      expect(result.days.map((d) => d.day_strain_partial)).toEqual([true, false, false]);
+      expect(rowFor(result, "2026-09-14").day_strain).toBe(7.9);
+      expect(result.averages.strain).toBe(19.0);
+      expect(result.averages.sample_sizes.strain).toBe(1);
+      expect(result.notes.join(" ")).toMatch(/Strain for 2026-09-14 covers only part of the day/);
+    });
+
+    it("still averages a cycle without a sleep that did not start at local midnight", async () => {
+      // Mid-history night the strap missed: cycle 11 has no sleep but starts at a bedtime
+      const cycle1 = makeCycle({
+        id: 11,
+        start: at("2026-09-13T23:00"),
+        end: at("2026-09-14T23:30"),
+        strain: 9,
+      });
+      const cycle2 = makeCycle({ id: 12, start: at("2026-09-14T23:30"), end: null, strain: 5 });
+      const sleep2 = makeSleep({
+        id: "s12",
+        cycleId: 12,
+        start: cycle2.start,
+        end: at("2026-09-15T07:00"),
+      });
+      const { client } = createMockClient({ cycle: [cycle2, cycle1], sleep: [sleep2] });
+
+      const result = await getCalendar(client, { start: "2026-09-14", days: 2 }, NOW);
+
+      expect(rowFor(result, "2026-09-14")).toMatchObject({
+        day_strain: 9,
+        day_strain_partial: false,
+      });
+      expect(result.averages.strain).toBe(9);
+      expect(result.notes.join(" ")).not.toMatch(/only part of the day/);
+    });
+
+    it("does not flag a midnight cycle that comes after a recorded main sleep", async () => {
+      const early = makeCycle({
+        id: 21,
+        start: at("2026-09-13T23:00"),
+        end: at("2026-09-15T00:00"),
+        strain: 12,
+      });
+      const earlySleep = makeSleep({
+        id: "s21",
+        cycleId: 21,
+        start: early.start,
+        end: at("2026-09-14T07:00"),
+      });
+      const midnight = makeCycle({
+        id: 22,
+        start: at("2026-09-15T00:00"),
+        end: at("2026-09-15T23:00"),
+        strain: 8,
+      });
+      const { client } = createMockClient({ cycle: [midnight, early], sleep: [earlySleep] });
+
+      const result = await getCalendar(client, { start: "2026-09-14", days: 2 }, NOW);
+
+      expect(result.days.map((d) => d.day_strain_partial)).toEqual([false, false]);
+      expect(result.averages.sample_sizes.strain).toBe(2);
+    });
+  });
+
+  describe("after local midnight, before the next sleep syncs", () => {
+    /** 01:30 local on 2026-09-17: the cycle that started 09-15 23:13 is still open */
+    const AFTER_MIDNIGHT = new Date("2026-09-16T23:30:00Z");
+
+    it("does not describe today's empty row as missing data or strap-off time", async () => {
+      const { client } = createMockClient(LIVE);
+
+      const result = await getCalendar(client, {}, AFTER_MIDNIGHT);
+
+      expect(result.period).toMatchObject({ start: "2026-09-11", end: "2026-09-17", days: 7 });
+      expect(rowFor(result, "2026-09-17")).toMatchObject({
+        recovery_score: null,
+        sleep_hours: null,
+        day_strain: null,
+        day_strain_in_progress: false,
+      });
+      expect(rowFor(result, "2026-09-16")).toMatchObject({
+        day_strain: 7.8,
+        day_strain_in_progress: true,
+      });
+      const notes = result.notes.join(" ");
+      expect(notes).not.toMatch(/while it was off/);
+      expect(notes).not.toMatch(/No WHOOP data for any day/);
+      expect(result.notes).toContain(
+        "Today's (2026-09-17) WHOOP cycle has not started yet: a new cycle begins at your next sleep and appears once that sleep syncs. Until then, strain is still being added to the open cycle that started 2026-09-15 23:13, shown on 2026-09-16 (day_strain_in_progress: true). Its row stays null until then; this is not missing data."
+      );
+      expect(result.notes).toContain(
+        "No WHOOP data before 2026-09-14 in this range; the 3 earlier day(s) are null."
+      );
+      // Today cannot have a recovery or sleep yet, so it is not counted as missing
+      expect(notes).toMatch(/recovery 2 of 6 days, sleep 2 of 6 days/);
+    });
+
+    it.each([[{ start: "today" }], [{ days: 1 }]])(
+      "explains a single empty today row and gives the open cycle's strain (%j)",
+      async (params) => {
+        const { client } = createMockClient(LIVE);
+
+        const result = await getCalendar(client, params, AFTER_MIDNIGHT);
+
+        expect(result.days.map((d) => d.date)).toEqual(["2026-09-17"]);
+        expect(result.notes).toEqual([
+          "Today's (2026-09-17) WHOOP cycle has not started yet: a new cycle begins at your next sleep and appears once that sleep syncs. Until then, strain is still being added to the open cycle that started 2026-09-15 23:13, which belongs to 2026-09-16, outside this grid; its strain so far is 7.8. Its row stays null until then; this is not missing data.",
+        ]);
+      }
+    );
+
+    it("covers every day since an open cycle that has run for more than a day", async () => {
+      // No sleep detected on the nights before 09-15 and 09-16: the cycle from 09-13 23:00 is still open
+      const open = makeCycle({ id: 31, start: at("2026-09-13T23:00"), end: null, strain: 14 });
+      const sleep = makeSleep({
+        id: "s31",
+        cycleId: 31,
+        start: open.start,
+        end: at("2026-09-14T07:00"),
+      });
+      const { client } = createMockClient({ cycle: [open], sleep: [sleep] });
+
+      const result = await getCalendar(client, { start: "2026-09-14" }, NOW);
+
+      expect(result.days.map((d) => d.date)).toEqual(["2026-09-14", "2026-09-15", "2026-09-16"]);
+      expect(result.notes.join(" ")).not.toMatch(/No WHOOP data/);
+      expect(result.notes).toContain(
+        "No WHOOP cycle has started yet for 2026-09-15, 2026-09-16: a new cycle begins at your next sleep and appears once that sleep syncs. Until then, strain is still being added to the open cycle that started 2026-09-13 23:00, shown on 2026-09-14 (day_strain_in_progress: true). Their rows stay null until then; this is not missing data."
+      );
+    });
+
+    it("adds no such note once today's cycle exists", async () => {
+      const { client } = createMockClient(LIVE);
+
+      const result = await getCalendar(client, { days: 1 }, NOW);
+
+      expect(rowFor(result, "2026-09-16").day_strain).toBe(7.8);
+      expect(result.notes.join(" ")).not.toMatch(/has not started yet/);
     });
   });
 

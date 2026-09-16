@@ -6,6 +6,7 @@
  */
 
 import { mkdir, writeFile, readFile, rename, unlink } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -80,12 +81,74 @@ function tokenFilePath(tokenDir?: string): string {
 export async function saveTokens(tokens: OAuthTokens, tokenDir?: string): Promise<void> {
   const dir = tokenDir ?? DEFAULT_TOKEN_DIR;
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  const target = tokenFilePath(tokenDir);
+  const data = JSON.stringify(tokens, null, 2);
+  const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   // Write-then-rename so a crash mid-write can never leave a truncated file
   // behind after WHOOP has already rotated (invalidated) the old refresh token.
-  const target = tokenFilePath(tokenDir);
-  const temp = `${target}.${process.pid}.tmp`;
-  await writeFile(temp, JSON.stringify(tokens, null, 2), { encoding: "utf-8", mode: 0o600 });
-  await rename(temp, target);
+  // Where the rename is not possible (tokens.json held open on Windows, a
+  // single-file bind mount, a read-only directory) fall back to writing the
+  // file in place, which is what worked before: losing the new tokens is worse.
+  try {
+    await writeFile(temp, data, { encoding: "utf-8", mode: 0o600 });
+    await renameWithRetry(temp, target);
+  } catch (error: unknown) {
+    if (!IN_PLACE_FALLBACK_CODES.has(errorCode(error) ?? "")) {
+      throw error;
+    }
+    await writeFile(target, data, { encoding: "utf-8", mode: 0o600 });
+  } finally {
+    // Never leave a second copy of the refresh token behind. ENOENT after a
+    // successful rename is expected.
+    await unlink(temp).catch(() => undefined);
+  }
+}
+
+/** Error codes for which saveTokens falls back to an in-place write */
+const IN_PLACE_FALLBACK_CODES: ReadonlySet<string> = new Set([
+  "EPERM",
+  "EACCES",
+  "EBUSY",
+  "EXDEV",
+  "EROFS",
+]);
+
+/** Error codes worth retrying a rename for on Windows (transient sharing violations) */
+const WIN32_RENAME_RETRY_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** Delays between Windows rename retries (about 1.5 s in total) */
+const WIN32_RENAME_RETRY_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 750];
+
+/** The `code` of a Node.js system error, if any */
+function errorCode(error: unknown): string | undefined {
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = (error as { code: unknown }).code;
+    return typeof code === "string" ? code : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * Rename, retrying briefly on Windows where antivirus, indexers and backup
+ * tools transiently hold files open (as graceful-fs does).
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error: unknown) {
+      const delayMs = WIN32_RENAME_RETRY_DELAYS_MS[attempt];
+      if (
+        process.platform !== "win32" ||
+        delayMs === undefined ||
+        !WIN32_RENAME_RETRY_CODES.has(errorCode(error) ?? "")
+      ) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
 
 /**

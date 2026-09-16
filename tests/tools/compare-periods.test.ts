@@ -65,6 +65,12 @@ interface DaySpec {
 
 const iso = (ms: number): string => new Date(ms).toISOString();
 
+/** Minutes east of UTC for "+02:00" / "-05:00" */
+function offsetMinutes(offset: string): number {
+  const sign = offset.startsWith("-") ? -1 : 1;
+  return sign * (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
+}
+
 /**
  * Build consecutive days: sleep onset 23:00 local the evening before `day`,
  * wake 07:00 local, cycle from onset to the next onset. The last cycle is
@@ -73,13 +79,14 @@ const iso = (ms: number): string => new Date(ms).toISOString();
 function buildHistory(specs: DaySpec[], openLast = true): History {
   const history: History = { cycles: [], sleeps: [], recoveries: [] };
   specs.forEach((spec, index) => {
-    // 23:00 local (+02:00) the evening before = 21:00Z two hours earlier in UTC
-    const onsetMs = Date.parse(`${spec.day}T00:00:00.000Z`) - 3 * HOUR_MS;
+    const offset = spec.offset ?? OFFSET;
+    // 23:00 local the evening before (21:00Z at +02:00)
+    const onsetMs =
+      Date.parse(`${spec.day}T00:00:00.000Z`) - offsetMinutes(offset) * 60_000 - HOUR_MS;
     const wakeMs = onsetMs + 8 * HOUR_MS;
     const nextOnsetMs = onsetMs + DAY_MS;
     const isLast = index === specs.length - 1;
     const cycleId = Number(spec.day.replaceAll("-", ""));
-    const offset = spec.offset ?? OFFSET;
     const sleepId = `sleep-${spec.day}`;
     const asleep = spec.asleepHours ?? 7;
     history.cycles.push({
@@ -331,11 +338,15 @@ describe("comparePeriods — calibrating user with sparse data", () => {
       start: "2026-09-07T00:00:00.000+02:00",
       end: "2026-09-13T23:59:59.999+02:00",
       days: 7,
+      first_day: "2026-09-07",
+      last_day: "2026-09-13",
     });
     expect(result.period_b).toEqual({
       start: "2026-09-14T00:00:00.000+02:00",
       end: "2026-09-16T23:59:59.999+02:00",
       days: 3,
+      first_day: "2026-09-14",
+      last_day: "2026-09-16",
     });
   });
 
@@ -348,8 +359,20 @@ describe("comparePeriods — calibrating user with sparse data", () => {
     const aggregate = aggregateOutputSchemas.compare_periods!.safeParse(result);
     expect(aggregate.success).toBe(true);
     const projected = projectAggregateDates(aggregate.data as Record<string, unknown>);
-    expect(projected.period_a).toEqual({ start: "2026-09-07", end: "2026-09-13", days: 7 });
-    expect(projected.period_b).toEqual({ start: "2026-09-14", end: "2026-09-16", days: 3 });
+    expect(projected.period_a).toMatchObject({
+      start: "2026-09-07",
+      end: "2026-09-13",
+      days: 7,
+      first_day: "2026-09-07",
+      last_day: "2026-09-13",
+    });
+    expect(projected.period_b).toMatchObject({
+      start: "2026-09-14",
+      end: "2026-09-16",
+      days: 3,
+      first_day: "2026-09-14",
+      last_day: "2026-09-16",
+    });
   });
 
   it("matches the contracts when both periods are empty", async () => {
@@ -435,13 +458,21 @@ describe("comparePeriods — attribution to exactly one period", () => {
       NOW
     );
 
-    // Days whose local midnight falls in A: 09-08..09-14; in B: 09-15, 09-16 (open)
+    // 00:00Z is 02:00 local: A counts the local days mostly inside it, 09-07..09-13;
+    // B counts 09-14..09-16 (its end is after now, so today stays in; 09-16 is open)
+    expect(result.period_a).toMatchObject({ first_day: "2026-09-07", last_day: "2026-09-13" });
+    expect(result.period_b).toMatchObject({ first_day: "2026-09-14", last_day: "2026-09-16" });
     expect(result.strain.period_a_n).toBe(7);
-    expect(result.strain.period_b_n).toBe(1);
+    expect(result.strain.period_b_n).toBe(2);
     expect(result.recovery.period_a_n).toBe(7);
-    expect(result.recovery.period_b_n).toBe(2);
-    expect(result.sleep.period_a_n + result.sleep.period_b_n).toBe(9);
-    expect(result.strain.period_b_avg).toBe(5 + valueFor("2026-09-15"));
+    expect(result.recovery.period_b_n).toBe(3);
+    expect(result.sleep.period_a_n + result.sleep.period_b_n).toBe(10);
+    expect(result.strain.period_b_avg).toBe(
+      5 + (valueFor("2026-09-14") + valueFor("2026-09-15")) / 2
+    );
+    expect(result.notes).toContain(
+      "Period A does not start and end at local midnight, so it counts the local days mostly inside it: 2026-09-07 to 2026-09-13."
+    );
   });
 
   it("leaves the in-progress cycle out of strain but keeps today's recovery and sleep", async () => {
@@ -526,6 +557,209 @@ describe("comparePeriods — attribution to exactly one period", () => {
     expect(result.strain.period_a_n).toBe(3);
     expect(result.recovery.period_a_n).toBe(3);
     expect(result.sleep.period_b_n).toBe(3);
+  });
+});
+
+describe("comparePeriods — local days counted for date-time bounds", () => {
+  /** Days 09-01..09-16 whose recovery and strain equal the day of the month */
+  function dayOfMonthHistory(offset: string): History {
+    return buildHistory(
+      dayRange("2026-09-01", "2026-09-16").map((day) => ({
+        day,
+        offset,
+        recovery: Number(day.slice(8)),
+        strain: Number(day.slice(8)),
+      }))
+    );
+  }
+  const zMidnightWeeks: ComparePeriodsParams = {
+    period_a_start: "2026-09-01T00:00:00Z",
+    period_a_end: "2026-09-08T00:00:00Z",
+    period_b_start: "2026-09-08T00:00:00Z",
+    period_b_end: "2026-09-15T00:00:00Z",
+  };
+
+  it.each(["+02:00", "-05:00"])(
+    "compares local 09-01..09-07 with 09-08..09-14 for UTC-midnight weeks at %s",
+    async (offset) => {
+      const { client } = fakeWhoop(dayOfMonthHistory(offset));
+
+      const result = await comparePeriods(client, zMidnightWeeks, NOW);
+
+      expect(result.period_a).toMatchObject({ first_day: "2026-09-01", last_day: "2026-09-07" });
+      expect(result.period_b).toMatchObject({ first_day: "2026-09-08", last_day: "2026-09-14" });
+      expect(result.recovery).toMatchObject({ period_a_avg: 4, period_b_avg: 11, change_pct: 175 });
+      expect(result.strain).toMatchObject({ period_a_avg: 4, period_b_avg: 11 });
+      expect(result.sleep.period_a_n).toBe(7);
+      expect(result.sleep.period_b_n).toBe(7);
+    }
+  );
+
+  it("keeps date-only and local-midnight bounds on the same days without a snapping note", async () => {
+    const { client } = fakeWhoop(dayOfMonthHistory(OFFSET));
+
+    const dateOnly = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-01",
+        period_a_end: "2026-09-07",
+        period_b_start: "2026-09-08",
+        period_b_end: "2026-09-14",
+      },
+      NOW
+    );
+    const localMidnights = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-01T00:00:00+02:00",
+        period_a_end: "2026-09-08T00:00:00+02:00",
+        period_b_start: "2026-09-08T00:00:00+02:00",
+        period_b_end: "2026-09-15T00:00:00+02:00",
+      },
+      NOW
+    );
+
+    for (const result of [dateOnly, localMidnights]) {
+      expect(result.recovery).toMatchObject({ period_a_avg: 4, period_b_avg: 11 });
+      expect(result.period_a).toMatchObject({ first_day: "2026-09-01", last_day: "2026-09-07" });
+      expect(result.notes).toEqual([]);
+    }
+  });
+
+  it("does not credit a UTC-midnight day with the next local morning's records (live calibrating user)", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-14T00:00:00Z",
+        period_a_end: "2026-09-15T00:00:00Z",
+        period_b_start: "2026-09-15T00:00:00Z",
+        period_b_end: "2026-09-16T00:00:00Z",
+      },
+      NOW
+    );
+
+    // The 09-15 recovery was created at 05:10Z on 09-15, after period A ended
+    expect(result.period_a).toMatchObject({ first_day: "2026-09-14", last_day: "2026-09-14" });
+    expect(result.recovery.period_a_n).toBe(0);
+    expect(result.sleep.period_a_n).toBe(0);
+    expect(result.strain.period_a_n).toBe(0);
+    expect(result.period_b).toMatchObject({ first_day: "2026-09-15", last_day: "2026-09-15" });
+    expect(result.recovery).toMatchObject({ period_b_avg: 61, period_b_n: 1 });
+    expect(result.strain).toMatchObject({ period_b_avg: 8.2, period_b_n: 1 });
+    expect(result.notes).not.toContain(
+      "The current cycle in period B is still in progress, so its strain is not included yet."
+    );
+  });
+
+  it("counts the local day most of an intra-day period covers", async () => {
+    const { client } = fakeWhoop(dayOfMonthHistory(OFFSET));
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-06T06:00:00+02:00",
+        period_a_end: "2026-09-06T22:00:00+02:00",
+        period_b_start: "2026-09-10",
+        period_b_end: "2026-09-12",
+      },
+      NOW
+    );
+
+    expect(result.period_a).toMatchObject({ first_day: "2026-09-06", last_day: "2026-09-06" });
+    expect(result.recovery).toMatchObject({ period_a_avg: 6, period_a_n: 1, period_b_avg: 11 });
+    expect(result.notes).toContain(
+      "Period A does not start and end at local midnight, so it counts the local days mostly inside it: 2026-09-06."
+    );
+  });
+
+  it("explains a period that covers most of no local day instead of 'not enough data yet'", async () => {
+    const { client } = fakeWhoop(dayOfMonthHistory(OFFSET));
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-06T13:00:00+02:00",
+        period_a_end: "2026-09-06T20:00:00+02:00",
+        period_b_start: "2026-09-10",
+        period_b_end: "2026-09-12",
+      },
+      NOW
+    );
+
+    expect(result.period_a).toMatchObject({ days: 0.29, first_day: null, last_day: null });
+    expect(result.recovery).toMatchObject({ period_a_avg: null, period_a_n: 0, period_b_n: 3 });
+    expect(result.notes).toEqual([
+      "Period A (2026-09-06T13:00:00.000+02:00 to 2026-09-06T20:00:00.000+02:00) does not cover most of any local day, so no days were counted in it. A day counts toward a period when most of that day lies inside it; use YYYY-MM-DD dates to compare whole days.",
+      "Cannot compare recovery: period A covers no local day.",
+      "Cannot compare sleep: period A covers no local day.",
+      "Cannot compare strain: period A covers no local day.",
+    ]);
+    expect(outputSchemas.compare_periods!.safeParse(result).success).toBe(true);
+    const aggregate = aggregateOutputSchemas.compare_periods!.safeParse(result);
+    expect(aggregate.success).toBe(true);
+  });
+
+  it("keeps today when a period ends at now before local noon", async () => {
+    // 08:00 local: today's recovery (07:10 local) already exists
+    const morning = new Date("2026-09-16T06:00:00.000Z");
+    const { client } = fakeWhoop(calibratingUser());
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-14",
+        period_a_end: "2026-09-14",
+        period_b_start: "2026-09-15T00:00:00+02:00",
+        period_b_end: "2026-09-16T06:00:00Z",
+      },
+      morning
+    );
+
+    expect(result.period_b).toMatchObject({ first_day: "2026-09-15", last_day: "2026-09-16" });
+    expect(result.recovery.period_b_n).toBe(2);
+    expect(result.sleep.period_b_n).toBe(2);
+    expect(result.notes.some((note) => note.includes("does not start and end"))).toBe(false);
+  });
+
+  it("never counts today in both periods when they meet later today", async () => {
+    const { client } = fakeWhoop(dayOfMonthHistory(OFFSET));
+
+    // 15:00 local, after NOW (14:00 local)
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-10",
+        period_a_end: "2026-09-16T13:00:00Z",
+        period_b_start: "2026-09-16T13:00:00Z",
+        period_b_end: "2026-09-20T00:00:00+02:00",
+      },
+      NOW
+    );
+
+    expect(result.period_a).toMatchObject({ first_day: "2026-09-10", last_day: "2026-09-16" });
+    expect(result.period_b).toMatchObject({ first_day: "2026-09-17", last_day: "2026-09-19" });
+    expect(result.recovery.period_a_n).toBe(7);
+    expect(result.recovery.period_b_n).toBe(0);
+  });
+
+  it("snaps a future end on a later day to the nearest local midnight", async () => {
+    const { client } = fakeWhoop(dayOfMonthHistory(OFFSET));
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-07T00:00:00Z",
+        period_a_end: "2026-09-14T00:00:00Z",
+        period_b_start: "2026-09-14T00:00:00Z",
+        period_b_end: "2026-09-21T00:00:00Z",
+      },
+      NOW
+    );
+
+    expect(result.period_b).toMatchObject({ first_day: "2026-09-14", last_day: "2026-09-20" });
+    expect(result.recovery.period_b_n).toBe(3);
   });
 });
 
@@ -789,6 +1023,8 @@ describe("comparePeriods — date validation", () => {
       start: "2026-09-07T00:00:00.000+02:00",
       end: "2026-09-13T23:59:59.999+02:00",
       days: 7,
+      first_day: "2026-09-07",
+      last_day: "2026-09-13",
     });
     expect(result.period_b.start).toBe("2026-09-14T00:00:00.000+02:00");
     expect(result.period_b.end).toBe("2026-09-16T23:59:59.999+02:00");
@@ -957,6 +1193,56 @@ describe("compare_periods over MCP", () => {
       expect(structured.notes.length).toBeGreaterThan(0);
     }
   );
+
+  it("withholds single-day averages in aggregate mode but not in standard mode", async () => {
+    const oneDayEach = {
+      period_a_start: "2026-09-15",
+      period_a_end: "2026-09-15",
+      period_b_start: "2026-09-16",
+      period_b_end: "2026-09-16",
+    };
+    type Result = {
+      period_a: Record<string, unknown>;
+      recovery: { period_a_avg: number | null; period_b_avg: number | null; period_a_n: number };
+      sleep: { period_a_avg_hours: number | null; period_b_avg_hours: number | null };
+      strain: { period_a_avg: number | null };
+      notes: string[];
+    };
+
+    const aggregate = (await callTool("aggregate", oneDayEach)).structuredContent as Result;
+    expect(aggregate.recovery).toMatchObject({ period_a_avg: null, period_b_avg: null });
+    expect(aggregate.recovery.period_a_n).toBe(1);
+    expect(aggregate.sleep).toMatchObject({ period_a_avg_hours: null, period_b_avg_hours: null });
+    expect(aggregate.strain.period_a_avg).toBeNull();
+    expect(aggregate.period_a).toMatchObject({ start: "2026-09-15", end: "2026-09-15", days: 1 });
+    expect(aggregate.notes).toContainEqual(
+      expect.stringMatching(
+        /^Aggregate privacy mode withholds period averages based on fewer than 3 samples: recovery in period A \(1 scored recovery\)/
+      )
+    );
+
+    const standard = (await callTool("standard", oneDayEach)).structuredContent as Result;
+    expect(standard.recovery).toMatchObject({ period_a_avg: 61, period_b_avg: 70 });
+  });
+
+  it("labels aggregate periods with the local days counted, not the raw bounds", async () => {
+    const result = await callTool("aggregate", {
+      period_a_start: "2026-09-01",
+      period_a_end: "2026-09-07",
+      // A date-time end is exclusive: 09-10 is not counted
+      period_b_start: "2026-09-08T12:00:00+02:00",
+      period_b_end: "2026-09-10T00:00:00+02:00",
+    });
+
+    expect(result.isError).toBeFalsy();
+    const structured = result.structuredContent as {
+      period_a: Record<string, unknown>;
+      period_b: Record<string, unknown>;
+    };
+    expect(structured.period_a).toMatchObject({ start: "2026-09-01", end: "2026-09-07", days: 7 });
+    // 09-08 from noon is half a day, so only 09-09 is counted
+    expect(structured.period_b).toMatchObject({ start: "2026-09-09", end: "2026-09-09", days: 1 });
+  });
 
   it("returns the local validation message for a reversed period", async () => {
     const result = await callTool("standard", {

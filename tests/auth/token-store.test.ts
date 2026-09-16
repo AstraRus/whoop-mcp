@@ -1,6 +1,27 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { stat, rm, readFile, chmod } from "node:fs/promises";
+import { stat, rm, readFile, readdir, chmod } from "node:fs/promises";
 import { mkdtemp } from "node:fs/promises";
+
+/** Optional failure injection for fs.promises calls made by token-store (tests below) */
+const fsFaults = vi.hoisted(() => ({
+  rename: null as null | ((from: string, to: string) => Promise<void> | undefined),
+  writeFile: null as null | ((path: string) => Promise<void> | undefined),
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    rename: (from: string, to: string): Promise<void> =>
+      fsFaults.rename?.(from, to) ?? actual.rename(from, to),
+    writeFile: (...args: Parameters<typeof actual.writeFile>): Promise<void> =>
+      fsFaults.writeFile?.(String(args[0])) ?? actual.writeFile(...args),
+  };
+});
+
+function fsError(code: string): NodeJS.ErrnoException {
+  return Object.assign(new Error(`${code}: simulated`), { code });
+}
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OAuthTokens } from "../../src/auth/token-store.js";
@@ -362,5 +383,109 @@ describe("deleteTokens", () => {
       // Restore permissions so afterEach cleanup works
       await chmod(tempDir, 0o755);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// saveTokens must not lose tokens WHOOP already rotated (R20)
+// ---------------------------------------------------------------------------
+
+describe("saveTokens when the atomic rename is not possible", () => {
+  let tempDir: string;
+  const originalPlatform = process.platform;
+
+  const oldTokens: OAuthTokens = {
+    access_token: "A0",
+    refresh_token: "R0",
+    expires_at: Date.now(),
+    token_type: "Bearer",
+  };
+  const newTokens: OAuthTokens = {
+    access_token: "A1",
+    refresh_token: "R1",
+    expires_at: Date.now() + 3600_000,
+    token_type: "Bearer",
+  };
+
+  function setPlatform(platform: NodeJS.Platform): void {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+  }
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "whoop-mcp-test-"));
+    await saveTokens(oldTokens, tempDir);
+  });
+
+  afterEach(async () => {
+    fsFaults.rename = null;
+    fsFaults.writeFile = null;
+    setPlatform(originalPlatform);
+    await rm(tempDir, { recursive: true });
+  });
+
+  it.each(["EBUSY", "EXDEV", "EPERM", "EACCES"])(
+    "falls back to an in-place write when rename fails with %s (e.g. a single-file bind mount)",
+    async (code) => {
+      setPlatform("linux");
+      const renames: string[] = [];
+      fsFaults.rename = (_from, to): Promise<void> => {
+        renames.push(to);
+        return Promise.reject(fsError(code));
+      };
+
+      await expect(saveTokens(newTokens, tempDir)).resolves.toBeUndefined();
+
+      expect(renames).toHaveLength(1);
+      expect(await loadTokens(tempDir)).toEqual(newTokens);
+      expect(await readdir(tempDir)).toEqual(["tokens.json"]);
+    }
+  );
+
+  it("retries a rename blocked by another handle on Windows before falling back", async () => {
+    setPlatform("win32");
+    let attempts = 0;
+    fsFaults.rename = (): Promise<void> | undefined => {
+      attempts += 1;
+      // Blocked twice (antivirus / indexer), then the real rename goes through
+      return attempts <= 2 ? Promise.reject(fsError("EPERM")) : undefined;
+    };
+
+    await saveTokens(newTokens, tempDir);
+
+    expect(attempts).toBe(3);
+    expect(await loadTokens(tempDir)).toEqual(newTokens);
+    expect(await readdir(tempDir)).toEqual(["tokens.json"]);
+  });
+
+  it("falls back to an in-place write when the temp file cannot be created", async () => {
+    fsFaults.writeFile = (path): Promise<void> | undefined =>
+      path.endsWith(".tmp") ? Promise.reject(fsError("EROFS")) : undefined;
+
+    await saveTokens(newTokens, tempDir);
+
+    expect(await loadTokens(tempDir)).toEqual(newTokens);
+    expect(await readdir(tempDir)).toEqual(["tokens.json"]);
+  });
+
+  it("rethrows other errors and never leaves a temp copy of the tokens behind", async () => {
+    fsFaults.rename = (): Promise<void> => Promise.reject(fsError("ENOSPC"));
+
+    await expect(saveTokens(newTokens, tempDir)).rejects.toMatchObject({ code: "ENOSPC" });
+
+    expect(await loadTokens(tempDir)).toEqual(oldTokens);
+    expect(await readdir(tempDir)).toEqual(["tokens.json"]);
+  });
+
+  it("uses a distinct temp file per save", async () => {
+    const temps: string[] = [];
+    fsFaults.rename = (from): undefined => {
+      temps.push(from);
+      return undefined;
+    };
+
+    await Promise.all([saveTokens(newTokens, tempDir), saveTokens(newTokens, tempDir)]);
+
+    expect(new Set(temps).size).toBe(2);
+    expect(await loadTokens(tempDir)).toEqual(newTokens);
   });
 });

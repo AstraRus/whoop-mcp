@@ -348,6 +348,64 @@ describe("getTrend — direction semantics", () => {
     expect(result.trend.change).toBe("stable");
     expect(result.trend.direction).toBe("stable");
     expect(result.statistics.std_dev).toBe(0);
+    // Five points cap confidence at low by sample size, not because of zero variance
+    expect(result.trend.confidence).toBe("low");
+    expect(result.notes).toContain(
+      "All 5 values were identical (75), so the metric was flat over this period."
+    );
+  });
+
+  it("rates a constant series by sample size, not as a poor fit", async () => {
+    const constant = (count: number): FakeData => series(Array(count).fill(60), "recovery");
+
+    const ten = await getTrend(fakeWhoop(constant(10)).client, { metric: "recovery" }, NOW);
+    const twentyOne = await getTrend(fakeWhoop(constant(21)).client, { metric: "recovery" }, NOW);
+
+    expect(ten.trend.confidence).toBe("medium");
+    expect(twentyOne.trend).toEqual({
+      direction: "stable",
+      change: "stable",
+      better_when: "higher",
+      slope: 0,
+      confidence: "high",
+    });
+    expect(twentyOne.anomalies).toEqual([]);
+    expect(twentyOne.notes).toEqual([
+      "All 21 values were identical (60), so the metric was flat over this period.",
+    ]);
+  });
+
+  it("keeps identical decimal values exact (no rounding drift in mean or std_dev)", async () => {
+    const result = await getTrend(
+      fakeWhoop(series(Array(14).fill(70.1), "hrv")).client,
+      { metric: "hrv" },
+      NOW
+    );
+
+    expect(result.statistics).toEqual({
+      mean: 70.1,
+      median: 70.1,
+      std_dev: 0,
+      min: 70.1,
+      max: 70.1,
+    });
+    expect(result.trend.change).toBe("stable");
+    expect(result.trend.confidence).toBe("high");
+  });
+
+  it("explains a stable trend from varying values with low confidence", async () => {
+    const values = Array.from({ length: 21 }, (_, i) => (i % 2 ? 61 : 59));
+    const result = await getTrend(
+      fakeWhoop(series(values, "recovery")).client,
+      { metric: "recovery" },
+      NOW
+    );
+
+    expect(result.trend.change).toBe("stable");
+    expect(result.trend.confidence).toBe("low");
+    expect(result.notes).toContain(
+      "No consistent upward or downward direction was found, so the trend is reported as stable; confidence is low because it rates how well a sloped line fits the values."
+    );
   });
 
   it("uses days, not record positions, as the regression x axis when days are missing", async () => {
@@ -453,7 +511,37 @@ describe("getTrend — sparse data and confidence", () => {
     expect(result.values).toEqual([80, 90]);
     expect(result.statistics.mean).toBe(85);
     expect(result.calibrating).toBeNull();
+    expect(result.notes[0]).toBe(
+      "Not enough data yet: 2 nights with a sleep performance score in the last 30 days; a trend needs at least 4."
+    );
     expect(result.notes.join(" ")).toMatch(/1 scored night\(s\) had no sleep performance score/);
+  });
+
+  it("tells scored nights without a performance score apart from no scored nights", async () => {
+    const unscored = history([
+      { day: "2026-09-15", performance: null },
+      { day: "2026-09-16", performance: null },
+    ]);
+    const withoutScore = await getTrend(
+      fakeWhoop(unscored).client,
+      { metric: "sleep_performance", days: 7 },
+      NOW
+    );
+    const noNights = await getTrend(
+      fakeWhoop({ recovery: [], sleep: [], cycle: [] }).client,
+      { metric: "sleep_performance", days: 7 },
+      NOW
+    );
+
+    expect(withoutScore.status).toBe("insufficient_data");
+    expect(withoutScore.sample_size).toBe(0);
+    expect(withoutScore.notes).toEqual([
+      "Not enough data yet: no nights with a sleep performance score in the last 7 days; a trend needs at least 4.",
+      "2 scored night(s) had no sleep performance score and were skipped.",
+    ]);
+    expect(noNights.notes).toEqual([
+      "Not enough data yet: no scored nights in the last 7 days; a trend needs at least 4.",
+    ]);
   });
 
   it("detects anomalies with the date of the anomalous value", async () => {
@@ -659,5 +747,17 @@ describe("get_trend output contract", () => {
     expect(result.structuredContent).not.toHaveProperty("dates");
     expect(result.structuredContent).not.toHaveProperty("anomalies");
     expect(result.structuredContent?.notes).toBeDefined();
+    // Two points (95 and 66): statistics would reveal both nights, so they are withheld
+    expect(result.structuredContent?.sample_size).toBe(2);
+    expect(result.structuredContent?.statistics).toEqual({ mean: null, std_dev: null });
+    expect(result.structuredContent?.notes).toContain(
+      "Aggregate privacy mode withholds statistics until at least 4 data points exist (2 so far)."
+    );
+  });
+
+  it("keeps full statistics for the same sparse data in standard mode", async () => {
+    const result = await callTrend(sparse, "recovery", "standard");
+
+    expect(result.structuredContent?.statistics).toMatchObject({ min: 66, max: 95 });
   });
 });

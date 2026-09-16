@@ -10,7 +10,8 @@
  * - Covers the local Monday-to-Sunday week containing week_start (snapped)
  * - Accepts date-only, date-time and relative week_start values
  * - Counts each record in exactly one week by its local day
- * - Returns null (never 0) for averages it cannot compute, with notes
+ * - Returns null (never 0) for averages it cannot compute, with notes, and
+ *   null workout totals for a week with no WHOOP data at all
  * - Uses hours asleep for sleep and skips null percentages
  * - Excludes the in-progress cycle from strain
  * - Computes the recovery trend oldest first, only from 4+ points
@@ -54,24 +55,36 @@ function shiftDay(day: string, count: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY_MS).toISOString().slice(0, 10);
 }
 
+/** A local wall-clock time (e.g. "23:00") on a day, as a UTC timestamp for a ±HH:MM offset */
+function utcAt(day: string, time: string, offset: string): string {
+  const sign = offset.startsWith("-") ? -1 : 1;
+  const minutes = sign * (Number(offset.slice(1, 3)) * 60 + Number(offset.slice(4, 6)));
+  return new Date(Date.parse(`${day}T${time}:00.000Z`) - minutes * 60_000).toISOString();
+}
+
 /**
  * One entry per local day (ascending). Bedtime is 23:00 local the evening
  * before, wake-up 07:00 local (8h in bed, 7h asleep); the newest cycle is open
- * unless openLatest is false. Returned arrays are newest first, like WHOOP.
+ * unless openLatest is false. Local times use `offset` (default +02:00).
+ * Returned arrays are newest first, like WHOOP.
  */
-function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeData {
+function history(
+  days: DaySpec[],
+  options: { openLatest?: boolean; offset?: string } = {}
+): FakeData {
   const openLatest = options.openLatest ?? true;
+  const offset = options.offset ?? "+02:00";
   const data: FakeData = { recovery: [], sleep: [], workout: [], cycle: [] };
   days.forEach((spec, index) => {
     const id = index + 1;
-    const sleepStart = `${shiftDay(spec.day, -1)}T21:00:00.000Z`;
-    const sleepEnd = `${spec.day}T05:00:00.000Z`;
+    const sleepStart = utcAt(shiftDay(spec.day, -1), "23:00", offset);
+    const sleepEnd = utcAt(spec.day, "07:00", offset);
     const next = days[index + 1];
     const cycleEnd = next
-      ? `${shiftDay(next.day, -1)}T21:00:00.000Z`
+      ? utcAt(shiftDay(next.day, -1), "23:00", offset)
       : openLatest
         ? null
-        : `${spec.day}T21:00:00.000Z`;
+        : utcAt(spec.day, "23:00", offset);
     const sleepId = `sleep-${spec.day}`;
     data.sleep.push({
       id: sleepId,
@@ -82,7 +95,7 @@ function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeD
       updated_at: sleepEnd,
       start: sleepStart,
       end: sleepEnd,
-      timezone_offset: "+02:00",
+      timezone_offset: offset,
       nap: false,
       score_state: "SCORED",
       score: {
@@ -115,7 +128,7 @@ function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeD
       updated_at: sleepStart,
       start: sleepStart,
       end: cycleEnd,
-      timezone_offset: "+02:00",
+      timezone_offset: offset,
       score_state: "SCORED",
       score: {
         strain: spec.strain ?? 10,
@@ -128,8 +141,8 @@ function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeD
       cycle_id: id,
       sleep_id: sleepId,
       user_id: 1,
-      created_at: `${spec.day}T05:30:00.000Z`,
-      updated_at: `${spec.day}T05:30:00.000Z`,
+      created_at: utcAt(spec.day, "07:30", offset),
+      updated_at: utcAt(spec.day, "07:30", offset),
       score_state: "SCORED",
       score: {
         user_calibrating: spec.calibrating ?? false,
@@ -330,6 +343,64 @@ describe("getWeeklySummary — week resolution", () => {
     expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
   });
 
+  it("reads a UTC-midnight date-time as the date written, even at a negative offset", async () => {
+    // Each day's recovery score is its day of the month, so the average reveals the week used
+    const days = Array.from({ length: 16 }, (_, i) => shiftDay("2026-09-01", i));
+    const minusFive = (): FakeData =>
+      history(
+        days.map((day) => ({ day, recovery: Number(day.slice(8)) })),
+        { offset: "-05:00" }
+      );
+    // 2026-09-14T00:00Z is still Sunday 13 September 19:00 at -05:00
+    for (const weekStart of [
+      "2026-09-14T00:00:00Z",
+      "2026-09-14T00:00:00.000Z",
+      "2026-09-14T00:00Z",
+      "2026-09-14T00:00:00+02:00",
+      "2026-09-14",
+    ]) {
+      const result = await getWeeklySummary(
+        fakeWhoop(minusFive()).client,
+        { week_start: weekStart },
+        NOW
+      );
+      expect(result.week_start, weekStart).toBe("2026-09-14T00:00:00.000-05:00");
+      expect(result.week_end, weekStart).toBe("2026-09-20T23:59:59.999-05:00");
+      expect(result.recovery.average_score, weekStart).toBe(15);
+      expect(result.notes.join(" "), weekStart).not.toMatch(/is a Sunday/);
+    }
+  });
+
+  it("keeps a non-midnight date-time in the local day it falls on", async () => {
+    // Sunday 13 September 14:00 local at +02:00 stays in the week of 7 September
+    const noon = await getWeeklySummary(
+      fakeWhoop(calibratingUser()).client,
+      { week_start: "2026-09-13T12:00:00Z" },
+      NOW
+    );
+    expect(noon.week_start).toBe("2026-09-07T00:00:00.000+02:00");
+    expect(noon.notes).toContain(
+      "2026-09-13 is a Sunday; summarizing the week from Monday 2026-09-07 to Sunday 2026-09-13."
+    );
+    // Sunday 20 September 23:00Z is already Monday 21 September 01:00 at +02:00
+    const late = await getWeeklySummary(
+      fakeWhoop(calibratingUser()).client,
+      { week_start: "2026-09-20T23:00:00Z" },
+      NOW
+    );
+    expect(late.week_start).toBe("2026-09-21T00:00:00.000+02:00");
+  });
+
+  it("still rejects an invalid calendar date written as midnight", async () => {
+    await expect(
+      getWeeklySummary(
+        fakeWhoop(calibratingUser()).client,
+        { week_start: "2026-02-30T00:00:00Z" },
+        NOW
+      )
+    ).rejects.toThrow(/Invalid calendar date/);
+  });
+
   it("resolves 'last week' to the previous local week", async () => {
     const { client } = fakeWhoop(calibratingUser());
     const result = await getWeeklySummary(client, { week_start: "last week" }, NOW);
@@ -404,11 +475,11 @@ describe("getWeeklySummary — sparse and missing data", () => {
       average_efficiency_pct: null,
     });
     expect(result.strain).toEqual({ average_daily_strain: null, max_daily_strain: null });
-    // A successful fetch with no workouts is a true zero
+    // The strap was not worn yet: workout totals are unknown, not 0
     expect(result.workouts).toEqual({
-      count: 0,
-      total_strain: 0,
-      total_calories_kj: 0,
+      count: null,
+      total_strain: null,
+      total_calories_kj: null,
       sport_breakdown: {},
     });
     expect(result.sample_sizes).toEqual({ recovery_days: 0, sleep_nights: 0, completed_cycles: 0 });
@@ -417,9 +488,46 @@ describe("getWeeklySummary — sparse and missing data", () => {
       expect.arrayContaining([
         "No scored recovery recorded this week.",
         "No scored main sleep recorded this week.",
+        "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0.",
         "No completed, scored cycle this week, so daily strain is null.",
       ])
     );
+  });
+
+  it("returns null workout totals for a week that has not started", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const result = await getWeeklySummary(client, { week_start: "2026-09-23" }, NOW);
+
+    expect(result.workouts).toEqual({
+      count: null,
+      total_strain: null,
+      total_calories_kj: null,
+      sport_breakdown: {},
+    });
+    expect(result.notes).toContain("This week has not started yet.");
+    expect(result.notes.join(" ")).not.toMatch(/No WHOOP data was recorded/);
+  });
+
+  it("reports 0 workouts for a worn week without workouts", async () => {
+    const data = history([{ day: "2026-09-08" }, { day: "2026-09-09" }], { openLatest: false });
+    const { client } = fakeWhoop(data);
+    const result = await getWeeklySummary(client, { week_start: "last week" }, NOW);
+
+    expect(result.workouts).toEqual({
+      count: 0,
+      total_strain: 0,
+      total_calories_kj: 0,
+      sport_breakdown: {},
+    });
+    expect(result.notes.join(" ")).not.toMatch(/No WHOOP data was recorded/);
+  });
+
+  it("does not claim a week had no data when cycles could not be loaded", async () => {
+    const { client } = fakeWhoop(calibratingUser(), { fail: { cycle: new Error("down") } });
+    const result = await getWeeklySummary(client, { week_start: "last week" }, NOW);
+
+    expect(result.workouts.count).toBe(0);
+    expect(result.notes.join(" ")).not.toMatch(/No WHOOP data was recorded/);
   });
 
   it("averages sleep percentages over nights that have them (null is not 0)", async () => {
@@ -723,5 +831,33 @@ describe("get_weekly_summary output contract", () => {
     expect(result.structuredContent?.week_start).toBe("2026-09-14");
     expect(result.structuredContent?.week_end).toBe("2026-09-20");
     expect(result.structuredContent).not.toHaveProperty("warnings");
+  });
+
+  it("withholds extremes and averages from fewer than 3 data points in aggregate mode", async () => {
+    const { client } = fakeWhoop(calibratingUser());
+    const aggregate = (await callWeekly(client, "aggregate")).structuredContent!;
+
+    expect(aggregate.recovery).toEqual({
+      average_score: null,
+      average_hrv: null,
+      average_rhr: null,
+      trend: null,
+    });
+    expect(aggregate.sleep).toEqual({
+      average_duration_hours: null,
+      average_performance_pct: null,
+      average_efficiency_pct: null,
+    });
+    expect(aggregate.strain).toEqual({ average_daily_strain: null });
+    expect(aggregate.sample_sizes).toMatchObject({ recovery_days: 2, sleep_nights: 2 });
+    expect(aggregate.notes).toContainEqual(
+      expect.stringMatching(
+        /^Aggregate privacy mode withholds averages and totals based on fewer than 3 data points: recovery \(2 days\), sleep \(2 nights\), daily strain \(1 completed cycle\)/
+      )
+    );
+
+    const standard = (await callWeekly(fakeWhoop(calibratingUser()).client, "standard"))
+      .structuredContent!;
+    expect(standard.recovery).toMatchObject({ min_score: 66, max_score: 95 });
   });
 });

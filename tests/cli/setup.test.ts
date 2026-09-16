@@ -17,6 +17,7 @@ import {
   mergeClaudeDesktopConfig,
 } from "../../src/cli/config-generators.js";
 import { parseSetupArgs, runSetup } from "../../src/cli/setup.js";
+import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../../src/api/client.js";
 
 // ---------------------------------------------------------------------------
 // config-generators
@@ -626,6 +627,86 @@ describe("runSetup — non-interactive", () => {
         { io, fs: fake.fs, authenticate, fetchProfile }
       )
     ).rejects.toThrow(/Verification failed fetching profile.*401/);
+  });
+
+  // R24: authenticate() reuses an unexpired cached access token, so without
+  // this a revoked grant or missing permission could never be fixed by --verify.
+  it.each([
+    ["a rejected token refresh", (): Error => new WhoopAuthError(new Error("invalid_grant"))],
+    ["HTTP 401", (): Error => new WhoopApiError(401, "Unauthorized", null)],
+    ["HTTP 403", (): Error => new WhoopApiError(403, "Forbidden", null)],
+  ])("--verify deletes the stored tokens and authorizes again after %s", async (_, makeError) => {
+    const { io, output } = makeIo();
+    const fake = makeFakeFs();
+    const calls: string[] = [];
+    const authenticate = vi.fn(async () => {
+      calls.push("authenticate");
+      return calls.includes("deleteTokens") ? "fresh-token" : "cached-token";
+    });
+    const fetchProfile = vi.fn(async (token: string) => {
+      calls.push(`fetchProfile:${token}`);
+      if (token === "cached-token") throw makeError();
+      return { user_id: 42 };
+    });
+    const deleteTokens = vi.fn(async () => {
+      calls.push("deleteTokens");
+    });
+
+    await runSetup(
+      { clientId: "id", clientSecret: "s", client: "claude-code", verify: true },
+      { io, fs: fake.fs, authenticate, fetchProfile, deleteTokens }
+    );
+
+    expect(calls).toEqual([
+      "authenticate",
+      "fetchProfile:cached-token",
+      "deleteTokens",
+      "authenticate",
+      "fetchProfile:fresh-token",
+    ]);
+    expect(output()).toContain("Starting a new WHOOP authorization");
+    expect(output()).toContain("Profile OK");
+  });
+
+  it("--verify does not discard tokens after a network failure", async () => {
+    const { io } = makeIo();
+    const fake = makeFakeFs();
+    const deleteTokens = vi.fn(async () => undefined);
+    const fetchProfile = vi.fn(async () => {
+      throw new WhoopAuthError(new WhoopNetworkError(new TypeError("fetch failed")));
+    });
+
+    await expect(
+      runSetup(
+        { clientId: "id", clientSecret: "s", client: "claude-code", verify: true },
+        { io, fs: fake.fs, authenticate: vi.fn(async () => "tok"), fetchProfile, deleteTokens }
+      )
+    ).rejects.toThrow(/Verification failed fetching profile/);
+    expect(deleteTokens).not.toHaveBeenCalled();
+  });
+
+  it("--verify reports a failure of the second authorization as an OAuth failure", async () => {
+    const { io } = makeIo();
+    const fake = makeFakeFs();
+    const authenticate = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("cached-token")
+      .mockRejectedValueOnce(new Error("OAuth callback timed out"));
+
+    await expect(
+      runSetup(
+        { clientId: "id", clientSecret: "s", client: "claude-code", verify: true },
+        {
+          io,
+          fs: fake.fs,
+          authenticate,
+          fetchProfile: vi.fn(async () => {
+            throw new WhoopApiError(401, "Unauthorized", null);
+          }),
+          deleteTokens: vi.fn(async () => undefined),
+        }
+      )
+    ).rejects.toThrow(/Verification failed during OAuth.*timed out/);
   });
 
   it("rejects an empty client id", async () => {
