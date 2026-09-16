@@ -301,6 +301,9 @@ async function performOAuthFlow(config: OAuthConfig): Promise<string> {
   const callbackHandle = startCallbackServer({
     port,
     expectedState: state,
+    timeoutMs: process.env.CALLBACK_TIMEOUT_MS
+      ? Number(process.env.CALLBACK_TIMEOUT_MS)
+      : undefined,
   });
 
   // Build the authorization URL and open the browser
