@@ -61,7 +61,7 @@ ENV NODE_ENV=production \
     LOG_FORMAT=json
 
 # Run as the unprivileged built-in `node` user (UID 1000).
-USER node
+# USER node
 
 EXPOSE 3000
 
