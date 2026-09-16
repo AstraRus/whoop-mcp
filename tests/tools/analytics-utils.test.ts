@@ -41,8 +41,9 @@ describe("cycleDay", () => {
     expect(cycleDay({ start: "2026-09-13T22:00:00.000Z", timezone_offset: "+02:00" })).toBe(
       "2026-09-14"
     );
+    // 22:00 local bedtime at -05:00 on the 15th covers the 16th
     expect(cycleDay({ start: "2026-09-16T03:00:00.000Z", timezone_offset: "-05:00" })).toBe(
-      "2026-09-15"
+      "2026-09-16"
     );
   });
 });
