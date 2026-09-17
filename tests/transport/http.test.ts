@@ -364,6 +364,26 @@ describe("HTTP Server", () => {
       });
       expect(JSON.parse(bad.body)).toEqual({ status: "ok" });
     });
+
+    it("still gives a valid OAuth token the authenticated body after the IP is throttled", async () => {
+      await start({
+        runtimeStatus: runtimeStatus(),
+        authenticateBearer: async (t) => (t === "oauth-good" ? oauthInfo() : null),
+        canonicalResource: CANONICAL,
+        resourceMetadataUrl: METADATA_URL,
+      });
+      for (let i = 0; i <= AUTH_FAILURES_PER_WINDOW; i++) {
+        const bad = await request(server, "/health", {
+          headers: { authorization: `Bearer oauth-bad-${i}` },
+        });
+        expect(JSON.parse(bad.body)).toEqual({ status: "ok" });
+      }
+      const good = await request(server, "/health", {
+        headers: { authorization: "Bearer oauth-good" },
+      });
+      expect(good.status).toBe(200);
+      expect(JSON.parse(good.body)).toMatchObject({ status: "ok", whoopRate: expect.anything() });
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -592,8 +612,8 @@ describe("HTTP Server", () => {
       expect(verifier).not.toHaveBeenCalled();
     });
 
-    it("answers 429 after 20 failed verifications per IP, without locking out the static token", async () => {
-      const verifier = vi.fn(async () => null);
+    it("answers 429 to invalid tokens after 20 failed verifications per IP, never to a valid token", async () => {
+      const verifier = vi.fn(async (t: string) => (t === "oauth-good" ? oauthInfo() : null));
       await start({
         authenticateBearer: verifier,
         canonicalResource: CANONICAL,
@@ -606,8 +626,51 @@ describe("HTTP Server", () => {
       const throttled = await mcpPost(server, "bad-21", INITIALIZE);
       expect(throttled.status).toBe(429);
       expect(Number(throttled.headers["retry-after"])).toBeGreaterThan(0);
-      expect(verifier).toHaveBeenCalledTimes(AUTH_FAILURES_PER_WINDOW);
+      // A signed-in connector behind the same address keeps working.
+      const valid = await mcpPost(server, "oauth-good", callTool("whoami"));
+      expect(valid.status).toBe(200);
+      expect(toolText(valid)).toBe("client-a");
+      expect(verifier).toHaveBeenCalledTimes(AUTH_FAILURES_PER_WINDOW + 2);
       expect((await mcpPost(server, TOKEN, INITIALIZE)).status).toBe(200);
+      // Still throttled for invalid tokens afterwards.
+      expect((await mcpPost(server, "bad-22", INITIALIZE)).status).toBe(429);
+    });
+
+    it("keys the auth throttle on the proxy-appended (rightmost) X-Forwarded-For entry", async () => {
+      const verifier = vi.fn(async (t: string) => (t === "oauth-good" ? oauthInfo() : null));
+      await start({
+        trustProxy: true,
+        authenticateBearer: verifier,
+        canonicalResource: CANONICAL,
+        resourceMetadataUrl: METADATA_URL,
+        createMcpServer: () => testMcpServer(state),
+      });
+      const via = (xff: string): Record<string, string> => ({ "x-forwarded-for": xff });
+      // An attacker at 203.0.113.66 forges a different leftmost entry each time.
+      for (let i = 0; i < AUTH_FAILURES_PER_WINDOW; i++) {
+        const res = await mcpPost(
+          server,
+          `bad-${i}`,
+          INITIALIZE,
+          via(`198.51.100.${i}, 203.0.113.66`)
+        );
+        expect(res.status).toBe(401);
+      }
+      // Forging the leftmost entry does not escape the throttle...
+      const escaped = await mcpPost(server, "bad-x", INITIALIZE, via("192.0.2.200, 203.0.113.66"));
+      expect(escaped.status).toBe(429);
+      const bare = await mcpPost(server, "bad-y", INITIALIZE, via("203.0.113.66"));
+      expect(bare.status).toBe(429);
+      // ...and naming a victim's address on the left does not lock the victim out.
+      const victim = await mcpPost(server, "bad-v", INITIALIZE, via("198.51.100.7"));
+      expect(victim.status).toBe(401);
+      const spoofedVictim = await mcpPost(
+        server,
+        "bad-w",
+        INITIALIZE,
+        via("203.0.113.66, 198.51.100.7")
+      );
+      expect(spoofedVictim.status).toBe(401);
     });
 
     it("keeps the legacy 401 without a verifier", async () => {
@@ -1161,6 +1224,35 @@ describe("HTTP Server", () => {
       expect(r1.status).not.toBe(429);
       expect(r2.status).toBe(429); // same XFF IP
       expect(r3.status).not.toBe(429); // different XFF IP
+    });
+
+    it("buckets the /mcp rate limit on the rightmost X-Forwarded-For entry", async () => {
+      const result = await createHttpServer({
+        ...defaultOptions,
+        trustProxy: true,
+        mcpRateLimit: { windowMs: 60_000, max: 1 },
+      });
+      server = result.server;
+      cleanup = result.close;
+      const body = JSON.stringify({ jsonrpc: "2.0", method: "ping", id: 1 });
+      const send = (xff: string): Promise<TestResponse> =>
+        request(server, "/mcp", {
+          method: "POST",
+          headers: {
+            authorization: `Bearer ${TOKEN}`,
+            "content-type": "application/json",
+            "x-forwarded-for": xff,
+          },
+          body,
+        });
+
+      expect((await send("198.51.100.7, 203.0.113.66")).status).not.toBe(429);
+      // Same client (rightmost), different forged leftmost: still limited
+      expect((await send("192.0.2.1, 203.0.113.66")).status).toBe(429);
+      // A forged leftmost naming the first request's left entry is someone else
+      expect((await send("203.0.113.66, 198.51.100.7")).status).not.toBe(429);
+      // Empty entries are skipped
+      expect((await send("203.0.113.66, ")).status).toBe(429);
     });
   });
 

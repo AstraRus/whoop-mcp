@@ -35,13 +35,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Cycle, Recovery, Sleep, Workout } from "../src/api/types.js";
 import { MemoryCache } from "../src/cache/memory-cache.js";
-import { AGGREGATE_WEEK_MIN_SAMPLES, lastReleasedWeeks } from "../src/tools/aggregate-window.js";
+import {
+  AGGREGATE_WEEK_MIN_SAMPLES,
+  AGGREGATE_WORKOUT_KJ_STEP,
+  AGGREGATE_WORKOUT_STRAIN_STEP,
+  lastReleasedWeeks,
+} from "../src/tools/aggregate-window.js";
 import { sourceQuality } from "../src/tools/analytics-utils.js";
 import { resolveUserUtcOffsetInfo } from "../src/tools/collection-utils.js";
 import { addDays, daysBetween, mondayOf } from "../src/tools/day-model.js";
 import { BASELINE_AGGREGATE_WEEKS } from "../src/tools/get-baselines.js";
 import { SLEEP_DEBT_AGGREGATE_WEEKS } from "../src/tools/get-sleep-debt.js";
 import { buildSessions, type TrainingSession } from "../src/tools/get-training-load.js";
+import { AGGREGATE_STEPS } from "../src/tools/training-aggregate.js";
 import {
   AGGREGATE_METRIC_STEP,
   TREND_AGGREGATE_WEEKS,
@@ -430,11 +436,23 @@ async function collectWeeklySummaries(
       continue;
     }
     const strain = sessionRecords(sessions, SESSION_VALUES.workout_strain!);
-    expectRounded(ledger, `${label} total_strain`, workouts.total_strain, sumOf(strain), 0.1);
-    ledger.sum("workout_strain", 0.1, `${label} total_strain`, strain);
+    expectRounded(
+      ledger,
+      `${label} total_strain`,
+      workouts.total_strain,
+      sumOf(strain),
+      AGGREGATE_WORKOUT_STRAIN_STEP
+    );
+    ledger.sum("workout_strain", AGGREGATE_WORKOUT_STRAIN_STEP, `${label} total_strain`, strain);
     const kj = sessionRecords(sessions, SESSION_VALUES.workout_kj!);
-    expectRounded(ledger, `${label} total_calories_kj`, workouts.total_calories_kj, sumOf(kj), 1);
-    ledger.sum("workout_kj", 1, `${label} total_calories_kj`, kj);
+    expectRounded(
+      ledger,
+      `${label} total_calories_kj`,
+      workouts.total_calories_kj,
+      sumOf(kj),
+      AGGREGATE_WORKOUT_KJ_STEP
+    );
+    ledger.sum("workout_kj", AGGREGATE_WORKOUT_KJ_STEP, `${label} total_calories_kj`, kj);
   }
 }
 
@@ -1236,6 +1254,11 @@ describe("aggregate privacy across tools", () => {
     },
     TIMEOUT_MS
   );
+
+  it("rounds weekly workout energy with the same step in get_weekly_summary and get_training_load", () => {
+    expect(AGGREGATE_STEPS.workout_kj).toBe(AGGREGATE_WORKOUT_KJ_STEP);
+    expect(AGGREGATE_WORKOUT_STRAIN_STEP).toBe(1);
+  });
 
   /**
    * Regression: a cycle that starts at local midnight without a main sleep (a

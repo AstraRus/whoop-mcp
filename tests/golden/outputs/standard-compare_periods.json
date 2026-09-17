@@ -221,9 +221,9 @@
           },
           "strain": {
             "period_a_avg": null,
-            "period_b_avg": 12.7,
+            "period_b_avg": 15.9,
             "period_a_n": 0,
-            "period_b_n": 2,
+            "period_b_n": 1,
             "change_pct": null,
             "direction": "insufficient_data"
           },
@@ -253,9 +253,10 @@
           "notes": [
             "Not enough data yet to compare recovery: period A has 0 scored recoveries and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
             "Not enough data yet to compare sleep: period A has 0 scored nights and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
-            "Not enough data yet to compare strain: period A has 0 completed cycles and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
+            "Not enough data yet to compare strain: period A has 0 completed cycles and period B has 1; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
             "WHOOP was still calibrating for 2 of 2 recoveries in period B; they are included, but calibrating recovery scores are less reliable.",
             "The current cycle in period B is still in progress, so its strain is not included yet.",
+            "Period B: 1 day WHOOP covered only in part (the strap was put on that day) is left out of strain.",
             "Not enough data yet to compare training: period A has 0 worn days and period B has 3; at least 7 per period are needed."
           ],
           "warnings": []

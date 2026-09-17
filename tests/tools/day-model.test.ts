@@ -23,6 +23,7 @@ import {
   isBetterSleep,
   isOpenCycle,
   mondayOf,
+  openCycleStrainNote,
   nextCycle,
   placeDays,
   previousCycle,
@@ -878,5 +879,35 @@ describe("buildNights", () => {
     expect(flagsFor({ ...prior, score_state: "PENDING_SCORE", score: null })).toMatchObject({
       strain_unscored: true,
     });
+  });
+});
+
+describe("openCycleStrainNote", () => {
+  it("says nothing without an open cycle", () => {
+    expect(openCycleStrainNote([], "2026-09-16")).toEqual([]);
+  });
+
+  it("calls only an open cycle placed on today today's", () => {
+    expect(openCycleStrainNote(["2026-09-16"], "2026-09-16")).toEqual([
+      "Today's (2026-09-16) strain is still accumulating and is not included in daily strain.",
+    ]);
+  });
+
+  it("names an earlier open day and the days after it that have no cycle yet", () => {
+    const notes = openCycleStrainNote(["2026-09-16"], "2026-09-17");
+    expect(notes).toEqual([
+      "Strain for 2026-09-16 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain.",
+      "No WHOOP cycle has started yet for 2026-09-17 (today): a new cycle begins at the next sleep and appears once that sleep syncs, so this is not missing data.",
+    ]);
+    expect(notes.join(" ")).not.toMatch(/Today's/);
+    expect(openCycleStrainNote(["2026-09-14"], "2026-09-16")[1]).toMatch(
+      /^No WHOOP cycle has started yet for 2026-09-15, 2026-09-16 \(today\): /
+    );
+  });
+
+  it("lists no day after lastDay, e.g. for a past week", () => {
+    expect(openCycleStrainNote(["2026-09-20"], "2026-09-21", "2026-09-20")).toEqual([
+      "Strain for 2026-09-20 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain.",
+    ]);
   });
 });

@@ -37,6 +37,7 @@ import {
   createHistoryBudget,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  loadConsistentHistory,
   loadHistory,
 } from "../api/history.js";
 import {
@@ -809,11 +810,21 @@ export async function runSleepNeed(
     now: (): Date => now,
     ...(ctx.historyCache !== undefined ? { cache: ctx.historyCache } : {}),
   };
-  const [cycle, sleep, recovery] = await Promise.all([
-    loadHistory(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, options),
-    loadHistory(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, options),
-    loadHistory(ctx.client, ENDPOINT_RECOVERY, period, recoveryRecordSchema, options),
-  ]);
+  // One snapshot: a cached cycle from before a WHOOP sync is not paired with a fresh sleep.
+  const {
+    sources: [cycle, sleep, recovery],
+    warnings: historyWarnings,
+  } = await loadConsistentHistory([
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, { ...options, ...extra }),
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, { ...options, ...extra }),
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_RECOVERY, period, recoveryRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+  ] as const);
   // Cycles and sleeps are both needed for anything here.
   const failed = [cycle, sleep].filter((source) => source.quality.status === "fetch_failed");
   if (failed.length > 0) {
@@ -912,7 +923,7 @@ export async function runSleepNeed(
 
   // --- Notes ----------------------------------------------------------------------------
   const notes: string[] = [];
-  const warnings: string[] = [];
+  const warnings: string[] = [...historyWarnings];
   if (status === "unavailable") {
     notes.push(
       "WHOOP cycle or sleep data could not be read (WHOOP returned data in an unexpected format), so there is no estimate. This does not mean nothing was recorded."

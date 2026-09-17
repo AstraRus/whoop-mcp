@@ -8,7 +8,8 @@
  * Architecture:
  * - One static OAuth client (MCP_OAUTH_CLIENT_ID) plus stateless dynamic client
  *   registration: a registered client id is a signed, self-describing token
- *   (redirect URIs, name, public or confidential), and a confidential client's
+ *   (redirect URIs, name, public or confidential, a random per-registration
+ *   nonce), and a confidential client's
  *   secret is derived from its id. Nothing is stored, so registrations survive
  *   restarts and redeploys; the connector password still gates /authorize.
  * - Authorization codes stored in-memory with 60s TTL, one-time use.
@@ -23,7 +24,7 @@
  * ids are remembered in memory only (see UsedJtiStore).
  */
 
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 
 import express, { type Request, type Response, type NextFunction } from "express";
 import { rateLimit } from "express-rate-limit";
@@ -125,6 +126,11 @@ const dcrPayloadSchema = z
     n: z.string().max(DCR_MAX_CLIENT_NAME_LENGTH).optional(),
     /** Token endpoint auth: 'n' none (public), 'p' client_secret_post (confidential). */
     m: z.enum(["n", "p"]),
+    /**
+     * Per-registration nonce (16 random bytes, base64url), so two registrations
+     * with the same metadata never share a client id or secret.
+     */
+    i: z.string().regex(/^[A-Za-z0-9_-]{22}$/),
   })
   .strict();
 
@@ -139,10 +145,13 @@ function hmac(secret: Uint8Array, data: string): Buffer {
  * clients registered through /register.
  *
  * Registration stores nothing. The client id is
- * `dcr.<base64url(JSON {r, n?, m})>.<base64url(HMAC-SHA256(key, 'dcr-v1|' + payload))>`
+ * `dcr.<base64url(JSON {r, n?, m, i})>.<base64url(HMAC-SHA256(key, 'dcr-v1|' + payload))>`
  * and a confidential client's secret is
  * `base64url(HMAC-SHA256(key, 'dcr-secret-v1|' + client_id))`, so any process
- * with the same JWT key recognizes the client. Redirect URIs are checked
+ * with the same JWT key recognizes the client. `i` is a random nonce, so every
+ * registration gets its own id and secret even for identical metadata: one
+ * registrant cannot learn another's secret, or use another's refresh token, by
+ * registering the same body. Redirect URIs are checked
  * against ALLOWED_REDIRECT_URIS on registration and again on every lookup, so
  * narrowing the allowlist disables clients registered with removed URIs.
  */
@@ -211,7 +220,11 @@ export class SignedClientsStore implements OAuthRegisteredClientsStore {
       );
     }
 
-    const payload: DcrPayload = { r: redirectUris, m: mode };
+    const payload: DcrPayload = {
+      r: redirectUris,
+      m: mode,
+      i: randomBytes(16).toString("base64url"),
+    };
     const name = clientInfo.client_name?.slice(0, DCR_MAX_CLIENT_NAME_LENGTH);
     if (name !== undefined && name.length > 0) payload.n = name;
     if (!dcrPayloadSchema.safeParse(payload).success) {

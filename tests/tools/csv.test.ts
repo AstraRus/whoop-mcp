@@ -89,8 +89,18 @@ describe("formatCsvCell", () => {
 
   it("guards text starting with =, +, -, @, tab or CR with a leading apostrophe", () => {
     expect(formatCsvCell("=SUM(A1:A2)")).toBe("'=SUM(A1:A2)");
-    expect(formatCsvCell("+02:00")).toBe("'+02:00");
-    expect(formatCsvCell("-05:00")).toBe("'-05:00");
+    // A cell that is exactly a UTC offset is left as it is ...
+    expect(formatCsvCell("+02:00")).toBe("+02:00");
+    expect(formatCsvCell("-05:00")).toBe("-05:00");
+    expect(formatCsvCell("+00:00")).toBe("+00:00");
+    // ... but anything more than a bare offset is still guarded.
+    expect(formatCsvCell("+02:00x")).toBe("'+02:00x");
+    expect(formatCsvCell("+2:00")).toBe("'+2:00");
+    expect(formatCsvCell("-05:00,=1")).toBe('"\'-05:00,=1"');
+    expect(formatCsvCell("+1+1")).toBe("'+1+1");
+    expect(formatCsvCell("+02:00\n=1")).toBe('"\'+02:00\n=1"');
+    expect(formatCsvCell("+02:00\n")).toBe('"\'+02:00\n"');
+    expect(formatCsvCell(" +02:00")).toBe(" +02:00");
     expect(formatCsvCell("@cmd")).toBe("'@cmd");
     expect(formatCsvCell("\tindent")).toBe("'\tindent");
     expect(formatCsvCell("\rstart")).toBe('"\'\rstart"');

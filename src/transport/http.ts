@@ -433,8 +433,9 @@ function describeRpc(body: unknown): { rpcMethod?: string; tool?: string; batchS
  * - POST /webhooks/whoop — WHOOP webhooks (when configured)
  *
  * Authentication on /mcp and /health: the static token always works. Any
- * other token goes to `authenticateBearer` (when set), at most
- * AUTH_FAILURES_PER_WINDOW failed verifications per IP per minute (then 429).
+ * other token goes to `authenticateBearer` (when set); a token it accepts
+ * always works. After AUTH_FAILURES_PER_WINDOW failed verifications per IP per
+ * minute, further invalid tokens from that IP get 429 instead of 401.
  *
  * @throws Error if authToken is empty or resourceMetadataUrl is not a plain URL
  */
@@ -479,12 +480,24 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
   const authFailures = new WindowCounter(AUTH_FAILURES_PER_WINDOW, RATE_WINDOW_MS);
   const webhookRequests = new WindowCounter(WEBHOOK_RATE_LIMIT_PER_MINUTE, RATE_WINDOW_MS);
 
+  /**
+   * The address that rate limits and the auth throttle key on. With
+   * trustProxy, exactly one proxy hop is trusted: the rightmost
+   * X-Forwarded-For entry, which that proxy appended (entries to its left come
+   * from the client and can be forged). The OAuth connector's Express app
+   * trusts the same single hop (`trust proxy: 1`, see index.ts), so both
+   * layers see the same client.
+   */
   function clientIp(req: IncomingMessage): string {
     if (trustProxy) {
       const xff = req.headers["x-forwarded-for"];
-      if (typeof xff === "string" && xff.length > 0) {
-        const first = xff.split(",")[0]?.trim();
-        if (first) return first;
+      if (typeof xff === "string") {
+        const hops = xff
+          .split(",")
+          .map((hop) => hop.trim())
+          .filter((hop) => hop.length > 0);
+        const nearest = hops.at(-1);
+        if (nearest !== undefined) return nearest;
       }
     }
     return req.socket.remoteAddress ?? "unknown";
@@ -522,15 +535,19 @@ export async function createHttpServer(options: HttpServerOptions): Promise<Http
       };
     }
     if (!authenticateBearer) return { result: "invalid" };
-    // 2. Too many failed verifications from this IP: refuse before verifying.
+    // 2. A connector access token that verifies is always accepted, even from
+    // an IP over the failure limit: a shared address (a proxy, claude.ai's
+    // egress) must not lock out a signed-in client. Verification is a local
+    // signature check, so verifying before the throttle costs no WHOOP calls.
+    const info = await verifyOAuthToken(token);
+    if (info !== null) {
+      return { result: "ok", info, auth: { kind: "oauth", clientId: info.clientId } };
+    }
+    // 3. Too many failed verifications from this IP: 429 instead of 401.
     const ip = clientIp(req);
     if (authFailures.exceeded(ip)) return { result: "throttled" };
-    const info = await verifyOAuthToken(token);
-    if (info === null) {
-      authFailures.add(ip);
-      return { result: "invalid" };
-    }
-    return { result: "ok", info, auth: { kind: "oauth", clientId: info.clientId } };
+    authFailures.add(ip);
+    return { result: "invalid" };
   }
 
   function sendUnauthorized(res: ServerResponse): void {

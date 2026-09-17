@@ -20,7 +20,12 @@ import {
   ENDPOINT_SLEEP,
   ENDPOINT_WORKOUT,
 } from "../api/endpoints.js";
-import { HISTORY_LIMITATIONS, loadHistory, type HistorySource } from "../api/history.js";
+import {
+  HISTORY_LIMITATIONS,
+  loadConsistentHistory,
+  loadHistory,
+  type HistorySource,
+} from "../api/history.js";
 import {
   cycleRecordSchema,
   recoveryRecordSchema,
@@ -62,6 +67,7 @@ import {
   sourceWarnings,
   truncationNote,
 } from "./get-workout-log.js";
+import { LONG_CYCLE_MS, STALE_SLEEP_MS } from "./get-today.js";
 import { median, percentileRank, roundTo } from "./stats-utils.js";
 import { defineTool, type ToolContext } from "./tool-definition.js";
 import {
@@ -102,6 +108,10 @@ const METHOD_VERSION = "workout-context-1";
 
 /** Note added when the recovery before the session is available */
 export const MORNING_RECOVERY_NOTE = "Morning recovery was scored before this session.";
+
+/** Note while the session's cycle is still open (after.status not_yet) */
+export const OPEN_CYCLE_NOTE =
+  "The session's WHOOP cycle is still open: WHOOP has not processed a sleep after the session yet, so there is no sleep or recovery after it to show.";
 
 /** Note on every result: one session and one night are a single observation */
 export const SINGLE_OBSERVATION_NOTE =
@@ -209,7 +219,7 @@ export const workoutContextOutputSchema = z.object({
           .number()
           .nullable()
           .describe(
-            "Mid-rank percentile of beats per km (share of earlier GPS sessions with fewer beats per km); lower beats per km is better, so a low percentile is a good value"
+            "Mid-rank percentile of beats per km (share of earlier GPS sessions with fewer beats per km): a low percentile means fewer beats per km than most earlier sessions; beats per km also falls with faster pace and varies with terrain and heat"
           ),
       })
       .describe(
@@ -376,23 +386,30 @@ export async function getWorkoutContext(
     start: iso(workoutsStartMs),
     end: iso(Math.max(workoutsEndMs, workoutsStartMs)),
   };
-  const [cycles, sleeps, recoveries, workouts] = await Promise.all([
-    loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, contextPeriod, cycleRecordSchema, options),
-    loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, contextPeriod, sleepRecordSchema, options),
-    loadHistory<Recovery>(
-      ctx.client,
-      ENDPOINT_RECOVERY,
-      contextPeriod,
-      recoveryRecordSchema,
-      options
-    ),
-    loadHistory<Workout>(
-      ctx.client,
-      ENDPOINT_WORKOUT,
-      workoutsPeriod,
-      workoutRecordSchema,
-      options
-    ),
+  const {
+    sources: [cycles, sleeps, recoveries, workouts],
+    warnings: snapshotWarnings,
+  } = await loadConsistentHistory([
+    (extra) =>
+      loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, contextPeriod, cycleRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, contextPeriod, sleepRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Recovery>(ctx.client, ENDPOINT_RECOVERY, contextPeriod, recoveryRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, workoutsPeriod, workoutRecordSchema, {
+        ...options,
+        ...extra,
+      }),
   ]);
   const sources: HistorySource<unknown>[] = [cycles, sleeps, recoveries, workouts];
   if (sources.every((source) => source.quality.status === "fetch_failed")) {
@@ -421,6 +438,7 @@ export async function getWorkoutContext(
       workouts,
       "other sessions that day and the comparison with earlier sessions are unavailable"
     ),
+    ...snapshotWarnings,
   ];
 
   // --- Place ----------------------------------------------------------------------
@@ -539,9 +557,25 @@ export async function getWorkoutContext(
     afterStatus = "missing";
   } else if (inProgress) {
     afterStatus = "not_yet";
-    notes.push(
-      "The session's WHOOP cycle is still in progress, so the sleep and recovery after it do not exist yet."
-    );
+    notes.push(OPEN_CYCLE_NOTE);
+    // WHOOP only closes a cycle once it has processed the next sleep, so an open
+    // cycle that began long ago may hide a sleep that is not synced yet.
+    const cycleSleep = sleepsUnavailable ? undefined : placement.mainSleepByCycle.get(cycle.id);
+    const sleepEndMs = cycleSleep ? Date.parse(cycleSleep.end) : undefined;
+    const cycleStartMs = Date.parse(cycle.start);
+    const stale =
+      sleepEndMs !== undefined
+        ? nowMs - sleepEndMs > STALE_SLEEP_MS
+        : nowMs - cycleStartMs > LONG_CYCLE_MS;
+    if (stale) {
+      const since =
+        cycleSleep && sleepEndMs !== undefined
+          ? `This cycle began with the sleep that ended ${formatLocalTimestamp(sleepEndMs, cycleSleep.timezone_offset)}, about ${Math.round((nowMs - sleepEndMs) / HOUR_MS)} hours ago,`
+          : `This cycle began ${formatLocalTimestamp(cycleStartMs, cycle.timezone_offset)}, about ${Math.round((nowMs - cycleStartMs) / HOUR_MS)} hours ago,`;
+      notes.push(
+        `${since} and WHOOP has not processed a newer one. If you have slept since then, WHOOP has not processed that sleep yet (or did not detect it); opening the WHOOP app to sync may help.`
+      );
+    }
   } else {
     next = nextCycle(cycle, cycles.records);
     const cycleEndMs = Date.parse(cycle.end!);

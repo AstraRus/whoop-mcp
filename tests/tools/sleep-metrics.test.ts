@@ -246,9 +246,17 @@ describe("resolveSleepWindow", () => {
     );
   });
 
-  it("rejects a window starting after now", () => {
+  it("rejects a window starting after now as invalid date input naming the tool", () => {
     expect(() => resolveSleepWindow("2026-09-20", undefined, 14, now, "+02:00")).toThrow(
-      RangeError
+      InvalidDateExpression
+    );
+    expect(() =>
+      resolveSleepWindow("2026-09-20", undefined, 14, now, "+02:00", {
+        toolName: "get_sleep_analysis",
+        maxDays: 90,
+      })
+    ).toThrow(
+      'The sleep window "2026-09-20" begins at or after the current time; get_sleep_analysis needs a window that starts in the past.'
     );
   });
 });

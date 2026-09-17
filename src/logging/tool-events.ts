@@ -73,6 +73,8 @@ export interface ToolErrorClassification {
   causeChain: string[];
   /** file:line frames, for internal errors only. */
   stackFrames?: string[];
+  /** path:code issues of the first ZodError in the cause chain of an internal error. */
+  contractIssues?: string[];
 }
 
 /** One finished tool call, as registerContracted reports it. */
@@ -208,11 +210,10 @@ export function contractIssuesOf(error: z.ZodError): string[] {
 
 /** Outcome and level of one recognized error, or null when it is not recognized. */
 function classifyOne(error: unknown): Pick<ToolErrorClassification, "outcome" | "level"> | null {
-  if (
-    error instanceof InvalidDateExpression ||
-    error instanceof z.ZodError ||
-    error instanceof RangeError
-  ) {
+  // Only a rejected date expression is the caller's input. A RangeError (e.g.
+  // an invalid Date formatted by a tool) or a ZodError (a WHOOP record or page
+  // that failed to parse) is a server-side failure and falls to internal_error.
+  if (error instanceof InvalidDateExpression) {
     return { outcome: "invalid_input", level: "info" };
   }
   if (error instanceof WhoopApiError) {
@@ -236,11 +237,13 @@ function classifyOne(error: unknown): Pick<ToolErrorClassification, "outcome" | 
 /**
  * Classify a tool failure for logging.
  *
- * - info: invalid input (InvalidDateExpression, ZodError, RangeError) and
- *   WHOOP 400/404;
+ * - info: invalid input (InvalidDateExpression only) and WHOOP 400/404;
  * - warn: other WHOOP statuses (401/403/429/5xx), network, authentication and
  *   request-budget errors;
- * - error: anything else (internal_error, with file:line stack frames).
+ * - error: anything else (internal_error, with file:line stack frames),
+ *   including a RangeError (e.g. an invalid Date) and a ZodError (a WHOOP record
+ *   that failed to parse; its issues are listed as `contractIssues`, path:code
+ *   only).
  *
  * The first recognized error in the cause chain decides the outcome; the
  * outermost error names the class.
@@ -272,6 +275,8 @@ export function classifyToolError(error: unknown): ToolErrorClassification {
   if (!recognized) {
     const frames = stackFramesOf(error);
     if (frames.length > 0) classification.stackFrames = frames;
+    const zod = chain.find((entry): entry is z.ZodError => entry instanceof z.ZodError);
+    if (zod !== undefined) classification.contractIssues = contractIssuesOf(zod);
   }
   return classification;
 }

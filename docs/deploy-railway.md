@@ -39,27 +39,68 @@ instance.
    `PORT`; both are validated as integers 0-65535.)
 2. **Replicas:** 1.
 3. **Health check path:** `/health`. Without a bearer token it answers
-   `{"status":"ok"}` and never calls WHOOP.
-4. **Volume:** add a volume and mount it at **`/data`**. This is where
-   `tokens.json` lives.
+   `{"status":"ok"}` and never calls WHOOP. `/health` is served once startup
+   authentication is done. With a stored `tokens.json` that is bounded to about
+   2.5 minutes even while WHOOP's token endpoint is unreachable (each token
+   request times out after 30 seconds, and startup retries stop after a
+   120-second budget; see section 8), so keep Railway's health check timeout
+   (300 seconds by default) above 180 seconds. A first sign-in (section 4)
+   waits longer.
+4. **Volume:** one volume holding `tokens.json`, mounted at the token folder
+   (see below). A new deployment can mount it at **`/data`**; an existing one
+   keeps its mount.
 
 ### Token folder
 
-Set `WHOOP_MCP_TOKEN_DIR=/data`. The container starts as root only long enough
-for [docker/entrypoint.sh](../docker/entrypoint.sh) to prepare that folder: it
-hands the folder and `tokens.json` to the built-in `node` user (never
-recursively, with 0700/0600 permissions), checks that `node` can create,
+The token folder is **`WHOOP_MCP_TOKEN_DIR` when it is set, else
+`$HOME/.whoop-mcp`** (`/root/.whoop-mcp` when `HOME` is not set). That is the
+same folder 0.7.x used (`~/.whoop-mcp` through `os.homedir()`, running as
+root). [docker/entrypoint.sh](../docker/entrypoint.sh) resolves it once and
+exports it as `WHOOP_MCP_TOKEN_DIR`, because the server then runs with
+`HOME=/home/node` and would otherwise look somewhere else.
+
+The container starts as root only long enough for the entrypoint to prepare
+that folder: it hands the folder and `tokens.json` to the built-in `node` user
+(never recursively, with 0700/0600 permissions), checks that `node` can create,
 rename and delete files there, and then runs the server as `node`. If that is
 not possible (a read-only volume, storage that refuses `chown`) it logs one
-warning, `entrypoint: running as root (<reason>); ...`, and keeps running as
-root, as earlier images did. `WHOOP_MCP_RUN_AS_ROOT=1` skips the switch on
-purpose.
+warning, `entrypoint: running as root (<reason>); the server still works, see
+docs/deploy-railway.md`, and keeps running as root with the same folder, as
+earlier images did. `WHOOP_MCP_RUN_AS_ROOT=1` skips the switch on purpose.
 
-**Existing deployments** that mounted their volume at `/root/.whoop-mcp` keep
-working without changes: when `WHOOP_MCP_TOKEN_DIR` is unset, the entrypoint
-uses and exports `/root/.whoop-mcp`. To move to `/data`, mount a new volume at
-`/data`, set `WHOOP_MCP_TOKEN_DIR=/data` and sign in once (section 4); do not
-copy the old `tokens.json` while the old service can still refresh it.
+> **`WHOOP_MCP_TOKEN_DIR` must always equal the volume's mount path.** A path
+> without a volume behind it holds no `tokens.json`: the server starts the WHOOP
+> sign-in (section 4) instead of serving, and whatever it saves there is lost on
+> the next deploy. Leave the variable unset, or set it to exactly the mount path.
+
+**Existing deployment (`HOME=/home/node`, volume at `/home/node/.whoop-mcp`):
+change nothing.** Do not add `WHOOP_MCP_TOKEN_DIR` pointing anywhere else and do
+not move the volume. With `WHOOP_MCP_TOKEN_DIR` unset the entrypoint uses and
+exports `$HOME/.whoop-mcp`, which is `/home/node/.whoop-mcp`, the folder that
+already holds `tokens.json`. The same applies to a volume at `/root/.whoop-mcp`
+without `HOME` set. Setting `WHOOP_MCP_TOKEN_DIR=/home/node/.whoop-mcp`
+explicitly is optional and changes nothing.
+
+**New deployments only:** mount the volume at `/data` and set
+`WHOOP_MCP_TOKEN_DIR=/data`. Never switch an existing deployment to `/data` by
+changing the variable alone. To move one, mount a new volume at `/data`, set
+`WHOOP_MCP_TOKEN_DIR=/data` in the same deploy and sign in once (section 4); do
+not copy the old `tokens.json` while the old service can still refresh it.
+
+### Upgrading an existing deployment to 0.8.0 (checklist)
+
+1. Confirm the volume's mount path in Railway (for example
+   `/home/node/.whoop-mcp` with `HOME=/home/node`) and that
+   `WHOOP_MCP_TOKEN_DIR` is unset or equal to that path.
+2. Optionally set `WHOOP_MCP_TOKEN_DIR` to the mount path (for example
+   `/home/node/.whoop-mcp`) before pushing. 0.7.x ignores the variable, so it
+   is safe to add while the old release still runs.
+3. In the service settings, enable **Wait for CI** so a push to `main` deploys
+   only after the CI checks pass, and set the health check path to `/health`
+   (section 2).
+4. After the deploy, the logs show `entrypoint: running as node` (or the root
+   warning), `Using cached WHOOP tokens` and `http transport listening`, and
+   never `starting OAuth flow`. Then verify as in section 5.
 
 ## 3. Variables
 
@@ -72,7 +113,12 @@ Required:
 | `MCP_TRANSPORT`       | `http` (the image default)                                                          |
 | `MCP_AUTH_TOKEN`      | the static bearer token (32+ random bytes)                                          |
 | `MCP_TRUST_PROXY`     | `1` (Railway's proxy sets `X-Forwarded-For`; per-IP limits need the real client IP) |
-| `WHOOP_MCP_TOKEN_DIR` | `/data`                                                                             |
+
+Token folder (section 2):
+
+| Variable              | Value                                                                                                                                                                |
+| --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WHOOP_MCP_TOKEN_DIR` | New deployments (volume at `/data`): `/data`. Existing deployments: unset, or exactly the volume's mount path (e.g. `/home/node/.whoop-mcp` with `HOME=/home/node`). |
 
 For claude.ai (the OAuth connector, mounted only when all three are set):
 
@@ -112,15 +158,21 @@ callback has to be reachable through the public domain.
 3. Deploy and open the deploy logs. Copy the URL after
    `If the browser didn't open, visit:` and open it in your browser.
 4. Sign in to WHOOP and approve the scopes. The browser shows a success page,
-   the server saves `tokens.json` in `/data` and continues starting. The log
+   the server saves `tokens.json` in the token folder and continues starting. The log
    shows `whoop authentication complete` and `http transport listening`.
 5. Remove `CALLBACK_HOST` again. The callback server only runs while a sign-in
    is waiting, but there is no reason to leave it on a public interface.
 
-While the server waits for the sign-in, `/health` is not served yet, so a
-Railway health check can fail the deploy if the sign-in takes longer than its
-timeout. Finish the sign-in promptly, or leave the health check path empty for
-this one deploy.
+While the server waits for the sign-in, the callback server holds port 3000 and
+`/health` answers 404, so a Railway health check can fail the deploy if the
+sign-in takes longer than its timeout. Finish the sign-in promptly, or leave the
+health check path empty for this one deploy. If `CALLBACK_TIMEOUT_MS` passes
+without a sign-in, the process exits.
+
+An **existing** deployment should never show the authorization URL. If it does,
+the token folder does not match the volume (section 2): do not sign in (the new
+tokens would land outside the volume), fix `WHOOP_MCP_TOKEN_DIR` or the mount
+and redeploy.
 
 ## 5. Verify a deploy
 
@@ -204,7 +256,9 @@ network error, HTTP 429 or 5xx, or `invalid_client` for the app credentials),
 the server:
 
 1. logs `whoop token refresh failed at startup; retrying` and retries after 5,
-   15 and 45 seconds;
+   15 and 45 seconds, as long as the next attempt starts within 120 seconds of
+   the first (each token request times out after 30 seconds, so startup takes
+   at most about 2.5 minutes);
 2. if the refresh still fails and `tokens.json` exists, starts anyway with the
    stored tokens and logs `whoop token refresh unavailable at startup; serving
 with stored tokens` with the HTTP status or error class;
@@ -230,22 +284,25 @@ Railway → the service → **Deployments** → the previous successful deployme
 change the token file format.
 
 - Rolling back to **0.8.x**: nothing else to do.
-- Rolling back to **0.7.x or earlier**: those images run as root and always use
-  `/root/.whoop-mcp`; they ignore `WHOOP_MCP_TOKEN_DIR`. With the legacy mount
-  at `/root/.whoop-mcp` they keep working (root can read the files the
-  entrypoint handed to `node`). With the volume at `/data` they find no tokens
-  and start the sign-in flow, so mount the volume at `/root/.whoop-mcp` for the
-  rollback or sign in again. Aggregate-mode clients also get the older, looser
-  aggregate outputs back.
+- Rolling back to **0.7.x or earlier**: those images run as root, use
+  `$HOME/.whoop-mcp` (`os.homedir()`, so `/home/node/.whoop-mcp` with
+  `HOME=/home/node`) and ignore `WHOOP_MCP_TOKEN_DIR`. If the volume is already
+  mounted at `$HOME/.whoop-mcp`, change nothing: root can read and write the
+  files the entrypoint handed to `node`. Only a volume that was moved to `/data`
+  must be mounted back at `$HOME/.whoop-mcp` for the rollback; otherwise the
+  old release finds no tokens and starts the sign-in flow. Aggregate-mode
+  clients also get the older, looser aggregate outputs back.
 
 ## 10. Troubleshooting on Railway
 
-| Symptom                                                                                                                | Cause and fix                                                                                                                                                                                                                                                                |
-| ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Deploy log: `Invalid MCP_PORT`, `Invalid PORT`, `Invalid MCP_MAX_CONNECTIONS` or `Invalid WHOOP_RATE_LIMIT_PER_MINUTE` | The value is outside its range; the message names the variable and the allowed range.                                                                                                                                                                                        |
-| Deploy log: `WHOOP_MCP_TOKEN_DIR must be an absolute path`                                                             | Use `/data`, not `data`.                                                                                                                                                                                                                                                     |
-| Log: `entrypoint: running as root (...)`                                                                               | The volume could not be handed to `node`; the reason is in the line. The server still works.                                                                                                                                                                                 |
-| Log: `whoop token save failed` with `EACCES`                                                                           | The server runs as `node` but cannot write the token folder, usually because `WHOOP_MCP_TOKEN_DIR` points outside the prepared volume. Fix the path and redeploy; the rotated tokens are kept in memory until then.                                                          |
-| claude.ai: "couldn't connect" or repeated sign-in                                                                      | `PUBLIC_URL` must be the exact https origin; `ALLOWED_REDIRECT_URIS` must contain claude.ai's callback exactly; `MCP_TRUST_PROXY=1`. A 401 from `/mcp` carries `WWW-Authenticate: Bearer ... resource_metadata="https://<domain>/.well-known/oauth-protected-resource/mcp"`. |
-| 503 `Maximum connections reached` with `Retry-After: 1`                                                                | More than `MCP_MAX_CONNECTIONS` requests ran at once and 32 more waited over 5 seconds. Raise `MCP_MAX_CONNECTIONS` or let the client retry.                                                                                                                                 |
-| Tools say the server paused WHOOP requests                                                                             | The process-wide limiter (60 requests per minute by default) ran out within the call's 20-second budget; retry in a minute.                                                                                                                                                  |
+| Symptom                                                                                                                | Cause and fix                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Deploy log: `Invalid MCP_PORT`, `Invalid PORT`, `Invalid MCP_MAX_CONNECTIONS` or `Invalid WHOOP_RATE_LIMIT_PER_MINUTE` | The value is outside its range; the message names the variable and the allowed range.                                                                                                                                                                                          |
+| Deploy log: `WHOOP_MCP_TOKEN_DIR must be an absolute path`                                                             | Use the volume's absolute mount path (e.g. `/home/node/.whoop-mcp` or `/data`), or unset the variable.                                                                                                                                                                         |
+| Deploy log of an existing deployment: `No cached tokens found, starting OAuth flow` and an authorization URL           | The token folder is not the volume: `WHOOP_MCP_TOKEN_DIR` points elsewhere, or the volume moved. Do not sign in; make the variable equal the mount path (or unset it when the volume is at `$HOME/.whoop-mcp`) and redeploy.                                                   |
+| Log: `entrypoint: running as root (...)`                                                                               | The volume could not be handed to `node`; the reason is in the line. The server still works, with the same token folder.                                                                                                                                                       |
+| Log: `Cannot read the WHOOP token file <path> (<code>)`                                                                | `tokens.json` exists but this process cannot read it, so no new sign-in was started. Usually the container runs with `--user` (or a custom start command) against a root-owned volume: start it as root so the entrypoint prepares the folder, or `chown 1000:1000` the files. |
+| Log: `whoop token save failed` with `EACCES`                                                                           | The server runs as `node` but cannot write the token folder, usually because `WHOOP_MCP_TOKEN_DIR` points outside the prepared volume. Fix the path and redeploy; the rotated tokens are kept in memory until then.                                                            |
+| claude.ai: "couldn't connect" or repeated sign-in                                                                      | `PUBLIC_URL` must be the exact https origin; `ALLOWED_REDIRECT_URIS` must contain claude.ai's callback exactly; `MCP_TRUST_PROXY=1`. A 401 from `/mcp` carries `WWW-Authenticate: Bearer ... resource_metadata="https://<domain>/.well-known/oauth-protected-resource/mcp"`.   |
+| 503 `Maximum connections reached` with `Retry-After: 1`                                                                | More than `MCP_MAX_CONNECTIONS` requests ran at once and 32 more waited over 5 seconds. Raise `MCP_MAX_CONNECTIONS` or let the client retry.                                                                                                                                   |
+| Tools say the server paused WHOOP requests                                                                             | The process-wide limiter (60 requests per minute by default) ran out within the call's 20-second budget; retry in a minute.                                                                                                                                                    |

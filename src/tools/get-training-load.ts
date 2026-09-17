@@ -6,10 +6,13 @@
  * fitness (ATL/CTL/TSB), Foster monotony, local ISO week totals and the load
  * per sport.
  *
- * - Days come from placeDays over cycles (no sleeps are read to stay within
- *   the request budget: a cycle's day is the local day 12 hours after its
- *   start, which matches get_calendar except for main sleeps that start after
- *   noon and end before midnight) and workouts from assignWorkouts.
+ * - Days come from placeDays over cycles and main sleeps, exactly as
+ *   get_calendar places them (including split nights and daytime main sleeps),
+ *   and workouts from assignWorkouts; cycles, workouts and sleeps are read as
+ *   one snapshot (loadConsistentHistory). Days two cycles belong to are
+ *   warned about as in get_calendar. When sleeps cannot be read completely,
+ *   a cycle counts toward the local day 12 hours after its start, with a
+ *   warning. The open cycle is never placed after today.
  * - A day with a placed cycle is worn: without workouts its workout load is 0.
  *   A day without a cycle, or whose history could not be loaded, is unknown
  *   (null), never 0.
@@ -19,9 +22,11 @@
  *   compare_periods decide it with isPartialDay); the open cycle is reported
  *   separately in today_so_far and never enters a window.
  * - EWMA seeding: when WHOOP history predates the loaded window, ATL and CTL
- *   start at the window's first day from the mean of its first 28 days (window
- *   mean); otherwise they start at 0 on the first worn day and CTL/TSB stay
- *   null for 42 days (warming_up until day 84).
+ *   start at the window's first day from the mean of its first 28 known daily
+ *   loads (window mean; ewmaWindowSeed), and CTL/TSB are null only when the
+ *   analysed range has fewer than 21 known loads; otherwise they start at 0 on
+ *   the first worn day and CTL/TSB stay null for 42 days (warming_up until day
+ *   84).
  *
  * Also exports the loading, placement and per-day/per-week helpers that
  * get_sport_breakdown and the aggregate variants share.
@@ -34,19 +39,27 @@ import {
   WhoopNetworkError,
   WhoopRateBudgetError,
 } from "../api/client.js";
-import { ENDPOINT_CYCLE, ENDPOINT_WORKOUT } from "../api/endpoints.js";
+import { ENDPOINT_CYCLE, ENDPOINT_SLEEP, ENDPOINT_WORKOUT } from "../api/endpoints.js";
 import {
   createHistoryBudget,
+  DEFAULT_PAGE_BUDGET,
   HISTORY_CHUNK_MS,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  HISTORY_SNAPSHOT_TOLERANCE_MS,
+  loadConsistentHistory,
   loadHistory,
   type HistoryBudget,
+  type HistoryLoader,
   type HistorySource,
   type LoadHistoryOptions,
 } from "../api/history.js";
-import { cycleRecordSchema, workoutRecordSchema } from "../api/record-schemas.js";
-import type { Cycle, Workout } from "../api/types.js";
+import {
+  cycleRecordSchema,
+  sleepRecordSchema,
+  workoutRecordSchema,
+} from "../api/record-schemas.js";
+import type { Cycle, Sleep, Workout } from "../api/types.js";
 import {
   dataQualitySchema,
   DISCLAIMER,
@@ -56,6 +69,7 @@ import {
   localDay,
   localMidnightMs,
   mostRelevantError,
+  sourceQuality,
   type DataQuality,
   type SourceQuality,
 } from "./analytics-utils.js";
@@ -66,6 +80,7 @@ import {
   cycleStrain,
   daysBetween,
   fetchRangeForDays,
+  isLocalMidnight,
   isOpenCycle,
   localClock,
   mondayOf,
@@ -162,7 +177,7 @@ const LOAD_UNIT_VALUES = ["TRIMP (Edwards)", "strain (0-21)", "minutes", "kJ"] a
 const METHOD_VERSION = "training-load-1";
 
 const LOAD_LIMITATIONS: readonly string[] = [
-  "Days are placed from WHOOP cycles only: a cycle counts toward the local day 12 hours after it starts, and a workout toward the day of the cycle containing its start.",
+  "Days are placed as get_calendar places them, including split nights and daytime main sleeps: a cycle counts toward the local day its main sleep ended (without complete sleep data, the day 12 hours after it starts), and a workout toward the day of the cycle containing its start.",
   "TRIMP is Edwards TRIMP from WHOOP %max-HR zones (zone number × zone minutes); it is not a lab-calibrated load and understates strength work.",
   "Acute:chronic ratios, ATL, CTL, TSB and monotony are descriptive statistics of your own load history, not thresholds or advice.",
 ];
@@ -171,11 +186,53 @@ const LOAD_LIMITATIONS: readonly string[] = [
 // Source loading (shared with get_sport_breakdown and the aggregate variants)
 // ---------------------------------------------------------------------------
 
-/** Cycles and workouts loaded as history for one tool call */
+/** Cycles, workouts and sleeps loaded as history for one tool call */
 export interface TrainingSources {
   cycles: HistorySource<Cycle>;
   workouts: HistorySource<Workout>;
+  /** Main sleeps place cycles on days as get_calendar does */
+  sleeps: HistorySource<Sleep>;
+  /**
+   * Sleeps were read only around the cycles whose day can depend on them (the
+   * window was too long to read every sleep within the request budget)
+   */
+  sleepsTargeted: boolean;
+  /** Warnings of the load itself (e.g. a mixed snapshot around a WHOOP sync) */
+  warnings: string[];
 }
+
+/** Options of {@link loadTrainingSources} */
+export interface LoadTrainingSourcesOptions {
+  /**
+   * Read every sleep of the range even when the window is long (the aggregate
+   * variants need complete sleeps and read at most 27 weeks)
+   */
+  fullSleeps?: boolean;
+}
+
+/** Pages one 30-day chunk of one source is assumed to need when planning a load */
+export const PAGES_PER_CHUNK_ESTIMATE = 2;
+
+/**
+ * A cycle starting at or after this local hour (and before
+ * TARGETED_SLEEP_END_HOUR) can have a main sleep that ends on a different local
+ * day than 12 hours after its start, so its day depends on the sleep.
+ */
+export const TARGETED_SLEEP_START_HOUR = 10;
+
+/** See {@link TARGETED_SLEEP_START_HOUR} */
+export const TARGETED_SLEEP_END_HOUR = 22;
+
+/** Sleeps are read this far around each cycle whose day depends on them (neighbours compete for a day) */
+const TARGETED_SLEEP_MARGIN_MS = 36 * 3_600_000;
+
+/** Warning when sleeps could not be read completely and days are placed from cycles only */
+export const SLEEP_PLACEMENT_WARNING =
+  "Sleep data could not be read completely, so days after a split night or a daytime main sleep may be dated differently from get_calendar.";
+
+/** Note when sleeps were read only around the cycles whose day depends on them */
+export const TARGETED_SLEEPS_NOTE =
+  "For this long window, sleeps were read only around split nights, sleep onsets between 10:00 and 22:00 and cycles starting at local midnight, the cycles whose day depends on their main sleep.";
 
 /** History options for one tool call: a shared request budget and the call's clock */
 export function trainingHistoryOptions(
@@ -188,19 +245,213 @@ export function trainingHistoryOptions(
   };
 }
 
-/** Load cycles and workouts over [startMs, endMs) in parallel within one budget */
+/** History chunks (30-day grid) a load of [startMs, min(endMs, now)) reads */
+function chunkCount(startMs: number, endMs: number, nowMs: number): number {
+  const end = Math.min(endMs, nowMs);
+  if (!(startMs < end)) return 0;
+  return Math.ceil(end / HISTORY_CHUNK_MS) - Math.floor(startMs / HISTORY_CHUNK_MS);
+}
+
+/**
+ * Load cycles, workouts and sleeps over [startMs, endMs) as one snapshot
+ * (loadConsistentHistory) within the call's budget.
+ *
+ * When reading all three sources would not fit the remaining page budget
+ * (about 300 days and more) and `fullSleeps` is not set, cycles and workouts
+ * are read first and sleeps only around the cycles whose day can depend on
+ * them: cycles that share a day when placed without sleeps, cycles starting
+ * between TARGETED_SLEEP_START_HOUR and TARGETED_SLEEP_END_HOUR local time
+ * (daytime main sleeps) and cycles starting at local midnight (partial days).
+ */
 export async function loadTrainingSources(
   ctx: ToolContext,
   options: LoadHistoryOptions,
   startMs: number,
-  endMs: number
+  endMs: number,
+  loadOptions: LoadTrainingSourcesOptions = {}
 ): Promise<TrainingSources> {
-  const period = { start: new Date(startMs).toISOString(), end: new Date(endMs).toISOString() };
-  const [cycles, workouts] = await Promise.all([
-    loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, options),
-    loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, options),
-  ]);
-  return { cycles, workouts };
+  const iso = (ms: number): string => new Date(ms).toISOString();
+  const period = { start: iso(startMs), end: iso(endMs) };
+  const nowMs = (options.now?.() ?? new Date()).getTime();
+  const cycleLoader: HistoryLoader<Cycle> = (extra) =>
+    loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, {
+      ...options,
+      ...extra,
+    });
+  const workoutLoader: HistoryLoader<Workout> = (extra) =>
+    loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, {
+      ...options,
+      ...extra,
+    });
+  const sleepLoader =
+    (sleepPeriod: { start: string; end: string }): HistoryLoader<Sleep> =>
+    (extra) =>
+      loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, sleepPeriod, sleepRecordSchema, {
+        ...options,
+        ...extra,
+      });
+
+  const pagesAvailable = options.budget?.pagesRemaining ?? DEFAULT_PAGE_BUDGET;
+  const fullFits =
+    3 * PAGES_PER_CHUNK_ESTIMATE * chunkCount(startMs, endMs, nowMs) <= pagesAvailable;
+  if (loadOptions.fullSleeps === true || fullFits) {
+    const { sources, warnings } = await loadConsistentHistory([
+      cycleLoader,
+      workoutLoader,
+      sleepLoader(period),
+    ] as const);
+    const [cycles, workouts, sleeps] = sources;
+    return { cycles, workouts, sleeps, sleepsTargeted: false, warnings };
+  }
+
+  const { sources, warnings } = await loadConsistentHistory([cycleLoader, workoutLoader] as const);
+  const [cycles, workouts] = sources;
+  const windows = sourceUnreadable(cycles) ? [] : targetedSleepWindows(cycles.records, nowMs);
+  // Recent sleeps are read no earlier than the recent cycles and workouts were.
+  const reads = [cycles, workouts].flatMap((source) =>
+    source.recent_snapshot !== null ? [source.recent_snapshot.newest] : []
+  );
+  const extra =
+    reads.length > 0
+      ? { minRecentStoredAt: Math.max(...reads) - HISTORY_SNAPSHOT_TOLERANCE_MS }
+      : {};
+  const parts = await Promise.all(
+    windows.map((window) =>
+      sleepLoader({ start: iso(window.startMs), end: iso(window.endMs) })(extra)
+    )
+  );
+  return {
+    cycles,
+    workouts,
+    sleeps: combineSleepSources(parts),
+    sleepsTargeted: true,
+    warnings,
+  };
+}
+
+/**
+ * Ranges of the sleeps that can change where cycles are placed, merged so that
+ * no 30-day chunk is read twice.
+ */
+function targetedSleepWindows(
+  cycles: readonly Cycle[],
+  nowMs: number
+): { startMs: number; endMs: number }[] {
+  const withoutSleeps = placeDays({
+    cycles,
+    sleeps: [],
+    recoveries: [],
+    sleepsAvailable: true,
+    today: "9999-12-31",
+    utcOffset: "Z",
+  });
+  const candidates = new Map<number, Cycle>();
+  for (const { shown, other } of withoutSleeps.displaced) {
+    candidates.set(shown.id, shown);
+    candidates.set(other.id, other);
+  }
+  for (const cycle of cycles) {
+    const hour = Number(localClock(cycle.start, cycle.timezone_offset).slice(11, 13));
+    if (
+      (hour >= TARGETED_SLEEP_START_HOUR && hour < TARGETED_SLEEP_END_HOUR) ||
+      isLocalMidnight(cycle.start, cycle.timezone_offset)
+    ) {
+      candidates.set(cycle.id, cycle);
+    }
+  }
+  const ranges = [...candidates.values()]
+    .map((cycle) => ({
+      startMs: Date.parse(cycle.start) - TARGETED_SLEEP_MARGIN_MS,
+      endMs: Math.min(
+        (cycle.end ? Date.parse(cycle.end) : nowMs) + TARGETED_SLEEP_MARGIN_MS,
+        nowMs + 1
+      ),
+    }))
+    .sort((left, right) => left.startMs - right.startMs);
+  const merged: { startMs: number; endMs: number }[] = [];
+  const chunkOf = (ms: number): number => Math.floor(ms / HISTORY_CHUNK_MS);
+  for (const range of ranges) {
+    const last = merged[merged.length - 1];
+    // Ranges in the same or the next chunk read no extra chunk when merged.
+    if (last !== undefined && chunkOf(range.startMs) <= chunkOf(last.endMs) + 1) {
+      last.endMs = Math.max(last.endMs, range.endMs);
+    } else {
+      merged.push({ ...range });
+    }
+  }
+  return merged;
+}
+
+/** One sleep source from the sources of several ranges (records merged by id, newest update kept) */
+function combineSleepSources(parts: readonly HistorySource<Sleep>[]): HistorySource<Sleep> {
+  if (parts.length === 0) {
+    return {
+      records: [],
+      quality: sourceQuality(0, false),
+      complete_since: null,
+      chunks_total: 0,
+      chunks_from_cache: 0,
+      recent_snapshot: null,
+    };
+  }
+  if (parts.length === 1) return parts[0]!;
+  const readable = parts.filter((part) => !sourceUnreadable(part));
+  if (readable.length === 0) {
+    const first = parts[0]!;
+    return { ...first, quality: { ...first.quality, exclusions: { ...first.quality.exclusions } } };
+  }
+  const byId = new Map<string, Sleep>();
+  for (const part of readable) {
+    for (const sleep of part.records) {
+      const current = byId.get(sleep.id);
+      if (current === undefined || Date.parse(sleep.updated_at) > Date.parse(current.updated_at)) {
+        byId.set(sleep.id, sleep);
+      }
+    }
+  }
+  const quality = sourceQuality(
+    readable.reduce((sum, part) => sum + part.quality.records_fetched, 0),
+    parts.some((part) => part.quality.truncated || sourceUnreadable(part))
+  );
+  for (const part of readable) {
+    for (const [reason, count] of Object.entries(part.quality.exclusions)) {
+      quality.exclusions[reason] = (quality.exclusions[reason] ?? 0) + count;
+    }
+  }
+  quality.cache_status = parts.every((part) => part.quality.cache_status === "hit")
+    ? "hit"
+    : "miss";
+  const fetched = readable.flatMap((part) =>
+    part.quality.fetched_at !== null ? [Date.parse(part.quality.fetched_at)] : []
+  );
+  quality.fetched_at = fetched.length > 0 ? new Date(Math.min(...fetched)).toISOString() : null;
+  const partialError = parts.find(
+    (part) => part.partialError !== undefined || part.error !== undefined
+  );
+  const error = partialError?.partialError ?? partialError?.error;
+  const snapshots = readable.flatMap((part) =>
+    part.recent_snapshot !== null ? [part.recent_snapshot] : []
+  );
+  return {
+    records: [...byId.values()],
+    quality,
+    complete_since: null,
+    chunks_total: parts.reduce((sum, part) => sum + part.chunks_total, 0),
+    chunks_from_cache: parts.reduce((sum, part) => sum + part.chunks_from_cache, 0),
+    recent_snapshot:
+      snapshots.length > 0
+        ? {
+            oldest: Math.min(...snapshots.map((snapshot) => snapshot.oldest)),
+            newest: Math.max(...snapshots.map((snapshot) => snapshot.newest)),
+          }
+        : null,
+    ...(error !== undefined ? { partialError: error } : {}),
+  };
+}
+
+/** True when sleeps can place days: read, and not cut short */
+export function sleepsUsable(sleeps: HistorySource<Sleep>): boolean {
+  return !sourceUnreadable(sleeps) && !sleeps.quality.truncated;
 }
 
 /** True when a history source could not be read at all */
@@ -360,27 +611,78 @@ export function mergeOlderHistory<T extends { id: string | number; updated_at: s
       ? new Date(Math.min(...fetched.map((value) => Date.parse(value)))).toISOString()
       : null;
   const partialError = newer.partialError ?? older.partialError;
+  const snapshots = [newer.recent_snapshot, older.recent_snapshot].filter(
+    (snapshot): snapshot is { oldest: number; newest: number } => snapshot !== null
+  );
   return {
     records: [...byId.values()],
     quality,
     complete_since: older.complete_since ?? new Date(olderEndMs).toISOString(),
     chunks_total: newer.chunks_total + older.chunks_total,
     chunks_from_cache: newer.chunks_from_cache + older.chunks_from_cache,
+    recent_snapshot:
+      snapshots.length > 0
+        ? {
+            oldest: Math.min(...snapshots.map((snapshot) => snapshot.oldest)),
+            newest: Math.max(...snapshots.map((snapshot) => snapshot.newest)),
+          }
+        : null,
     ...(partialError !== undefined ? { partialError } : {}),
   };
 }
 
+/** Inputs of {@link placeTrainingDays} */
+export interface PlaceTrainingDaysInput {
+  cycles: readonly Cycle[];
+  sleeps: readonly Sleep[];
+  /** Sleeps were read completely (see {@link sleepsUsable}); otherwise days come from cycles only */
+  sleepsAvailable: boolean;
+  today: string;
+  utcOffset: string;
+}
+
 /**
- * Place cycles on local days without sleeps. Partial first days (a cycle
- * starting exactly at local midnight, as WHOOP starts the first cycle of wear)
- * are still detected.
+ * Place cycles on local days exactly as get_calendar does: on the day their
+ * main sleep ended, so split nights and daytime main sleeps land on the same
+ * day in every tool. Without complete sleeps a cycle counts toward the local
+ * day 12 hours after its start (a cycle starting at local midnight without a
+ * main sleep is still a partial day, see isPartialDay).
  */
-export function placeTrainingDays(
-  cycles: readonly Cycle[],
-  today: string,
-  utcOffset: string
-): DayPlacement {
-  return placeDays({ cycles, sleeps: [], recoveries: [], sleepsAvailable: true, today, utcOffset });
+export function placeTrainingDays(input: PlaceTrainingDaysInput): DayPlacement {
+  return placeDays({
+    cycles: input.cycles,
+    sleeps: input.sleepsAvailable ? input.sleeps : [],
+    recoveries: [],
+    sleepsAvailable: input.sleepsAvailable,
+    today: input.today,
+    utcOffset: input.utcOffset,
+  });
+}
+
+/**
+ * Warnings like get_calendar's for days two cycles belong to, limited to days
+ * for which `include` is true.
+ */
+export function displacedCycleWarnings(
+  placement: DayPlacement,
+  include: (day: string) => boolean,
+  consequence: string
+): string[] {
+  const warnings: string[] = [];
+  for (const { day, shown, other } of placement.displaced) {
+    if (!include(day)) continue;
+    const strain = cycleStrain(other);
+    const strainText =
+      strain === null
+        ? ""
+        : ` (strain ${roundTo(strain, 1)}${isOpenCycle(other) ? " so far" : ""})`;
+    warnings.push(
+      `Two WHOOP cycles belong to ${day} (for example, a second main sleep ended that day). ` +
+        `The day uses the cycle that started ${localClock(shown.start, shown.timezone_offset)}; ` +
+        `the cycle that started ${localClock(other.start, other.timezone_offset)}${strainText} ${consequence}.`
+    );
+  }
+  return warnings;
 }
 
 // ---------------------------------------------------------------------------
@@ -404,25 +706,35 @@ export interface TrainingSession {
 /**
  * Normalize and place every workout. Workouts ending at or before their start
  * are counted as invalid_duration in `quality`. Sorted by start, then id.
+ *
+ * With `today`, a session of the open cycle that started on or before today
+ * is never placed after today (the open cycle's main sleep may not have ended
+ * or synced yet, so its day can still lie ahead).
  */
 export function buildSessions(
   workouts: readonly Workout[],
   placement: DayPlacement,
   cycles: readonly Cycle[],
-  quality: SourceQuality
+  quality: SourceQuality,
+  today?: string
 ): TrainingSession[] {
   const placements = assignWorkouts(workouts, placement, cycles);
   const sessions: TrainingSession[] = [];
   for (const workout of workouts) {
     const workoutPlacement = placements.get(workout.id) ?? null;
-    const summary = normalizeWorkout(
-      workout,
-      workoutPlacement,
-      workoutPlacement?.cycle ? isOpenCycle(workoutPlacement.cycle) : false
-    );
+    const inOpenCycle = workoutPlacement?.cycle ? isOpenCycle(workoutPlacement.cycle) : false;
+    let summary = normalizeWorkout(workout, workoutPlacement, inOpenCycle);
     if (!summary) {
       exclude(quality, "invalid_duration");
       continue;
+    }
+    if (
+      today !== undefined &&
+      inOpenCycle &&
+      summary.day > today &&
+      localDay(workout.start, workout.timezone_offset) <= today
+    ) {
+      summary = { ...summary, day: today };
     }
     const scored = summary.score_state === "SCORED" && !summary.flags.includes("not_scored");
     sessions.push({
@@ -922,6 +1234,31 @@ async function probeOlderHistory(
   }
 }
 
+/** Days from the first analysed day within which the window-mean seed's loads should lie */
+export const EWMA_SEED_SPAN_DAYS = 42;
+
+/**
+ * The daily loads (indexes into `loads`) the window-mean EWMA seed averages:
+ * the first CHRONIC_WINDOW_DAYS known loads, as long as the last of them lies
+ * within the first EWMA_SEED_SPAN_DAYS days; otherwise every known load of
+ * those days when there are at least CHRONIC_MIN_KNOWN_DAYS, else the first
+ * CHRONIC_WINDOW_DAYS known loads of the whole range. `known` counts every
+ * known load of the range.
+ */
+export function ewmaWindowSeed(loads: readonly (number | null)[]): {
+  indexes: number[];
+  known: number;
+} {
+  const knownIndexes = loads.flatMap((load, index) => (load !== null ? [index] : []));
+  const first = knownIndexes.slice(0, CHRONIC_WINDOW_DAYS);
+  if (first.length === CHRONIC_WINDOW_DAYS && first[first.length - 1]! >= EWMA_SEED_SPAN_DAYS) {
+    const early = knownIndexes.filter((index) => index < EWMA_SEED_SPAN_DAYS);
+    if (early.length >= CHRONIC_MIN_KNOWN_DAYS)
+      return { indexes: early, known: knownIndexes.length };
+  }
+  return { indexes: first, known: knownIndexes.length };
+}
+
 /** The newest placed day at or before `today` whose cycle is closed */
 function lastCompletedDay(placement: DayPlacement, today: string): string | null {
   let best: string | null = null;
@@ -1019,17 +1356,27 @@ export async function getTrainingLoad(
     utcOffset,
     nowMs
   );
-  let { cycles, workouts } = await loadTrainingSources(
+  const loaded = await loadTrainingSources(
     ctx,
     options,
     provisionalRange.startMs,
     provisionalRange.endMs
   );
+  let { cycles, workouts, sleeps, sleepsTargeted } = loaded;
+  warnings.push(...loaded.warnings);
   throwIfAllFailed([cycles, workouts]);
 
   const cyclesAvailable = !sourceUnreadable(cycles);
   const workoutsAvailable = !sourceUnreadable(workouts);
-  let placement = placeTrainingDays(cyclesAvailable ? cycles.records : [], today, utcOffset);
+  const place = (): DayPlacement =>
+    placeTrainingDays({
+      cycles: cyclesAvailable ? cycles.records : [],
+      sleeps: sleeps.records,
+      sleepsAvailable: sleepsUsable(sleeps),
+      today,
+      utcOffset,
+    });
+  let placement = place();
   let asOf = cyclesAvailable ? lastCompletedDay(placement, today) : null;
 
   // The strap was off for days: read the older history the window needs.
@@ -1045,9 +1392,14 @@ export async function getTrainingLoad(
       (!workoutsAvailable || completeBack(workouts))
     ) {
       const older = await loadTrainingSources(ctx, options, neededStartMs, loadedFromMs);
+      for (const warning of older.warnings) {
+        if (!warnings.includes(warning)) warnings.push(warning);
+      }
       cycles = mergeOlderHistory(cycles, older.cycles, loadedFromMs);
       if (workoutsAvailable) workouts = mergeOlderHistory(workouts, older.workouts, loadedFromMs);
-      placement = placeTrainingDays(cycles.records, today, utcOffset);
+      sleeps = mergeOlderHistory(sleeps, older.sleeps, loadedFromMs);
+      sleepsTargeted = sleepsTargeted || older.sleepsTargeted;
+      placement = place();
       asOf = lastCompletedDay(placement, today);
     }
   }
@@ -1063,12 +1415,18 @@ export async function getTrainingLoad(
     )
   );
 
+  const sleepsPlaced = cyclesAvailable && sleepsUsable(sleeps);
+  if (cyclesAvailable && !sleepsPlaced) warnings.push(SLEEP_PLACEMENT_WARNING);
+  if (sleepsPlaced && sleepsTargeted) notes.push(TARGETED_SLEEPS_NOTE);
+
   const cycleQuality = cycles.quality;
   const workoutQuality = workouts.quality;
+  const sleepQuality = sleeps.quality;
   const sessions = workoutsAvailable
-    ? buildSessions(workouts.records, placement, cycles.records, workoutQuality)
+    ? buildSessions(workouts.records, placement, cycles.records, workoutQuality, today)
     : [];
-  const truncated = cycles.quality.truncated || workouts.quality.truncated;
+  const truncated =
+    cycles.quality.truncated || workouts.quality.truncated || sleeps.quality.truncated;
 
   // --- Nothing to analyse -----------------------------------------------------------
 
@@ -1080,7 +1438,7 @@ export async function getTrainingLoad(
     evaluated_at: evaluatedAt,
     requested_period: requested,
     observed_period: observed,
-    sources: { cycles: cycleQuality, workouts: workoutQuality },
+    sources: { cycles: cycleQuality, workouts: workoutQuality, sleeps: sleepQuality },
     method_version: METHOD_VERSION,
     limitations: [...HISTORY_LIMITATIONS, ...LOAD_LIMITATIONS],
   });
@@ -1093,7 +1451,9 @@ export async function getTrainingLoad(
     cyclesAvailable && placement.newestCycle && isOpenCycle(placement.newestCycle)
       ? placement.newestCycle
       : null;
-  const openDay = openCycle ? (placement.dayOfCycle.get(openCycle.id) ?? null) : null;
+  // The open cycle's main sleep may not have ended or synced yet: never after today.
+  const openPlacedDay = openCycle ? (placement.dayOfCycle.get(openCycle.id) ?? null) : null;
+  const openDay = openPlacedDay !== null && openPlacedDay > today ? today : openPlacedDay;
   const openSessions = openCycle
     ? sessions.filter((session) => session.cycleId === openCycle.id)
     : [];
@@ -1136,11 +1496,18 @@ export async function getTrainingLoad(
     for (const [day, cycle] of placement.cycleByDay) {
       if (inRange(day)) placedIds.add(cycle.id);
     }
+    const displacedIds = new Set(placement.displaced.map((entry) => entry.other.id));
     const usedCycles: Cycle[] = [];
     for (const cycle of cycles.records) {
       const placed = placedIds.has(cycle.id);
       if (!placed && cycle.id !== openCycle?.id) {
-        exclude(cycleQuality, outsideReason);
+        const day = placement.dayOfCycle.get(cycle.id);
+        exclude(
+          cycleQuality,
+          displacedIds.has(cycle.id) && day !== undefined && inRange(day)
+            ? "displaced"
+            : outsideReason
+        );
         continue;
       }
       usedCycles.push(cycle);
@@ -1172,8 +1539,23 @@ export async function getTrainingLoad(
         }
       }
     }
+    // Main sleeps are used to place the cycles used; naps and other sleeps are not.
+    const usedCycleIds = new Set(usedCycles.map((cycle) => cycle.id));
+    const usedSleeps: Sleep[] = [];
+    if (sleepsPlaced) {
+      for (const sleep of sleeps.records) {
+        if (sleep.nap) exclude(sleepQuality, "nap");
+        else if (
+          usedCycleIds.has(sleep.cycle_id) &&
+          placement.mainSleepByCycle.get(sleep.cycle_id)?.id === sleep.id
+        ) {
+          usedSleeps.push(sleep);
+        } else exclude(sleepQuality, outsideReason);
+      }
+    }
     finishQuality(cycleQuality, usedCycles);
     finishQuality(workoutQuality, usedWorkouts);
+    finishQuality(sleepQuality, usedSleeps);
     return observed;
   };
 
@@ -1279,26 +1661,26 @@ export async function getTrainingLoad(
   let unknownCountedAsZero = 0;
   if (olderHistory) {
     ewmaStartIndex = 0;
-    const seedLoads = loads
-      .slice(0, CHRONIC_WINDOW_DAYS)
-      .filter((load): load is number => load !== null);
+    const seed = ewmaWindowSeed(loads);
     const seedMean =
-      seedLoads.length > 0
-        ? seedLoads.reduce((total, load) => total + load, 0) / seedLoads.length
+      seed.indexes.length > 0
+        ? seed.indexes.reduce((total, index) => total + loads[index]!, 0) / seed.indexes.length
         : 0;
     const atlSeries = ewmaSeries(loads, ATL_TAU_DAYS, seedMean);
     unknownCountedAsZero = atlSeries.unknown_counted_as_zero;
     atlSeries.values.forEach((value, index) => (atl[index] = value));
-    if (seedLoads.length >= CHRONIC_MIN_KNOWN_DAYS) {
+    if (seed.indexes.length >= CHRONIC_MIN_KNOWN_DAYS) {
       ewmaSeries(loads, CTL_TAU_DAYS, seedMean).values.forEach(
         (value, index) => (ctl[index] = value)
       );
+      const firstSeedDay = days[seed.indexes[0]!]!.date;
+      const lastSeedDay = days[seed.indexes[seed.indexes.length - 1]!]!.date;
       notes.push(
-        `WHOOP history continues before ${analysedFrom}, so ATL and CTL start there from the mean load of its first ${CHRONIC_WINDOW_DAYS} days (${seedLoads.length} known days) instead of 0.`
+        `WHOOP history continues before ${analysedFrom}, so ATL and CTL start there from the mean of its first ${seed.indexes.length} known daily loads (${firstSeedDay} to ${lastSeedDay}) instead of 0.`
       );
     } else {
       notes.push(
-        `WHOOP history continues before ${analysedFrom}, but only ${seedLoads.length} of its first ${CHRONIC_WINDOW_DAYS} days have a known load (${CHRONIC_MIN_KNOWN_DAYS} needed to seed CTL), so CTL and TSB are null.`
+        `WHOOP history continues before ${analysedFrom}, but only ${plural(seed.known, "day")} in the analysed range ${seed.known === 1 ? "has" : "have"} a known load (${CHRONIC_MIN_KNOWN_DAYS} needed to seed CTL), so CTL and TSB are null.`
       );
     }
   } else if (firstWornIndex !== -1) {
@@ -1527,6 +1909,13 @@ export async function getTrainingLoad(
       `${plural(fallbackSessions, "workout")} had no containing WHOOP cycle and ${fallbackSessions === 1 ? "was" : "were"} placed on ${fallbackSessions === 1 ? "its" : "their"} local start day; ${fallbackSessions === 1 ? "it counts" : "they count"} in weekly totals but not in the daily load of an unworn day.`
     );
   }
+  warnings.push(
+    ...displacedCycleWarnings(
+      placement,
+      (day) => (day >= seriesStart && day <= asOf) || day === openDay,
+      "is left out of that day's strain; its workouts count on that day"
+    )
+  );
   if (ratioNow === null && status === "available") {
     notes.push("The acute:chronic ratio is null: the 28-day mean is 0.");
   }

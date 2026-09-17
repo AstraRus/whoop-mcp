@@ -198,36 +198,64 @@ function isValidTokenShape(data: unknown): data is OAuthTokens {
 }
 
 /**
+ * The token file exists (or its path does) but this process cannot read it
+ * (EACCES, EPERM, EISDIR, ENOTDIR, EIO, ...). Thrown instead of returning null
+ * so callers never start a new WHOOP sign-in over a stored sign-in that may be
+ * valid. The message carries the home-redacted path and guidance only.
+ */
+export class TokenStoreReadError extends Error {
+  /** The Node.js error code, or "unknown" */
+  readonly code: string;
+
+  constructor(safePath: string, code: string) {
+    super(
+      `Cannot read the WHOOP token file ${safePath} (${code}). It exists, but this process cannot read it, so no new WHOOP sign-in was started. ` +
+        `Give this user ownership (for example chown 1000:1000 and chmod 600 when the container runs as node or with --user 1000), ` +
+        `set ${TOKEN_DIR_ENV} to a folder this user owns, or start the container as root so docker/entrypoint.sh prepares the folder.`
+    );
+    this.name = "TokenStoreReadError";
+    this.code = code;
+  }
+}
+
+/**
  * Load tokens from disk.
  *
  * Returns the parsed `OAuthTokens` if the file exists and contains valid JSON
  * with the correct shape. Returns `null` if the file is missing, contains
  * malformed JSON, or has an invalid shape. Logs the reason to stderr for
- * diagnostics.
+ * diagnostics (error code and home-redacted path only).
+ *
+ * @throws TokenStoreReadError when the file cannot be read for any reason
+ *   other than not existing.
  */
 export async function loadTokens(tokenDir?: string): Promise<OAuthTokens | null> {
   const filePath = tokenFilePath(tokenDir);
   const safePath = redactHomePath(filePath);
+  let raw: string;
   try {
-    const raw = await readFile(filePath, { encoding: "utf-8" });
+    raw = await readFile(filePath, { encoding: "utf-8" });
+  } catch (error: unknown) {
+    const code = errorCode(error) ?? "unknown";
+    if (code === "ENOENT") {
+      // Expected on first run
+      console.error(`No token file found at ${safePath}.`);
+      return null;
+    }
+    // Never error.message: it holds the absolute path, including the OS user name.
+    console.error(`Cannot read token file at ${safePath} (${code}).`);
+    throw new TokenStoreReadError(safePath, code);
+  }
+  try {
     const parsed: unknown = JSON.parse(raw);
     if (!isValidTokenShape(parsed)) {
       console.error(`Token file ${safePath} exists but has invalid shape — ignoring.`);
       return null;
     }
     return parsed;
-  } catch (error: unknown) {
-    // Differentiate "file not found" (expected on first run) from real errors
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      console.error(`No token file found at ${safePath}.`);
-    } else {
-      const message = error instanceof Error ? error.message : "unknown error";
-      console.error(`Failed to read token file at ${safePath}: ${message}`);
-    }
+  } catch {
+    // The parser message may quote file content (token values): never log it.
+    console.error(`Token file ${safePath} is not valid JSON — ignoring.`);
     return null;
   }
 }

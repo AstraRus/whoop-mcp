@@ -22,7 +22,14 @@
 import { z } from "zod";
 import type { WhoopClient } from "../api/client.js";
 import { describeWhoopError, WhoopApiError, WhoopAuthError } from "../api/client.js";
-import { createHistoryBudget, HISTORY_DEADLINE_MS, loadHistory } from "../api/history.js";
+import {
+  createHistoryBudget,
+  HISTORY_DEADLINE_MS,
+  loadConsistentHistory,
+  loadHistory,
+  type HistoryBudget,
+  type HistoryLoader,
+} from "../api/history.js";
 import {
   cycleRecordSchema,
   recoveryRecordSchema,
@@ -76,6 +83,9 @@ export const SYNC_RECOVERY_PATH = "/v2/recovery?limit=1";
 export const SYNC_WORKOUT_PATH = "/v2/activity/workout?limit=1";
 
 const CACHED = { cache: true, ttlMs: CYCLE_TTL_MS } as const;
+
+/** A re-read that bypasses and replaces the cached entry (shared with the resources and get_today). */
+const REFRESHED = { cache: true, ttlMs: CYCLE_TTL_MS, refresh: true } as const;
 
 // ---------------------------------------------------------------------------
 // Output contracts
@@ -285,6 +295,53 @@ function parseAll<T>(records: unknown[], schema: z.ZodType<T>): T[] {
   });
 }
 
+/** Loads the cycle history over `period` for one call, through the shared history cache. */
+function cycleHistoryLoader(
+  ctx: ToolContext,
+  period: { start: string; end: string },
+  budget: HistoryBudget
+): HistoryLoader<Cycle> {
+  return (extra) =>
+    loadHistory<Cycle>(ctx.client, "/v2/cycle", period, cycleRecordSchema, {
+      budget,
+      now: () => ctx.now(),
+      ...(ctx.historyCache !== undefined ? { cache: ctx.historyCache } : {}),
+      ...extra,
+    });
+}
+
+/**
+ * Whether the newest-cycle read and the recent-sleeps read disagree, as reads
+ * from different sides of a WHOOP sync do: the newest sleep does not belong to
+ * the newest cycle, or the newest main sleep ended after the open cycle started
+ * without belonging to it. Unreadable or empty reads never disagree.
+ */
+function latestReadsOutOfStep(cycleRead: Settled<unknown>, sleepRead: Settled<unknown>): boolean {
+  if (!cycleRead.ok || !sleepRead.ok) return false;
+  let cycles: CycleIdentity[];
+  let sleeps: SleepIdentity[];
+  try {
+    cycles = parseAll(pageRecords(cycleRead.value), cycleIdentitySchema);
+    sleeps = parseAll(pageRecords(sleepRead.value), sleepIdentitySchema);
+  } catch {
+    return false;
+  }
+  const newestCycle = [...cycles].sort((a, b) => Date.parse(b.start) - Date.parse(a.start))[0];
+  if (newestCycle === undefined || sleeps.length === 0) return false;
+  const newestSleep = [...sleeps].sort((a, b) => Date.parse(b.start) - Date.parse(a.start))[0]!;
+  if (newestSleep.cycle_id !== newestCycle.id) return true;
+  if (newestCycle.end !== null && newestCycle.end !== undefined) return false;
+  const cycleStartMs = Date.parse(newestCycle.start);
+  const newestMain = sleeps
+    .filter((sleep) => !sleep.nap)
+    .sort((a, b) => Date.parse(b.end) - Date.parse(a.end))[0];
+  return (
+    newestMain !== undefined &&
+    newestMain.cycle_id !== newestCycle.id &&
+    Date.parse(newestMain.end) > cycleStartMs
+  );
+}
+
 /** The older-history probe: whether WHOOP has a cycle starting before `endMs`. */
 async function probeOlderCycles(client: WhoopClient, endMs: number): Promise<boolean> {
   const query = new URLSearchParams({ end: iso(endMs), limit: "1" });
@@ -344,26 +401,39 @@ export async function getSyncStatus(ctx: ToolContext): Promise<SyncStatus> {
     OLDER_HISTORY_PROBE_GRID_MS;
   const budget = createHistoryBudget({ deadlineMs: ctx.startedAtMs + HISTORY_DEADLINE_MS });
 
-  const [offsetInfo, cycleRead, sleepRead, recoveryRead, workoutRead, history, probe] =
-    await Promise.all([
-      resolveUserUtcOffsetInfo(client),
-      settle(client.get<unknown>(SYNC_CYCLE_PATH, CACHED)),
-      settle(client.get<unknown>(SYNC_SLEEP_PATH, CACHED)),
-      settle(client.get<unknown>(SYNC_RECOVERY_PATH, CACHED)),
-      settle(client.get<unknown>(SYNC_WORKOUT_PATH, CACHED)),
-      loadHistory<Cycle>(
-        client,
-        "/v2/cycle",
-        { start: iso(historyStartMs), end: iso(nowMs) },
-        cycleRecordSchema,
-        {
-          budget,
-          now: () => ctx.now(),
-          ...(ctx.historyCache !== undefined ? { cache: ctx.historyCache } : {}),
-        }
-      ),
-      settle(probeOlderCycles(client, historyStartMs)),
+  const [
+    offsetInfo,
+    firstCycleRead,
+    firstSleepRead,
+    firstRecoveryRead,
+    workoutRead,
+    loaded,
+    probe,
+  ] = await Promise.all([
+    resolveUserUtcOffsetInfo(client),
+    settle(client.get<unknown>(SYNC_CYCLE_PATH, CACHED)),
+    settle(client.get<unknown>(SYNC_SLEEP_PATH, CACHED)),
+    settle(client.get<unknown>(SYNC_RECOVERY_PATH, CACHED)),
+    settle(client.get<unknown>(SYNC_WORKOUT_PATH, CACHED)),
+    loadConsistentHistory([
+      cycleHistoryLoader(ctx, { start: iso(historyStartMs), end: iso(nowMs) }, budget),
+    ]),
+    settle(probeOlderCycles(client, historyStartMs)),
+  ]);
+  const [history] = loaded.sources;
+  let cycleRead = firstCycleRead;
+  let sleepRead = firstSleepRead;
+  let recoveryRead = firstRecoveryRead;
+  // The newest cycle and the recent sleeps can come from caches filled on
+  // different sides of a WHOOP sync (or WHOOP can create a night's cycle a few
+  // seconds before its sleep): read them, and the newest recovery, once more.
+  if (latestReadsOutOfStep(cycleRead, sleepRead)) {
+    [cycleRead, sleepRead, recoveryRead] = await Promise.all([
+      settle(client.get<unknown>(SYNC_CYCLE_PATH, REFRESHED)),
+      settle(client.get<unknown>(SYNC_SLEEP_PATH, REFRESHED)),
+      settle(client.get<unknown>(SYNC_RECOVERY_PATH, REFRESHED)),
     ]);
+  }
   const offset = offsetInfo.offset;
   const reads: LatestReads = {
     cycle: cycleRead,
@@ -371,7 +441,7 @@ export async function getSyncStatus(ctx: ToolContext): Promise<SyncStatus> {
     recovery: recoveryRead,
     workout: workoutRead,
   };
-  const notes: string[] = [];
+  const notes: string[] = [...loaded.warnings];
 
   // --- Newest cycle ----------------------------------------------------------
   let cycleFailure: unknown;
@@ -641,23 +711,17 @@ export async function getAggregateSyncStatus(ctx: ToolContext): Promise<Aggregat
   const loadStartMs = weeks[0]!.startMs - DAY_MS;
   const budget = createHistoryBudget({ deadlineMs: ctx.startedAtMs + HISTORY_DEADLINE_MS });
 
-  const [history, probe] = await Promise.all([
-    loadHistory<Cycle>(
-      client,
-      "/v2/cycle",
-      { start: iso(loadStartMs), end: iso(windowEndMs) },
-      cycleRecordSchema,
-      {
-        budget,
-        now: () => ctx.now(),
-        ...(ctx.historyCache !== undefined ? { cache: ctx.historyCache } : {}),
-      }
-    ),
+  const [loaded, probe] = await Promise.all([
+    loadConsistentHistory([
+      cycleHistoryLoader(ctx, { start: iso(loadStartMs), end: iso(windowEndMs) }, budget),
+    ]),
     settle(probeOlderCycles(client, loadStartMs)),
   ]);
+  const [history] = loaded.sources;
 
   const notes: string[] = [
     "Aggregate mode reports only whole local weeks, released two days after they end; the latest records, sync times and request counts are not shown.",
+    ...loaded.warnings,
   ];
   const historyFailed =
     history.quality.status === "fetch_failed" || history.quality.status === "invalid";

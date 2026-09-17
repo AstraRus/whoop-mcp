@@ -66,7 +66,15 @@ import {
   sourceQuality,
 } from "./analytics-utils.js";
 import { lastReleasedWeeks, roundStep, type LocalWeek } from "./aggregate-window.js";
-import { addDays, assignWorkouts, fetchRangeForDays, mondayOf, placeDays } from "./day-model.js";
+import {
+  addDays,
+  assignWorkouts,
+  fetchRangeForDays,
+  isOpenCycle,
+  mondayOf,
+  placeDays,
+  type DayPlacement,
+} from "./day-model.js";
 import {
   AGGREGATE_METRIC_STEP,
   aggregateMetric,
@@ -76,6 +84,7 @@ import {
   type AggregateData,
   type AggregateMetricResult,
   type AnalyticsToolOptions,
+  isPartialDay,
 } from "./get-trend.js";
 import { mean, roundTo } from "./stats-utils.js";
 import {
@@ -439,6 +448,8 @@ interface PeriodSamples {
   sleepHours: number[];
   strain: number[];
   inProgressCycles: number;
+  /** Completed cycles on a day WHOOP covered only in part (the strap was put on that day) */
+  partialDays: number;
 }
 
 /**
@@ -467,21 +478,45 @@ function recoveryDay(
   return localDay(recovery.created_at, utcOffset);
 }
 
+/**
+ * Place one period's fetched cycles, sleeps and recoveries on local days as
+ * get_calendar does (shared by the strain samples and the training block).
+ */
+function placePeriod(load: PeriodLoad, now: Date, utcOffset: string): DayPlacement {
+  return placeDays({
+    cycles: load.cycle.records,
+    sleeps: load.sleep.records,
+    recoveries: load.recovery.records,
+    sleepsAvailable: !load.sleep.failed,
+    today: localDay(now.toISOString(), utcOffset),
+    utcOffset,
+  });
+}
+
 /** Attribute the fetched records to the period and extract metric samples */
 function collectSamples(
   period: ResolvedPeriod,
   load: PeriodLoad,
+  placement: DayPlacement,
   utcOffset: string
 ): PeriodSamples {
   const cycles = new Map(load.cycle.records.map((cycle) => [cycle.id, cycle]));
   const sleeps = new Map(load.sleep.records.map((sleep) => [sleep.id, sleep]));
 
+  // Strain: completed, scored cycles on the period's days, placed as
+  // get_calendar places them; a day WHOOP covered only in part is left out.
   const strain: number[] = [];
   let inProgressCycles = 0;
+  let partialDays = 0;
   for (const cycle of cycles.values()) {
-    if (!containsDay(period, cycleDay(cycle))) continue;
-    if (cycle.end === null || cycle.end === undefined) {
+    const day = placement.dayOfCycle.get(cycle.id) ?? cycleDay(cycle);
+    if (!containsDay(period, day)) continue;
+    if (isOpenCycle(cycle)) {
       inProgressCycles += 1;
+      continue;
+    }
+    if (isPartialDay(placement, day, cycle)) {
+      partialDays += 1;
       continue;
     }
     if (cycle.score_state === "SCORED" && cycle.score) strain.push(cycle.score.strain);
@@ -503,7 +538,7 @@ function collectSamples(
     if (record.score.user_calibrating) calibrating += 1;
   }
 
-  return { recovery, calibrating, sleepHours, strain, inProgressCycles };
+  return { recovery, calibrating, sleepHours, strain, inProgressCycles, partialDays };
 }
 
 // ---------------------------------------------------------------------------
@@ -675,10 +710,15 @@ export async function comparePeriods(
   const sources = [loadA, loadB].flatMap((load) => [load.recovery, load.sleep, load.cycle]);
   const firstFailure = sources.find((source) => source.failed);
   if (firstFailure && sources.every((source) => source.failed)) throw firstFailure.error;
-  const training = compareTraining(periodA, loadA, periodB, loadB, now, utcOffset);
+  const placementA = placePeriod(loadA, now, utcOffset);
+  const placementB = placePeriod(loadB, now, utcOffset);
+  const training = compareTraining(
+    { period: periodA, load: loadA, placement: placementA },
+    { period: periodB, load: loadB, placement: placementB }
+  );
 
-  const samplesA = collectSamples(periodA, loadA, utcOffset);
-  const samplesB = collectSamples(periodB, loadB, utcOffset);
+  const samplesA = collectSamples(periodA, loadA, placementA, utcOffset);
+  const samplesB = collectSamples(periodB, loadB, placementB, utcOffset);
 
   const recovery = compareSamples(samplesA.recovery, samplesB.recovery, 1);
   const sleep = compareSamples(samplesA.sleepHours, samplesB.sleepHours, 2);
@@ -756,6 +796,11 @@ export async function comparePeriods(
         `The current cycle in ${period.label} is still in progress, so its strain is not included yet.`
       );
     }
+    if (samples.partialDays > 0) {
+      notes.push(
+        `${capitalize(period.label)}: ${plural(samples.partialDays, "day", "days")} WHOOP covered only in part (the strap was put on that day) ${samples.partialDays === 1 ? "is" : "are"} left out of strain.`
+      );
+    }
   }
   notes.push(...training.notes);
 
@@ -815,13 +860,15 @@ interface TrainingTotals {
   fallbackWorkouts: number;
 }
 
+/** One period with its fetched records and their day placement */
+interface PlacedPeriod {
+  period: ResolvedPeriod;
+  load: PeriodLoad;
+  placement: DayPlacement;
+}
+
 /** Workout load on the worn local days of one period */
-function trainingTotals(
-  period: ResolvedPeriod,
-  load: PeriodLoad,
-  now: Date,
-  utcOffset: string
-): TrainingTotals {
+function trainingTotals({ period, load, placement }: PlacedPeriod): TrainingTotals {
   const totals: TrainingTotals = {
     sessions: 0,
     wornDays: 0,
@@ -834,14 +881,6 @@ function trainingTotals(
   };
   const { first_day: first, last_day: last } = period.summary;
   if (first === null || last === null) return totals;
-  const placement = placeDays({
-    cycles: load.cycle.records,
-    sleeps: load.sleep.records,
-    recoveries: load.recovery.records,
-    sleepsAvailable: !load.sleep.failed,
-    today: localDay(now.toISOString(), utcOffset),
-    utcOffset,
-  });
   const placed = assignWorkouts(load.workout.records, placement, load.cycle.records);
   const byDay = new Map<string, Workout[]>();
   for (const workout of load.workout.records) {
@@ -891,13 +930,11 @@ function percentChange(a: number | null, b: number | null): number | null {
  * workout or cycle stream of either period could not be loaded.
  */
 function compareTraining(
-  periodA: ResolvedPeriod,
-  loadA: PeriodLoad,
-  periodB: ResolvedPeriod,
-  loadB: PeriodLoad,
-  now: Date,
-  utcOffset: string
+  placedA: PlacedPeriod,
+  placedB: PlacedPeriod
 ): { value: TrainingComparison | null; notes: string[]; warnings: string[] } {
+  const { period: periodA, load: loadA } = placedA;
+  const { period: periodB, load: loadB } = placedB;
   const warnings: string[] = [];
   for (const [period, load] of [
     [periodA, loadA],
@@ -923,8 +960,8 @@ function compareTraining(
   if ([loadA, loadB].some((load) => load.workout.failed || load.cycle.failed))
     return { value: null, notes: [], warnings };
 
-  const totalsA = trainingTotals(periodA, loadA, now, utcOffset);
-  const totalsB = trainingTotals(periodB, loadB, now, utcOffset);
+  const totalsA = trainingTotals(placedA);
+  const totalsB = trainingTotals(placedB);
   const sufficient =
     totalsA.wornDays >= MIN_TRAINING_WORN_DAYS && totalsB.wornDays >= MIN_TRAINING_WORN_DAYS;
   const summary = (totals: TrainingTotals): TrainingPeriodSummary => ({

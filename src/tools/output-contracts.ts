@@ -153,7 +153,7 @@ const trend = z.object({
   statistics: z.object({
     mean: nullable,
     median: nullable,
-    std_dev: nullable,
+    std_dev: nullable.describe("Sample standard deviation (n-1)"),
     min: nullable,
     max: nullable,
   }),
@@ -282,7 +282,7 @@ const aggregateBand = z.object({
   sample_size: number,
   mean: number,
   median: number,
-  std_dev: number,
+  std_dev: number.describe("Sample standard deviation (n-1)"),
   p25: number,
   p50: number,
   p75: number,

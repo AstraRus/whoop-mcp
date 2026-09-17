@@ -20,6 +20,7 @@ import {
   getWorkoutContext,
   MIN_PRIOR_SESSIONS,
   MORNING_RECOVERY_NOTE,
+  OPEN_CYCLE_NOTE,
   SINGLE_OBSERVATION_NOTE,
   workoutContextInputSchema,
   workoutContextOutputSchema,
@@ -322,6 +323,14 @@ describe("liveShapedUser", () => {
     expect(output.notes.join(" ")).toMatch(/1 of 5 found/);
   });
 
+  it("says the open cycle has no sleep after the session yet, without claiming it does not exist", async () => {
+    const output = await run(live(), IDS.workouts.eveningRun);
+    expect(output.notes).toContain(OPEN_CYCLE_NOTE);
+    expect(output.notes.join(" ")).not.toMatch(/do(es)? not exist/);
+    // The cycle's sleep ended 06:58 local, 16.5 hours before 23:30: not stale.
+    expect(output.notes.join(" ")).not.toMatch(/not processed a newer one/);
+  });
+
   it("reports a missing recovery after the session as missing, not as an error", async () => {
     const options = live((fixture) => ({
       recoveries: fixture.recoveries.filter((recovery) => recovery.cycle_id !== IDS.cycles.open),
@@ -440,6 +449,117 @@ describe("liveShapedUser", () => {
       /started after local midnight on 2026-09-15 but counts toward 2026-09-14/
     );
     expect(output.after.gap_to_sleep_onset_hours).toBe(0.2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Open cycle before WHOOP processes the next sleep (timestamps of the owner's
+// account on 2026-09-15..17; ids and values are synthetic)
+// ---------------------------------------------------------------------------
+
+describe("open cycle while the next sleep is not processed", () => {
+  const RUN_ID = "b4e9f098-0000-4000-8000-000000000001";
+  const NIGHTS = [
+    // [cycle start = sleep onset, sleep end, cycle end]
+    ["2026-09-13T22:00:00.000Z", null, "2026-09-14T22:39:47.770Z"],
+    ["2026-09-14T22:39:47.770Z", "2026-09-15T05:59:33.530Z", "2026-09-15T21:13:31.460Z"],
+    // Closed at 2026-09-16T21:15:09.780Z in WHOOP once the next sleep synced; open before that.
+    ["2026-09-15T21:13:31.460Z", "2026-09-16T05:13:59.350Z", null],
+  ] as const;
+
+  function account(nowIso: string): Options {
+    const template = liveShapedUser();
+    const sleepTemplate = template.sleeps[0]!;
+    const recoveryTemplate = template.recoveries[0]!;
+    const cycles: Cycle[] = [];
+    const sleeps: Sleep[] = [];
+    const recoveries: Recovery[] = [];
+    NIGHTS.forEach(([start, sleepEnd, end], index) => {
+      const id = 88_001 + index;
+      cycles.push({
+        user_id: 1,
+        created_at: sleepEnd ?? start,
+        updated_at: end ?? sleepEnd ?? start,
+        score_state: "SCORED",
+        start,
+        end,
+        timezone_offset: OFFSET,
+        id,
+        score: { strain: 12, kilojoule: 9000, average_heart_rate: 75, max_heart_rate: 170 },
+      });
+      if (sleepEnd === null) return;
+      const sleepId = `5a1e0000-0000-4000-8000-00000000000${index}`;
+      sleeps.push({
+        ...sleepTemplate,
+        id: sleepId,
+        cycle_id: id,
+        user_id: 1,
+        start,
+        end: sleepEnd,
+        created_at: sleepEnd,
+        updated_at: sleepEnd,
+        timezone_offset: OFFSET,
+      });
+      recoveries.push({
+        ...recoveryTemplate,
+        cycle_id: id,
+        sleep_id: sleepId,
+        user_id: 1,
+        created_at: sleepEnd,
+        updated_at: sleepEnd,
+      });
+    });
+    const at = (localStart: string): { day: string; minute: number } => ({
+      day: localStart.slice(0, 10),
+      minute: Number(localStart.slice(11, 13)) * 60 + Number(localStart.slice(14, 16)),
+    });
+    const workouts = [
+      workoutOf({ ...at("2026-09-16T21:33"), minutes: 30, pace: 358, strain: 12.4 }, RUN_ID),
+      workoutOf({ ...at("2026-09-16T16:30"), minutes: 65, sport: "weightlifting_msk" }, "lift"),
+      workoutOf({ ...at("2026-09-16T08:16"), minutes: 19, sport: "walking" }, "walk"),
+      workoutOf({ ...at("2026-09-15T08:18"), minutes: 31, pace: 380 }, "earlier-run"),
+    ];
+    const now = new Date(nowIso);
+    return { cycles, sleeps, recoveries, workouts, now };
+  }
+
+  it("names the sleep WHOOP last processed when the open cycle is old (hidden next cycle, 07:45 local)", async () => {
+    const output = await run(account("2026-09-17T05:45:00.000Z"), RUN_ID);
+    expect(output.day).toMatchObject({ date: "2026-09-16", in_progress: true });
+    expect(output.after).toEqual({
+      status: "not_yet",
+      date: null,
+      gap_to_sleep_onset_hours: null,
+      sleep: null,
+      recovery: null,
+    });
+    const text = output.notes.join(" ");
+    expect(text).not.toMatch(/do(es)? not exist/);
+    expect(output.notes).toContain(OPEN_CYCLE_NOTE);
+    expect(output.notes).toContain(
+      "This cycle began with the sleep that ended 2026-09-16T07:13:59.350+02:00, about 25 hours ago, and WHOOP has not processed a newer one. If you have slept since then, WHOOP has not processed that sleep yet (or did not detect it); opening the WHOOP app to sync may help."
+    );
+  });
+
+  it("gives only the open-cycle note on the evening of the session (22:30 local)", async () => {
+    const output = await run(account("2026-09-16T20:30:00.000Z"), RUN_ID);
+    expect(output.after.status).toBe("not_yet");
+    expect(output.notes).toContain(OPEN_CYCLE_NOTE);
+    expect(output.notes.join(" ")).not.toMatch(/not processed a newer one|do(es)? not exist/);
+  });
+
+  it("dates the cycle start when the sleeps cannot be read", async () => {
+    const options = account("2026-09-17T05:45:00.000Z");
+    const output = await run(
+      {
+        ...options,
+        failures: [{ path: /^\/v2\/activity\/sleep/, error: new WhoopApiError(503, "x", {}) }],
+      },
+      RUN_ID
+    );
+    expect(output.notes).toContain(
+      "This cycle began 2026-09-15T23:13:31.460+02:00, about 33 hours ago, and WHOOP has not processed a newer one. If you have slept since then, WHOOP has not processed that sleep yet (or did not detect it); opening the WHOOP app to sync may help."
+    );
   });
 });
 

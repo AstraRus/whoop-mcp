@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -119,6 +119,22 @@ describe("whoop-ai-mcp revoke", () => {
   });
 
   describe("with --yes", () => {
+    it("prints the permission guidance, sends nothing and exits 1 when tokens.json cannot be read", async () => {
+      // A directory named tokens.json: reading it fails with EISDIR, like a
+      // root-owned file read by another user fails with EACCES.
+      await mkdir(join(tokenDir, "tokens.json"), { recursive: true });
+
+      expect(await runRevoke(["--yes"], { write })).toBe(1);
+
+      expect(requests).toEqual([]);
+      expect(text()).toContain("Cannot read the WHOOP token file");
+      expect(text()).toContain("(EISDIR)");
+      expect(text()).toContain("WHOOP_MCP_TOKEN_DIR");
+      expect(text()).toContain("Nothing was revoked.");
+      expect(text()).not.toContain("No usable WHOOP tokens");
+      expect((await stat(join(tokenDir, "tokens.json"))).isDirectory()).toBe(true);
+    });
+
     it("revokes with HTTP 204 and deletes tokens.json", async () => {
       await saveTokens(freshTokens());
 

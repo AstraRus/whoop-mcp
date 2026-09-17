@@ -192,7 +192,7 @@ export function registerPrompts(
     "weekly_health_review",
     {
       description:
-        "Comprehensive review of recovery, sleep, and workouts from a specified number of days. Provides insights into overall health trends.",
+        "Comprehensive review of recovery, sleep, and workouts from a specified number of days. Provides observations on overall health trends.",
       argsSchema: {
         days: z
           .string()
@@ -214,7 +214,7 @@ export function registerPrompts(
           `- Overall recovery direction (improving, declining, stable), or why there is not enough data yet to tell\n` +
           `- Sleep quality assessment and patterns\n` +
           `- Training load and strain summary\n` +
-          `- Actionable recommendations based on the data`,
+          `- What stands out compared with the user's own earlier days and baselines, as observations only (no advice or medical interpretation)`,
         ["data"]
       );
     }
@@ -245,10 +245,10 @@ export function registerPrompts(
           `If a note says one belongs to an earlier cycle, today's recovery or last night's sleep is not available yet: say so instead of reporting the older values as today's. ` +
           `If a resource is unavailable, or the cycle_ids differ without such a note, call **get_today**, which links sleep and recovery to the current cycle.\n\n` +
           `Provide a brief status update:\n` +
-          `- Today's recovery level (green/yellow/red) and what it means, marked provisional while WHOOP is calibrating, or that it is not available yet\n` +
+          `- Today's recovery score and WHOOP zone (green/yellow/red) with HRV and resting heart rate, marked provisional while WHOOP is calibrating, or that it is not available yet\n` +
           `- Last night's sleep quality, or that last night's sleep has not synced yet\n` +
           `- Today's strain so far\n` +
-          `- One actionable recommendation for today`,
+          `- Anything missing, provisional or not synced yet`,
         ["data"]
       )
   );

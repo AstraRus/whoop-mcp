@@ -258,38 +258,39 @@ Only `WHOOP_CLIENT_ID` and `WHOOP_CLIENT_SECRET` are needed for local use;
 validated variables stop the server at startup with a message naming the
 variable.
 
-| Variable                       | Default                                                | Description                                                                                                                                                                                                            |
-| ------------------------------ | ------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WHOOP_CLIENT_ID`              | required                                               | WHOOP Developer App client id. Also read by `setup`, `doctor` and `revoke`.                                                                                                                                            |
-| `WHOOP_CLIENT_SECRET`          | required                                               | WHOOP Developer App client secret. With webhooks enabled it also verifies webhook signatures.                                                                                                                          |
-| `WHOOP_CLIENT_SECRET_PREVIOUS` | unset                                                  | The previous client secret while it is being rotated: webhook deliveries signed with it are still accepted.                                                                                                            |
-| `WHOOP_REDIRECT_URI`           | `http://localhost:3000/callback`                       | OAuth redirect URI for the WHOOP sign-in; must be registered in the WHOOP app. A hosted first sign-in uses `https://<domain>/callback` ([runbook](docs/deploy-railway.md#4-first-whoop-sign-in-on-the-hosted-server)). |
-| `CALLBACK_HOST`                | `127.0.0.1`                                            | Interface the temporary sign-in callback server (port 3000) listens on.                                                                                                                                                |
-| `CALLBACK_TIMEOUT_MS`          | `120000`                                               | How long the sign-in waits for WHOOP's redirect.                                                                                                                                                                       |
-| `WHOOP_MCP_TOKEN_DIR`          | `~/.whoop-mcp` (container as root: `/root/.whoop-mcp`) | Absolute path of the folder holding `tokens.json` (0700 folder, 0600 file). A relative path is a startup error.                                                                                                        |
-| `WHOOP_MCP_RUN_AS_ROOT`        | unset                                                  | Container only: `1` makes [docker/entrypoint.sh](docker/entrypoint.sh) keep running as root instead of switching to the `node` user.                                                                                   |
-| `WHOOP_MCP_PRIVACY_MODE`       | `standard`                                             | `standard` or `aggregate` (see [Privacy modes](#privacy-modes)). Tool arguments cannot change it.                                                                                                                      |
-| `WHOOP_MCP_DISABLE_RESOURCES`  | unset                                                  | `1` registers no resources (including the guide).                                                                                                                                                                      |
-| `WHOOP_RATE_LIMIT_PER_MINUTE`  | `60`                                                   | WHOOP requests per minute the whole process allows itself, integer 10-95 (WHOOP's app limit is 100).                                                                                                                   |
-| `WHOOP_WEBHOOKS`               | unset                                                  | `1` enables `POST /webhooks/whoop` on the HTTP transport (needs `WHOOP_CLIENT_SECRET`).                                                                                                                                |
-| `MCP_TRANSPORT`                | `stdio` (container: `http`)                            | `stdio`, `http` or `both`.                                                                                                                                                                                             |
-| `MCP_AUTH_TOKEN`               | required for HTTP                                      | Static bearer token for `/mcp` and authenticated `/health`. Without `MCP_JWT_SECRET` it also derives the connector signing key.                                                                                        |
-| `MCP_PORT`                     | `3000`                                                 | HTTP port, integer 0-65535. Takes precedence over `PORT`.                                                                                                                                                              |
-| `PORT`                         | unset                                                  | HTTP port set by hosts such as Railway, used when `MCP_PORT` is unset.                                                                                                                                                 |
-| `MCP_HOST`                     | `0.0.0.0`                                              | HTTP listen interface.                                                                                                                                                                                                 |
-| `MCP_ALLOWED_ORIGINS`          | unset                                                  | Comma-separated CORS allowlist.                                                                                                                                                                                        |
-| `MCP_TRUST_PROXY`              | unset                                                  | `1` trusts one proxy hop (`X-Forwarded-For`) for client IPs in rate limits and logs. Set it behind Railway, Fly and similar proxies.                                                                                   |
-| `MCP_MAX_CONNECTIONS`          | `16`                                                   | MCP requests handled at once, integer 1-100; up to 32 more wait up to 5 s, then 503.                                                                                                                                   |
-| `LOG_LEVEL`                    | `info`                                                 | `debug`, `info`, `warn` or `error`.                                                                                                                                                                                    |
-| `LOG_FORMAT`                   | `json`                                                 | `json` (one object per line on stderr) or `pretty`.                                                                                                                                                                    |
-| `MCP_CONNECTOR_PASSWORD`       | unset                                                  | At least 12 characters. With `PUBLIC_URL` and `ALLOWED_REDIRECT_URIS` it mounts the OAuth 2.1 connector for claude.ai; it is the password typed on the authorize page.                                                 |
-| `PUBLIC_URL`                   | unset                                                  | The server's public `https://` origin: OAuth issuer and the resource `<PUBLIC_URL>/mcp`.                                                                                                                               |
-| `ALLOWED_REDIRECT_URIS`        | unset                                                  | Comma-separated exact-match OAuth redirect URIs, e.g. `https://claude.ai/api/mcp/auth_callback`.                                                                                                                       |
-| `MCP_JWT_SECRET`               | derived from `MCP_AUTH_TOKEN` (HKDF)                   | Connector signing key for access and refresh tokens and for registered client ids and secrets. Set it so rotating `MCP_AUTH_TOKEN` keeps claude.ai connected.                                                          |
-| `MCP_OAUTH_CLIENT_ID`          | `whoop-mcp-connector`                                  | Id of the connector's static public client (dynamic registration also works).                                                                                                                                          |
-| `RAILWAY_GIT_COMMIT_SHA`       | set by Railway                                         | Deployed commit; its first 12 characters appear as `commit` in authenticated `/health` and `get_sync_status`.                                                                                                          |
-| `SOURCE_COMMIT`                | unset                                                  | The same, for other hosts (used when `RAILWAY_GIT_COMMIT_SHA` is unset).                                                                                                                                               |
-| `APPDATA`                      | set by Windows                                         | `setup` finds the Claude Desktop config under it on Windows.                                                                                                                                                           |
+| Variable                       | Default                                                                                                                                                            | Description                                                                                                                                                                                                                                       |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WHOOP_CLIENT_ID`              | required                                                                                                                                                           | WHOOP Developer App client id. Also read by `setup`, `doctor` and `revoke`.                                                                                                                                                                       |
+| `WHOOP_CLIENT_SECRET`          | required                                                                                                                                                           | WHOOP Developer App client secret. With webhooks enabled it also verifies webhook signatures.                                                                                                                                                     |
+| `WHOOP_CLIENT_SECRET_PREVIOUS` | unset                                                                                                                                                              | The previous client secret while it is being rotated: webhook deliveries signed with it are still accepted.                                                                                                                                       |
+| `WHOOP_REDIRECT_URI`           | `http://localhost:3000/callback`                                                                                                                                   | OAuth redirect URI for the WHOOP sign-in; must be registered in the WHOOP app. A hosted first sign-in uses `https://<domain>/callback` ([runbook](docs/deploy-railway.md#4-first-whoop-sign-in-on-the-hosted-server)).                            |
+| `CALLBACK_HOST`                | `127.0.0.1`                                                                                                                                                        | Interface the temporary sign-in callback server (port 3000) listens on.                                                                                                                                                                           |
+| `CALLBACK_TIMEOUT_MS`          | `120000`                                                                                                                                                           | How long the sign-in waits for WHOOP's redirect.                                                                                                                                                                                                  |
+| `WHOOP_MCP_TOKEN_DIR`          | `~/.whoop-mcp`; container started as root: `$HOME/.whoop-mcp` (e.g. `/root/.whoop-mcp`, or `/home/node/.whoop-mcp` with `HOME=/home/node`), exported to the server | Absolute path of the folder holding `tokens.json` (0700 folder, 0600 file). A relative path is a startup error. In a container it must be the volume's mount path.                                                                                |
+| `HOME`                         | set by the container (`/root` for root)                                                                                                                            | Container entrypoint only: when `WHOOP_MCP_TOKEN_DIR` is unset the token folder is `$HOME/.whoop-mcp` (e.g. `/home/node/.whoop-mcp` on Railway with `HOME=/home/node`), exported to the server, which then runs as `node` with `HOME=/home/node`. |
+| `WHOOP_MCP_RUN_AS_ROOT`        | unset                                                                                                                                                              | Container only: `1` makes [docker/entrypoint.sh](docker/entrypoint.sh) keep running as root instead of switching to the `node` user.                                                                                                              |
+| `WHOOP_MCP_PRIVACY_MODE`       | `standard`                                                                                                                                                         | `standard` or `aggregate` (see [Privacy modes](#privacy-modes)). Tool arguments cannot change it.                                                                                                                                                 |
+| `WHOOP_MCP_DISABLE_RESOURCES`  | unset                                                                                                                                                              | `1` registers no resources (including the guide).                                                                                                                                                                                                 |
+| `WHOOP_RATE_LIMIT_PER_MINUTE`  | `60`                                                                                                                                                               | WHOOP requests per minute the whole process allows itself, integer 10-95 (WHOOP's app limit is 100).                                                                                                                                              |
+| `WHOOP_WEBHOOKS`               | unset                                                                                                                                                              | `1` enables `POST /webhooks/whoop` on the HTTP transport (needs `WHOOP_CLIENT_SECRET`).                                                                                                                                                           |
+| `MCP_TRANSPORT`                | `stdio` (container: `http`)                                                                                                                                        | `stdio`, `http` or `both`.                                                                                                                                                                                                                        |
+| `MCP_AUTH_TOKEN`               | required for HTTP                                                                                                                                                  | Static bearer token for `/mcp` and authenticated `/health`. Without `MCP_JWT_SECRET` it also derives the connector signing key.                                                                                                                   |
+| `MCP_PORT`                     | `3000`                                                                                                                                                             | HTTP port, integer 0-65535. Takes precedence over `PORT`.                                                                                                                                                                                         |
+| `PORT`                         | unset                                                                                                                                                              | HTTP port set by hosts such as Railway, used when `MCP_PORT` is unset.                                                                                                                                                                            |
+| `MCP_HOST`                     | `0.0.0.0`                                                                                                                                                          | HTTP listen interface.                                                                                                                                                                                                                            |
+| `MCP_ALLOWED_ORIGINS`          | unset                                                                                                                                                              | Comma-separated CORS allowlist.                                                                                                                                                                                                                   |
+| `MCP_TRUST_PROXY`              | unset                                                                                                                                                              | `1` trusts one proxy hop: the client IP for rate limits, the auth-failure throttle and logs is the rightmost `X-Forwarded-For` entry. Set it behind Railway, Fly and similar proxies.                                                             |
+| `MCP_MAX_CONNECTIONS`          | `16`                                                                                                                                                               | MCP requests handled at once, integer 1-100; up to 32 more wait up to 5 s, then 503.                                                                                                                                                              |
+| `LOG_LEVEL`                    | `info`                                                                                                                                                             | `debug`, `info`, `warn` or `error`.                                                                                                                                                                                                               |
+| `LOG_FORMAT`                   | `json`                                                                                                                                                             | `json` (one object per line on stderr) or `pretty`.                                                                                                                                                                                               |
+| `MCP_CONNECTOR_PASSWORD`       | unset                                                                                                                                                              | At least 12 characters. With `PUBLIC_URL` and `ALLOWED_REDIRECT_URIS` it mounts the OAuth 2.1 connector for claude.ai; it is the password typed on the authorize page.                                                                            |
+| `PUBLIC_URL`                   | unset                                                                                                                                                              | The server's public `https://` origin: OAuth issuer and the resource `<PUBLIC_URL>/mcp`.                                                                                                                                                          |
+| `ALLOWED_REDIRECT_URIS`        | unset                                                                                                                                                              | Comma-separated exact-match OAuth redirect URIs, e.g. `https://claude.ai/api/mcp/auth_callback`.                                                                                                                                                  |
+| `MCP_JWT_SECRET`               | derived from `MCP_AUTH_TOKEN` (HKDF)                                                                                                                               | Connector signing key for access and refresh tokens and for registered client ids and secrets. Set it so rotating `MCP_AUTH_TOKEN` keeps claude.ai connected.                                                                                     |
+| `MCP_OAUTH_CLIENT_ID`          | `whoop-mcp-connector`                                                                                                                                              | Id of the connector's static public client (dynamic registration also works).                                                                                                                                                                     |
+| `RAILWAY_GIT_COMMIT_SHA`       | set by Railway                                                                                                                                                     | Deployed commit; its first 12 characters appear as `commit` in authenticated `/health` and `get_sync_status`.                                                                                                                                     |
+| `SOURCE_COMMIT`                | unset                                                                                                                                                              | The same, for other hosts (used when `RAILWAY_GIT_COMMIT_SHA` is unset).                                                                                                                                                                          |
+| `APPDATA`                      | set by Windows                                                                                                                                                     | `setup` finds the Claude Desktop config under it on Windows.                                                                                                                                                                                      |
 
 ### Creating a WHOOP Developer App
 
@@ -399,7 +400,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** `status` (`complete`, `in_progress`, `no_cycle_yet`, `records_without_cycle`, `no_data`), `cycle` (start/end, `cycle_hours`, day strain, energy, heart rate, `partial_first_day`), `recovery` (score, zone, HRV, RHR, SpO2, skin temperature, `calibrating`, `held_back`), `sleep` (stages, shares, efficiency, performance, consistency, WHOOP sleep need components, `asleep_minus_need_hours`), `naps`, `workouts` (zones, TRIMP, GPS pace; at most 25) with `workout_totals`, `previous_day`, `next_morning` recovery and an optional `timeline` (at most 60 events).
 
-**Missing data:** after local midnight and before the next sleep syncs, today is `no_cycle_yet` and its strain still counts toward the previous day. A recovery is held back while its sleep is still being scored. Workouts after midnight before the next sleep appear on the earlier day. `next_morning.status` is `available`, `pending`, `not_yet`, `missing` or `unavailable`. Energy covers the whole cycle.
+**Missing data:** after local midnight and before the next sleep syncs, today is `no_cycle_yet` and its strain still counts toward the previous day. A recovery is held back while its sleep is still being scored. Workouts after midnight before the next sleep appear on the earlier day. On the first day of wear WHOOP starts the first cycle at local midnight, and the timeline labels that start as such instead of as sleep onset. `next_morning.status` is `available`, `pending`, `not_yet`, `missing` or `unavailable`. Energy covers the whole cycle.
 
 **WHOOP calls:** cycles, sleeps, recoveries and workouts from two days before to two days after the day (history loader); `/v2/cycle/{id}` with `cycle_id`.
 
@@ -443,7 +444,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Missing data:** values that cannot be computed are null with the reason in notes; workout totals are null for a week without any WHOOP data and 0 for a worn week without workouts. The recovery trend needs 4 scored days. Calibrating recoveries are included and flagged. A workout counts on the day of the cycle containing its start (after-midnight workouts count toward Sunday of the earlier week); without a containing cycle it uses its local start day, noted.
 
-**Aggregate mode:** only released weeks (two days after they end), each average from at least 3 samples, calibrating recoveries not used, no min/max, rounded.
+**Aggregate mode:** only released weeks (two days after they end), each average from at least 3 samples, calibrating recoveries not used, no min/max, rounded (workout `total_strain` to 1 and `total_calories_kj` to 100).
 
 **WHOOP calls:** cycles, sleeps, recoveries and workouts from two days before Monday to two days after Sunday.
 
@@ -455,7 +456,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Inputs:** `period_a_start`, `period_a_end`, `period_b_start`, `period_b_end` (ISO dates or date-times; periods of up to 90 days that must not overlap).
 
-**Returns:** `period_a`/`period_b` with the local days counted, `recovery`, `sleep` (hours asleep) and `strain` (completed cycles) averages with counts, `change_pct` and `direction`, and `training` (sessions, sessions per week, workout minutes and Edwards TRIMP per worn day, with direction from TRIMP).
+**Returns:** `period_a`/`period_b` with the local days counted, `recovery`, `sleep` (hours asleep) and `strain` (completed cycles, without the partial first day of wear) averages with counts, `change_pct` and `direction`, and `training` (sessions, sessions per week, workout minutes and Edwards TRIMP per worn day, with direction from TRIMP).
 
 **Missing data:** with fewer than 3 scored days in either period, `change_pct` is null and `direction` is `insufficient_data`. Training means need 7 worn days in both periods; `training` is null when workouts could not be loaded. A local day counts in the period holding most of it.
 
@@ -473,7 +474,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** values oldest first with local dates, `statistics`, `trend` (`slope` per day, `change`, `direction` improving/declining when the metric has a better direction, `confidence` from R² capped by sample size), `anomalies`, `notes`.
 
-**Missing data:** fewer than 4 points gives `insufficient_data` with null trend fields. `sleep_efficiency`, `rem_share`, `deep_share`, `disturbances_per_hour` and `sleep_debt` skip low-data-coverage nights; `sleep_consistency` skips WHOOP's 0 while calibrating; `spo2` and `skin_temp` need WHOOP 4.0 or later.
+**Missing data:** fewer than 4 points gives `insufficient_data` with null trend fields. `sleep_efficiency`, `rem_share`, `deep_share`, `disturbances_per_hour` and `sleep_debt` skip low-data-coverage nights; `sleep_consistency` skips WHOOP's 0 while calibrating; `spo2` and `skin_temp` need WHOOP 4.0 or later. `strain` leaves out the open cycle and the partial first day of wear. `statistics.std_dev` is the sample standard deviation (n-1).
 
 **Aggregate mode:** `days` rounds up to 1, 2, 4, 8 or 13 released weeks; only sample size, mean, standard deviation and the trend.
 
@@ -487,7 +488,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Inputs:** `baseline_days` (14-180, default 30).
 
-**Returns:** per metric (HRV, RHR, respiratory rate, hours asleep, recovery, SpO2, skin temperature, sleep efficiency, disturbances per hour, REM share, deep share) a band with sample size, mean, median, standard deviation, percentiles and the latest observation's percentile; `metric_status` per metric; `period`.
+**Returns:** per metric (HRV, RHR, respiratory rate, hours asleep, recovery, SpO2, skin temperature, sleep efficiency, disturbances per hour, REM share, deep share) a band with sample size, mean, median, sample standard deviation (n-1), percentiles and the latest observation's percentile; `metric_status` per metric; `period`.
 
 **Missing data:** the latest observation and today are excluded, so `baseline_days + 2` days are read. Each band needs 14 earlier values; until then `metric_status` is `calibrating`, `insufficient_data`, `not_reported` or `unavailable` with counts. Calibrating recoveries are not used.
 
@@ -505,7 +506,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** `nights` (asleep hours against need excluding debt, deficit), `total_debt_hours` (sum of deficits, not outstanding debt), `avg_nightly_debt_hours`, `standing_debt_hours` with its date, `consistency` (bedtime and wake-time spread, social jetlag), `status`, `period`, `notes`.
 
-**Missing data:** totals and consistency need 3 scored main sleeps; `status` `unavailable` means sleeps could not be read. At most 30 nights are listed (`output_capped`).
+**Missing data:** totals and consistency need 3 scored main sleeps; `consistency.social_jetlag_minutes` also needs 2 weekday and 2 weekend nights (3 and 3 in aggregate mode), otherwise it is null with a note. `status` `unavailable` means sleeps could not be read. At most 30 nights are listed (`output_capped`).
 
 **Aggregate mode:** 2, 4, 8 or 12 released weeks; no nights, standing debt or summary.
 
@@ -519,13 +520,13 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Inputs:** `load_metric` (`trimp` default, `day_strain`, `workout_minutes`, `workout_kj`); `days` (14-180, default 42).
 
-**Returns:** `days` series ending at the last completed WHOOP day (worn, partial, in progress, sessions, minutes, TRIMP, kJ, day strain, load), `acute_chronic` (7-day and 28-day means, ratio, `available_from_day`), `ewma` (ATL, CTL, TSB) with `ewma_seed`, Foster `monotony`, local ISO `weeks` with week-over-week change, `load_by_sport_28d`, `today_so_far`, `history`, `status`.
+**Returns:** `days` series ending at the last completed WHOOP day (worn, partial, in progress, sessions, minutes, TRIMP, kJ, day strain, load), `acute_chronic` (7-day and 28-day means, ratio, `available_from_day`), `ewma` (ATL, CTL, TSB) seeded from the mean of the first 28 known daily loads (`ewma_seed`), Foster `monotony`, local ISO `weeks` with week-over-week change, `load_by_sport_28d`, `today_so_far`, `history`, `status`.
 
-**Missing data:** worn days without workouts count as 0 and unworn days as null. Until 28 worn days exist the status is `insufficient_history` with `available_from_day`. TRIMP is null for a day with a session below 90% recorded. Descriptive only: no risk zones or advice.
+**Missing data:** days are placed as in `get_calendar`, including nights split across two cycles. Worn days without workouts count as 0 and unworn days as null. Until 28 worn days exist the status is `insufficient_history` with `available_from_day`. TRIMP is null for a day with a session below 90% recorded. Descriptive only: no risk zones or advice.
 
 **Aggregate mode:** `weeks` (4-26, default 8) of released weeks with rounded weekly sessions, minutes, TRIMP, kJ and mean day strain, week-over-week change and a weekly acute:chronic ratio; a week's workout values need 3 scored sessions and its day strain 3 completed cycles.
 
-**WHOOP calls:** cycles and workouts from `days + 44` days before the last completed day, plus one older-cycle probe; aggregate mode also reads sleeps to place days.
+**WHOOP calls:** cycles, sleeps (to place days) and workouts from `days + 44` days before the last completed day, plus one older-cycle probe.
 
 ---
 
@@ -539,9 +540,9 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Missing data:** means, medians and maxima need 3 sessions (`few_sessions`); sessions below 90% recorded are left out of heart-rate values; unscored sessions are excluded and counted. An unknown sport lists the available ones.
 
-**Aggregate mode:** `block_offset` (1-26) selects a released 4-week block; sports with fewer than 3 sessions are pooled as `other`; totals that could isolate fewer than 3 sessions by subtraction are withheld; no extremes, medians, efficiency or time of day.
+**Aggregate mode:** `block_offset` (1-26) selects a released 4-week block; sports with fewer than 3 sessions are pooled as `other` (a `sport` filter answers a pooled sport exactly like one that does not exist); totals that could isolate fewer than 3 sessions by subtraction are withheld; no extremes, medians, efficiency or time of day.
 
-**WHOOP calls:** workouts and cycles over the window (aggregate mode: sleeps too).
+**WHOOP calls:** workouts, cycles and sleeps (to place sessions on days, as `get_calendar` does) over the window; for windows too long to read every sleep within the request budget (about 300 days and more), sleeps only around the cycles whose day depends on them, with a note.
 
 ---
 
@@ -553,9 +554,9 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** `workouts` (day vs `local_date`, duration, recorded fraction, strain, kJ/kcal, heart rate, zone minutes, TRIMP, GPS distance and elapsed pace, flags), `totals` over every match, `total_matching`, `returned`, `available_sports`.
 
-**Missing data:** unscored sessions are hidden unless `include_unscored` (then with null score fields). `pace` sorting lists only plausible GPS sessions. Missing values sort last.
+**Missing data:** unscored sessions are hidden unless `include_unscored` (then with null score fields). `pace` sorting lists only plausible GPS sessions. Missing values sort last. Sessions are placed on days with cycles and sleeps, as in `get_calendar`.
 
-**WHOOP calls:** workouts and cycles over the window.
+**WHOOP calls:** `/v2/activity/workout`, `/v2/cycle` and `/v2/activity/sleep` over the window.
 
 ---
 
@@ -583,7 +584,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Missing data:** sports with fewer than 3 scored sessions are `few_sessions` (no previous best). Pace is whole-session elapsed pace, not splits; implausible GPS is excluded. Records are never called all-time unless `history_complete` is true.
 
-**WHOOP calls:** workouts and cycles over the window, one older-workout probe and `/v2/user/measurement/body` (cached 1 hour).
+**WHOOP calls:** `/v2/activity/workout`, `/v2/cycle` and `/v2/activity/sleep` (to place sessions on days) over the window, one older-workout probe and `/v2/user/measurement/body` (cached 1 hour).
 
 ---
 
@@ -595,7 +596,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** distributions (n, mean, median, quartiles, SD) of hours asleep and in bed, efficiency, performance, consistency, disturbances per hour, sleep cycles and respiratory rate; time-weighted stage shares of time asleep; means of WHOOP's sleep-need components; bedtime and wake-time consistency; naps separately; one row per night (newest 31); `pending_dates` and `excluded` counts.
 
-**Missing data:** only scored nights count; with fewer than 3 the status is `insufficient_data` and statistics are null. Low-data-coverage nights are flagged and left out of duration and stage statistics.
+**Missing data:** only scored nights count; with fewer than 3 the status is `insufficient_data` and statistics are null. Low-data-coverage nights are flagged and left out of duration and stage statistics. `naps.total_asleep_hours` is null when any nap in the window is unscored.
 
 **WHOOP calls:** sleeps and recoveries over the window.
 
@@ -637,7 +638,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** `findings` (Spearman or Mann-Whitney tests with effective sample size, 95% CI, p, Benjamini-Hochberg q, strength, `consistent`, `partly_by_construction`, a past-tense sentence), `not_tested_summary` and `not_tested`, `buckets`, `same_day` (day strain by morning recovery zone), `evening_training`, `tags`, `excluded_pairs`, `status`.
 
-**Missing data:** each test needs 14 pairs of nights; the status is `calibrating` or `insufficient_data` until then. `consistent` needs a CI excluding 0 (binary: p ≤ 0.05) and q ≤ 0.10. Associations only, not causes and not medical advice.
+**Missing data:** each test needs 14 pairs of nights; the status is `calibrating` or `insufficient_data` until then. `consistent` needs a CI excluding 0 (binary: p ≤ 0.05) and q ≤ 0.10. `partly_by_construction` marks pairs WHOOP derives from shared inputs, including `prior_day_strain` and `nap_before` with `sleep_performance` (sleep performance is measured against a need that strain raises and naps lower). `last_workout_to_bed_min` exists only on days with a workout: with too few such nights it is `too_few_pairs`, not `data_unavailable`. Associations only, not causes and not medical advice.
 
 **WHOOP calls:** cycles, sleeps, recoveries and workouts over `days + 2` days.
 
@@ -651,7 +652,7 @@ of 60 pages and 20 seconds (see [Rate limits](#rate-limits-and-history-loading))
 
 **Returns:** per dataset `columns`, `row_count` and `csv` text or `rows`; daily rows placed like `get_calendar` (cycle, strain, energy, recovery, HRV, RHR, SpO2, skin temperature, sleep stages, performance, efficiency, consistency, sleep need, nap and workout counts), workout rows on their cycle day, sleep rows by wake day; `first_included_day` and `output_capped`.
 
-**Missing data:** unknown values are empty cells. Output is capped at 60,000 characters keeping the newest days; `first_included_day` and a note give the start for the next export. At most 180 days per call. Cells starting with `=`, `+`, `-`, `@`, tab or CR get a leading apostrophe.
+**Missing data:** unknown values are empty cells. Output is capped at 60,000 characters keeping the newest days; `first_included_day` and a note give the start for the next export. At most 180 days per call. Cells starting with `=`, `+`, `-`, `@`, tab or CR get a leading apostrophe, except cells that are exactly a UTC offset such as `+02:00`.
 
 **WHOOP calls:** cycles, sleeps, recoveries and workouts over the range plus two days on each side.
 
@@ -765,33 +766,33 @@ Resources give ambient context without a tool call. They are standard-mode only,
 except the guide, which exists in both modes. `WHOOP_MCP_DISABLE_RESOURCES=1`
 removes all of them.
 
-| Resource URI                      | Description                                                                                                                             | Cache |
-| --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----- |
-| `whoop://v2/user/recovery/latest` | Most recent recovery; notes say when it belongs to an earlier cycle, is not scored yet or WHOOP is calibrating                          | 2 min |
-| `whoop://v2/user/sleep/latest`    | Most recent main sleep; notes say when it belongs to an earlier cycle                                                                   | 2 min |
-| `whoop://v2/user/cycle/latest`    | Current or most recent cycle (end null while in progress)                                                                               | 2 min |
-| `whoop://v2/user/workout/latest`  | Most recent finished workout as a normalized summary placed on its cycle day, with notes                                                | 2 min |
-| `whoop://v2/user/profile`         | Profile (name, email)                                                                                                                   | 1 hr  |
-| `whoop://server/guide`            | Markdown guide: which tool for which question, days and cycles, data quality, privacy modes, rate limits, what the API does not provide | —     |
+| Resource URI                      | Description                                                                                                                                                 | Cache |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `whoop://v2/user/recovery/latest` | Most recent recovery; notes say when it belongs to an earlier cycle, is not scored yet or WHOOP is calibrating                                              | 2 min |
+| `whoop://v2/user/sleep/latest`    | Most recent main sleep; notes say when it belongs to an earlier cycle                                                                                       | 2 min |
+| `whoop://v2/user/cycle/latest`    | Current or most recent cycle (end null while in progress)                                                                                                   | 2 min |
+| `whoop://v2/user/workout/latest`  | Most recent finished workout as a normalized summary placed on its day (the wake day of its cycle's main sleep; may read the cached sleep list), with notes | 2 min |
+| `whoop://v2/user/profile`         | Profile (name, email)                                                                                                                                       | 1 hr  |
+| `whoop://server/guide`            | Markdown guide: which tool for which question, days and cycles, data quality, privacy modes, rate limits, what the API does not provide                     | —     |
 
 ## Prompts
 
-| Prompt                 | Arguments                                                      | What it does                                                                                                         |
-| ---------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `morning_briefing`     | —                                                              | `get_today`, the past 7 days of `get_recovery_analysis`, and `get_day`/`get_sync_status` only when needed            |
-| `evening_briefing`     | `wake_time` (`HH:MM`)                                          | `get_today`, `get_day` today and `get_sleep_need` (with the wake time when valid)                                    |
-| `day_review`           | `date` (`YYYY-MM-DD`, `today`, `yesterday`; default yesterday) | `get_day` with the surrounding 7 days from `get_calendar`                                                            |
-| `weekly_health_review` | `days` (1-90, default 7)                                       | Calendar, weekly summary, baselines and sport breakdown for the period                                               |
-| `sleep_analysis`       | —                                                              | `get_sleep_analysis` and `get_sleep_debt` over 14 days and two sleep trends, against WHOOP's own nightly need        |
-| `recovery_trend`       | —                                                              | `get_recovery_analysis` over 30 days, baselines and recovery, HRV and RHR trends                                     |
-| `recovery_drivers`     | `outcome`, `focus` (allowlisted)                               | `get_recovery_drivers`, reporting status and counts first and only consistent findings with n and CI                 |
-| `workout_recap`        | —                                                              | Sport breakdown over 14 days, training load over 28 days and the workout log                                         |
-| `session_debrief`      | `workout_id`                                                   | `get_workout_context` for the id, or for the newest workout from `get_workout_log`                                   |
-| `training_load_check`  | —                                                              | `get_training_load` and 28 days of `get_sport_breakdown`, described neutrally                                        |
-| `health_check`         | —                                                              | The latest recovery, sleep and cycle resources with `get_today` as fallback                                          |
-| `data_status_check`    | —                                                              | `get_sync_status` and a plain explanation                                                                            |
-| `export_my_data`       | `days` (1-180, default 30), `format` (`csv`/`json`)            | `export_health_data`, stating period, row counts, cap and truncation                                                 |
-| `aggregate_overview`   | `weeks` (2-13, default 4)                                      | Aggregate mode only: the latest released week, trends, the last two released weeks compared and weekly training load |
+| Prompt                 | Arguments                                                      | What it does                                                                                                               |
+| ---------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `morning_briefing`     | —                                                              | `get_today`, the past 7 days of `get_recovery_analysis`, and `get_day`/`get_sync_status` only when needed                  |
+| `evening_briefing`     | `wake_time` (`HH:MM`)                                          | `get_today`, `get_day` today and `get_sleep_need` (with the wake time when valid)                                          |
+| `day_review`           | `date` (`YYYY-MM-DD`, `today`, `yesterday`; default yesterday) | `get_day` with the surrounding 7 days from `get_calendar`                                                                  |
+| `weekly_health_review` | `days` (1-90, default 7)                                       | Calendar, weekly summary, baselines and sport breakdown for the period, reported as observations, not recommendations      |
+| `sleep_analysis`       | —                                                              | `get_sleep_analysis` and `get_sleep_debt` over 14 days and two sleep trends, against WHOOP's own nightly need              |
+| `recovery_trend`       | —                                                              | `get_recovery_analysis` over 30 days, baselines and recovery, HRV and RHR trends                                           |
+| `recovery_drivers`     | `outcome`, `focus` (allowlisted)                               | `get_recovery_drivers`, reporting status and counts first and only consistent findings with n and CI                       |
+| `workout_recap`        | —                                                              | Sport breakdown over 14 days, training load over 28 days and the workout log                                               |
+| `session_debrief`      | `workout_id`                                                   | `get_workout_context` for the id, or for the newest workout from `get_workout_log`                                         |
+| `training_load_check`  | —                                                              | `get_training_load` and 28 days of `get_sport_breakdown`, described neutrally                                              |
+| `health_check`         | —                                                              | The latest recovery, sleep and cycle resources with `get_today` as fallback, reported as observations, not recommendations |
+| `data_status_check`    | —                                                              | `get_sync_status` and a plain explanation                                                                                  |
+| `export_my_data`       | `days` (1-180, default 30), `format` (`csv`/`json`)            | `export_health_data`, stating period, row counts, cap and truncation                                                       |
+| `aggregate_overview`   | `weeks` (2-13, default 4)                                      | Aggregate mode only: the latest released week, trends, the last two released weeks compared and weekly training load       |
 
 Prompt arguments are free text in MCP; the server writes them into a prompt
 only after an allowlist, pattern or clamp check (anything else falls back to the
@@ -817,6 +818,12 @@ guidance on strain, TRIMP, load ratios, associations and truncated history.
 
 Aggregate mode minimizes disclosure; it is not anonymization and still sends
 health aggregates to the assistant provider.
+
+Released values are recomputed from WHOOP on every call. An edit in WHOOP to a
+record in an already released week (a deleted workout, a changed sleep)
+changes that week's released values on the next call, and comparing outputs
+from before and after the edit reveals that record's contribution to within the
+rounding step. The 2-day release lag covers late syncs only, not later edits.
 
 | Name                                                                                                                                                                                                                                                   | Kind     | standard | aggregate                                                 |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | -------- | --------------------------------------------------------- |
@@ -895,6 +902,12 @@ The shared cache serves `get_today`, the resources and history chunks. Cache
 keys are request paths with sorted query parameters (never tokens); identical
 concurrent requests share one fetch. Date-range collection tools are not cached.
 
+Records from the last 3 days, including today's, may come from a cache entry up
+to 2 minutes old. When one tool call reads several data types and they were
+read at different times around a WHOOP sync (for example a cycle cached before
+waking next to a fresh sleep), the older ones are re-read once; if that does not
+fit the call's budget, a warning says so.
+
 WHOOP webhooks (opt-in, HTTP transport) make edits appear before the cache
 expires:
 
@@ -927,29 +940,32 @@ Logs are JSON lines on stderr (`LOG_FORMAT=pretty` for local reading) with
 authorization are redacted. Tool and request logs never contain argument values,
 record values, health data, WHOOP response bodies or tokens.
 
-| Message                                                                  | Level                                                                                                                                           | Fields                                                                                                                                                                                                                                                                                                          |
-| ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mcp request`                                                            | info                                                                                                                                            | `requestId`, `rpcMethod`, `tool`, `batchSize`, `status`, `durationMs`, `auth` (`static`/`oauth`), `clientId`, `aborted`                                                                                                                                                                                         |
-| `tool call ok`                                                           | debug                                                                                                                                           | `tool`, `durationMs`, `requestId`, `argKeys`, `privacyMode`                                                                                                                                                                                                                                                     |
-| `tool call failed`                                                       | info (invalid input, WHOOP 400/404), warn (WHOOP 401/403/429/5xx, network, rate budget, output too large), error (contract violation, internal) | `tool`, `durationMs`, `requestId`, `outcome` (`invalid_input`, `upstream_error`, `contract_violation`, `output_too_large`, `internal_error`), `errorClass`, `httpStatus`, `refreshStatus`, `causeChain`, `contractIssues` (field paths and codes), `chars`, `stackFrames` (file:line), `argKeys`, `privacyMode` |
-| `whoop api request`                                                      | debug                                                                                                                                           | `url` (path and query), `status`, `durationMs`                                                                                                                                                                                                                                                                  |
-| `whoop api rate limited`                                                 | warn                                                                                                                                            | `url`, `attempt`, `retryAfterMs`                                                                                                                                                                                                                                                                                |
-| `whoop api timeout`, `whoop api network error`                           | error                                                                                                                                           | `url`, `durationMs`, `error`                                                                                                                                                                                                                                                                                    |
-| `whoop rate limiter paused`                                              | warn (at most once a minute)                                                                                                                    | `waitMs`, `queued`                                                                                                                                                                                                                                                                                              |
-| `whoop token refreshed`                                                  | info                                                                                                                                            | —                                                                                                                                                                                                                                                                                                               |
-| `whoop token refresh failed`                                             | warn                                                                                                                                            | `status` or `errorClass`, `outcome`                                                                                                                                                                                                                                                                             |
-| `whoop token refresh failed at startup; retrying`                        | warn                                                                                                                                            | `status` or `errorClass`, `attempt`, `delayMs`                                                                                                                                                                                                                                                                  |
-| `whoop token refresh unavailable at startup; serving with stored tokens` | error                                                                                                                                           | `status` or `errorClass`, `outcome`                                                                                                                                                                                                                                                                             |
-| `whoop token save failed`, `whoop token store update failed`             | error                                                                                                                                           | `code`                                                                                                                                                                                                                                                                                                          |
-| `resource read failed`                                                   | warn                                                                                                                                            | `uri`, `errorClass`, `httpStatus`                                                                                                                                                                                                                                                                               |
-| `whoop webhook` / `whoop webhook rejected`                               | info / warn                                                                                                                                     | `type`, `duplicate`, `invalidated`, `requestId` / `reason`, `requestId`                                                                                                                                                                                                                                         |
-| `mcp request failed`, `http request failed`                              | error                                                                                                                                           | `requestId`, `errorClass`, `stackFrames`                                                                                                                                                                                                                                                                        |
-| `http transport listening`                                               | info                                                                                                                                            | `port`, `host`, `maxConnections`, `allowedOriginsCount`, `oauthMounted`, `webhooksEnabled`                                                                                                                                                                                                                      |
-| `oauth connector mounted`                                                | info                                                                                                                                            | `publicUrl`                                                                                                                                                                                                                                                                                                     |
-| `unhandled promise rejection`                                            | error                                                                                                                                           | `errorClass`                                                                                                                                                                                                                                                                                                    |
+| Message                                                                                       | Level                                                                                                                                           | Fields                                                                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mcp request`                                                                                 | info                                                                                                                                            | `requestId`, `rpcMethod`, `tool`, `batchSize`, `status`, `durationMs`, `auth` (`static`/`oauth`), `clientId`, `aborted`                                                                                                                                                                                         |
+| `tool call ok`                                                                                | debug                                                                                                                                           | `tool`, `durationMs`, `requestId`, `argKeys`, `privacyMode`                                                                                                                                                                                                                                                     |
+| `tool call failed`                                                                            | info (invalid input, WHOOP 400/404), warn (WHOOP 401/403/429/5xx, network, rate budget, output too large), error (contract violation, internal) | `tool`, `durationMs`, `requestId`, `outcome` (`invalid_input`, `upstream_error`, `contract_violation`, `output_too_large`, `internal_error`), `errorClass`, `httpStatus`, `refreshStatus`, `causeChain`, `contractIssues` (field paths and codes), `chars`, `stackFrames` (file:line), `argKeys`, `privacyMode` |
+| `whoop api request`                                                                           | debug                                                                                                                                           | `endpoint` (route template such as `/v2/activity/workout/:id`, no ids or query), `status`, `durationMs`                                                                                                                                                                                                         |
+| `whoop api rate limited`                                                                      | warn                                                                                                                                            | `endpoint`, `attempt`, `retryAfterMs`                                                                                                                                                                                                                                                                           |
+| `whoop api timeout`, `whoop api network error`                                                | error                                                                                                                                           | `endpoint`, `durationMs`, `errorClass`                                                                                                                                                                                                                                                                          |
+| `whoop rate limiter paused`                                                                   | warn (at most once a minute)                                                                                                                    | `waitMs`, `queued`                                                                                                                                                                                                                                                                                              |
+| `whoop token refreshed`                                                                       | info                                                                                                                                            | —                                                                                                                                                                                                                                                                                                               |
+| `whoop token refresh failed`                                                                  | warn                                                                                                                                            | `status` or `errorClass`, `outcome`                                                                                                                                                                                                                                                                             |
+| `whoop token refresh failed at startup; retrying`                                             | warn                                                                                                                                            | `status` or `errorClass`, `attempt`, `delayMs`                                                                                                                                                                                                                                                                  |
+| `whoop token refresh unavailable at startup; serving with stored tokens`                      | error                                                                                                                                           | `status` or `errorClass`, `outcome`                                                                                                                                                                                                                                                                             |
+| `whoop token save failed`, `whoop token store update failed`, `whoop token store read failed` | error                                                                                                                                           | `code`                                                                                                                                                                                                                                                                                                          |
+| `resource read failed`                                                                        | warn                                                                                                                                            | `uri`, `errorClass`, `httpStatus`                                                                                                                                                                                                                                                                               |
+| `whoop webhook` / `whoop webhook rejected`                                                    | info / warn                                                                                                                                     | `type`, `duplicate`, `invalidated`, `requestId` / `reason`, `requestId`                                                                                                                                                                                                                                         |
+| `mcp request failed`, `http request failed`                                                   | error                                                                                                                                           | `requestId`, `errorClass`, `stackFrames`                                                                                                                                                                                                                                                                        |
+| `http transport listening`                                                                    | info                                                                                                                                            | `port`, `host`, `maxConnections`, `allowedOriginsCount`, `oauthMounted`, `webhooksEnabled`                                                                                                                                                                                                                      |
+| `oauth connector mounted`                                                                     | info                                                                                                                                            | `publicUrl`                                                                                                                                                                                                                                                                                                     |
+| `unhandled promise rejection`                                                                 | error                                                                                                                                           | `errorClass`                                                                                                                                                                                                                                                                                                    |
 
-WHOOP request lines include the request path and query, which can contain dates
-and record ids (never health values). Every `/mcp` response carries an
+WHOOP request lines name the endpoint as a route template (for example
+`/v2/activity/workout/:id`), never record ids, dates or query parameters.
+`tool call failed` uses `invalid_input` only for a date expression that cannot
+be parsed; any other `RangeError` or `ZodError` inside a tool is an
+`internal_error` logged at level error with `stackFrames`. Every `/mcp` response carries an
 `X-Request-Id` header matching `requestId`. The container entrypoint writes its
 own `entrypoint: ...` lines in the same format.
 
@@ -988,8 +1004,12 @@ the service uses.
    401s share one refresh, because WHOOP rotates refresh tokens.
 4. **Re-authentication:** only when WHOOP refuses the refresh token itself. A
    WHOOP outage, a 429 or rejected app credentials (`invalid_client`) keep the
-   tokens: at startup the server retries after 5, 15 and 45 seconds and then
-   starts with the stored tokens (degraded startup).
+   tokens: each token-endpoint request times out after 30 seconds, and at
+   startup the server retries after 5, 15 and 45 seconds within a 120-second
+   budget and then starts with the stored tokens (degraded startup), so
+   startup takes at most about 2.5 minutes. A `tokens.json` that exists but
+   cannot be read stops startup with an error instead of starting a new
+   sign-in.
 
 ## Deployment (Docker + Cloud Hosting)
 
@@ -1006,8 +1026,9 @@ return 405.
 Built-in limits: `/mcp` allows 100 requests per minute per client IP (then 429
 with `Retry-After`), request bodies up to 1 MB, `MCP_MAX_CONNECTIONS` requests
 at once with a short queue (then 503), and, with the connector mounted, 20
-failed token verifications per minute per IP (then 429). Set `MCP_TRUST_PROXY=1`
-behind a proxy so these limits see real client IPs.
+failed token verifications per minute per IP (then 429 for further invalid
+tokens; a valid token is never refused). Set `MCP_TRUST_PROXY=1` behind a proxy
+so these limits see real client IPs (the rightmost `X-Forwarded-For` hop).
 
 **Railway:** follow [docs/deploy-railway.md](docs/deploy-railway.md) — volume,
 variables, the first WHOOP sign-in on the hosted server, verification, secret
@@ -1020,17 +1041,24 @@ rotation, degraded startup and rollback.
   with Node's `fetch`; no secrets baked into layers.
 - **Container user.** The image has no `USER` line: it starts as root so
   [docker/entrypoint.sh](docker/entrypoint.sh) can prepare the token folder
-  (`WHOOP_MCP_TOKEN_DIR`, default and exported `/root/.whoop-mcp`) for the
+  (`WHOOP_MCP_TOKEN_DIR`, default and exported `$HOME/.whoop-mcp`) for the
   built-in `node` user (UID 1000). It hands the folder, `tokens.json` and stale
   temp files to `node` (never recursively, 0700/0600), checks that `node` can
   create, rename and delete files there, and runs the server as `node`. If any
   step fails (a read-only volume, storage that refuses `chown`) it logs
-  `entrypoint: running as root (<reason>); set WHOOP_MCP_TOKEN_DIR to a volume
-path such as /data to run unprivileged` and runs as root, like images before
-  0.8.0. `WHOOP_MCP_RUN_AS_ROOT=1` skips the switch. Started with `--user`
+  `entrypoint: running as root (<reason>); the server still works, see
+docs/deploy-railway.md` and runs as root with the same token folder, like
+  images before 0.8.0. `WHOOP_MCP_RUN_AS_ROOT=1` skips the switch. Started with `--user`
   (e.g. `docker run --user 1000`), the entrypoint changes nothing and the
   server uses `$HOME/.whoop-mcp` unless `WHOOP_MCP_TOKEN_DIR` is set.
-- The `Docker smoke` workflow checks these layouts on every change to the image.
+- **Token volume.** Mount the volume at the token folder. A volume at
+  `$HOME/.whoop-mcp` (for example `/home/node/.whoop-mcp` with
+  `HOME=/home/node`, the folder 0.7.x used) needs no variable; with any other
+  mount path set `WHOOP_MCP_TOKEN_DIR` to exactly that path. A token folder
+  without a volume starts a WHOOP sign-in and loses its tokens on every deploy.
+- The `Docker smoke` workflow checks these layouts, including Railway's
+  (`HOME=/home/node`, volume at `/home/node/.whoop-mcp`), on every change to
+  the image.
 
 ### Build & run locally
 
@@ -1096,7 +1124,9 @@ Then in claude.ai → Settings → Connectors → **Add custom connector**, ente
   (dynamic client registration). Registration accepts `none` (public client)
   and `client_secret_post` (a secret is returned); `client_secret_basic` is
   rejected. Registered client ids are signed and stateless, so they survive
-  redeploys, and every redirect URI must be in `ALLOWED_REDIRECT_URIS`. Then
+  redeploys. Every registration gets its own client id and secret (a random
+  nonce is signed into the id), so a secret cannot be recomputed from the
+  registration metadata, and every redirect URI must be in `ALLOWED_REDIRECT_URIS`. Then
   the authorize page asks for `MCP_CONNECTOR_PASSWORD`.
 - **Client id:** alternatively enter `MCP_OAUTH_CLIENT_ID` (default
   `whoop-mcp-connector`, a public client without a secret) in the advanced
@@ -1138,8 +1168,9 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"`, and
 claude.ai signs in again. Repeated 401s mean the token is expired, signed with
 an old key (`MCP_AUTH_TOKEN` or `MCP_JWT_SECRET` rotated), issued for a
 different resource (check `PUBLIC_URL`) or lacks the `mcp` scope. Remove and
-re-add the connector. More than 20 failed verifications per minute from one IP
-return 429. Without a connector the 401 body is `{"error":"Unauthorized"}`
+re-add the connector. After 20 failed verifications per minute from one IP,
+further invalid tokens from it get 429; a valid token is never refused. With
+`MCP_TRUST_PROXY=1` the IP is the rightmost `X-Forwarded-For` hop. Without a connector the 401 body is `{"error":"Unauthorized"}`
 with no header: check the bearer token.
 
 ### 503 "Maximum connections reached"
@@ -1151,18 +1182,34 @@ load.
 
 ### Token folder: `EACCES` or `entrypoint: running as root`
 
+`Cannot read the WHOOP token file <path> (<code>). It exists, but this process
+cannot read it, so no new WHOOP sign-in was started.` means `tokens.json` is
+there but not readable for the server's user, and startup stops instead of
+replacing a sign-in that may still be valid. The usual cause is a container
+started with `--user` (or a custom start command) against a root-owned volume.
+Give that user ownership (for example `chown 1000:1000` and `chmod 600` when it
+runs as `node` or `--user 1000`), set `WHOOP_MCP_TOKEN_DIR` to a folder that
+user owns, or start the container as root so the entrypoint prepares the
+folder.
+
 `whoop token save failed` with `code: EACCES` means the server cannot write the
 token folder, usually because `WHOOP_MCP_TOKEN_DIR` points somewhere the
 entrypoint did not prepare (or the container runs with `--user` and a
 root-owned folder). Point it at the mounted volume. The entrypoint warning
-`running as root (<reason>)` names why it could not switch to `node`; the server
-still works. `WHOOP_MCP_TOKEN_DIR must be an absolute path` means a relative
-path was set.
+`running as root (<reason>); the server still works, see docs/deploy-railway.md`
+names why it could not switch to `node`; the server keeps the same token folder.
+`WHOOP_MCP_TOKEN_DIR must be an absolute path` means a relative path was set.
+
+On an existing deployment, a log with `No cached tokens found, starting OAuth
+flow` means the token folder is not the volume: `WHOOP_MCP_TOKEN_DIR` must be
+unset (volume at `$HOME/.whoop-mcp`) or equal to the volume's mount path. Do
+not sign in there; fix the variable or mount and redeploy.
 
 ### The server started although WHOOP's token endpoint was down
 
-That is degraded startup: `whoop token refresh unavailable at startup; serving
-with stored tokens` is logged, authenticated `/health` shows
+That is degraded startup: token requests time out after 30 seconds, startup
+retries stop after about 2 minutes, then `whoop token refresh unavailable at
+startup; serving with stored tokens` is logged, authenticated `/health` shows
 `whoopAuth.lastRefresh.outcome` as `transient_failure` (or `client_rejected`
 when WHOOP refused `WHOOP_CLIENT_ID`/`WHOOP_CLIENT_SECRET`), and tools refresh
 on demand once WHOOP is back. Fix the credentials for `client_rejected`; the

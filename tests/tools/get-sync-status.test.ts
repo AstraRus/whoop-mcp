@@ -836,3 +836,137 @@ describe("get_sync_status (aggregate)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Latest reads from different sides of a WHOOP sync
+// ---------------------------------------------------------------------------
+
+describe("get_sync_status when its latest reads straddle a WHOOP sync", () => {
+  const PRE = "2026-09-17T07:28:00+02:00";
+  const POST = "2026-09-17T07:29:30+02:00";
+  const NEW_SLEEP = "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b03";
+
+  /** The live-shaped account after WHOOP processed the night to 07:10 local (cycle 81004 opened). */
+  function synced(): WhoopUserFixture {
+    const user = structuredClone(liveShapedUser({ now: PRE }));
+    const closed = user.cycles.find((cycle) => cycle.id === LIVE_SHAPED_IDS.cycles.open)!;
+    closed.end = "2026-09-16T21:40:00.000Z";
+    closed.updated_at = "2026-09-17T05:29:00.000Z";
+    user.cycles.unshift({
+      ...structuredClone(closed),
+      id: 81004,
+      start: "2026-09-16T21:40:00.000Z",
+      end: null,
+      created_at: "2026-09-17T05:29:00.000Z",
+      updated_at: "2026-09-17T05:29:00.000Z",
+    });
+    user.sleeps.unshift({
+      ...structuredClone(user.sleeps[0]!),
+      id: NEW_SLEEP,
+      cycle_id: 81004,
+      start: "2026-09-16T21:40:00.000Z",
+      end: "2026-09-17T05:10:00.000Z",
+      created_at: "2026-09-17T05:29:05.000Z",
+      updated_at: "2026-09-17T05:29:05.000Z",
+    });
+    user.recoveries.unshift({
+      ...structuredClone(user.recoveries[0]!),
+      cycle_id: 81004,
+      sleep_id: NEW_SLEEP,
+      created_at: "2026-09-17T05:29:05.000Z",
+      updated_at: "2026-09-17T05:29:05.000Z",
+    });
+    user.now = new Date(POST);
+    return user;
+  }
+
+  /**
+   * A client whose non-refreshed reads of `stalePaths` answer from `stale` (a
+   * cache entry from before the sync); everything else, and every refreshed
+   * read, answers from `fresh`.
+   */
+  function cachedClient(
+    stale: WhoopUserFixture,
+    fresh: WhoopUserFixture,
+    stalePaths: readonly string[]
+  ): WhoopFixtureClient {
+    const nowMs = Date.parse(POST);
+    const staleClient = createWhoopFixtureClient({ ...stale, now: nowMs });
+    const freshClient = createWhoopFixtureClient({ ...fresh, now: nowMs });
+    return {
+      calls: freshClient.calls,
+      requests: freshClient.requests,
+      get<T>(path: string, options?: Parameters<WhoopFixtureClient["get"]>[1]): Promise<T> {
+        if (stalePaths.includes(path) && options?.refresh !== true) {
+          freshClient.calls.push(path);
+          freshClient.requests.push({ path, options: options && { ...options } });
+          return staleClient.get<T>(path, options);
+        }
+        return freshClient.get<T>(path, options);
+      },
+    };
+  }
+
+  const refreshed = (client: WhoopFixtureClient): string[] =>
+    client.requests
+      .filter((request) => request.options?.refresh === true)
+      .map((request) => request.path)
+      .sort();
+
+  it("re-reads the newest cycle, sleeps and recovery once when a cached cycle is from before the sync", async () => {
+    const client = cachedClient(liveShapedUser({ now: PRE }), synced(), ["/v2/cycle?limit=1"]);
+    const result = await getSyncStatus(contextFor(client, new Date(POST)));
+    expectStandardContract(result);
+    expect(result.latest.cycle).toMatchObject({
+      state: "open",
+      started: "2026-09-16T23:40:00.000+02:00",
+    });
+    expect(result.latest.sleep).toMatchObject({
+      ended: "2026-09-17T07:10:00.000+02:00",
+      linked_to_current_cycle: true,
+    });
+    expect(result.latest.recovery.linked_to_current_cycle).toBe(true);
+    expect(result.assessment).toBe("up_to_date");
+    expect(refreshed(client)).toEqual([
+      "/v2/activity/sleep?limit=5",
+      "/v2/cycle?limit=1",
+      "/v2/recovery?limit=1",
+    ]);
+  });
+
+  it("re-reads when the cached sleeps and recovery are from before the sync", async () => {
+    const client = cachedClient(liveShapedUser({ now: PRE }), synced(), [
+      "/v2/activity/sleep?limit=5",
+      "/v2/recovery?limit=1",
+    ]);
+    const result = await getSyncStatus(contextFor(client, new Date(POST)));
+    expectStandardContract(result);
+    expect(result.latest.sleep).toMatchObject({
+      ended: "2026-09-17T07:10:00.000+02:00",
+      linked_to_current_cycle: true,
+    });
+    expect(result.latest.recovery.linked_to_current_cycle).toBe(true);
+    expect(refreshed(client)).toHaveLength(3);
+  });
+
+  it("re-reads only once while WHOOP has created the cycle but not yet its sleep", async () => {
+    const gap = synced();
+    gap.sleeps = gap.sleeps.filter((sleep) => sleep.id !== NEW_SLEEP);
+    gap.recoveries = gap.recoveries.filter((recovery) => recovery.cycle_id !== 81004);
+    const client = createWhoopFixtureClient({ ...gap, now: Date.parse(POST) });
+    const result = await getSyncStatus(contextFor(client, new Date(POST)));
+    expectStandardContract(result);
+    expect(result.latest.sleep.linked_to_current_cycle).toBe(false);
+    expect(refreshed(client)).toHaveLength(3);
+  });
+
+  it("makes no extra request when the latest reads agree", async () => {
+    const client = createWhoopFixtureClient({ ...synced(), now: Date.parse(POST) });
+    const result = await getSyncStatus(contextFor(client, new Date(POST)));
+    expectStandardContract(result);
+    expect(refreshed(client)).toEqual([]);
+    const live = clientFor(LIVE);
+    await getSyncStatus(contextFor(live, LIVE.now));
+    expect(refreshed(live)).toEqual([]);
+  });
+});

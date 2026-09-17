@@ -9,6 +9,9 @@
  * - Formula guard: a text cell starting with =, +, -, @, tab or CR gets a
  *   leading apostrophe, so spreadsheet programs show it as text instead of
  *   evaluating it. Numbers are never guarded (a negative number stays a number).
+ *   A cell that is exactly a UTC offset (+HH:MM or -HH:MM, such as +02:00) is
+ *   not guarded: it cannot carry a formula, and the apostrophe would change the
+ *   value a script reading the file sees.
  */
 
 /** One CSV cell value. */
@@ -17,12 +20,15 @@ export type CsvCell = string | number | boolean | null;
 /** Text cells starting with one of these characters are prefixed with an apostrophe. */
 export const CSV_FORMULA_START = /^[=+\-@\t\r]/;
 
+/** A cell that is exactly a UTC offset such as +02:00 or -05:00 (never guarded). */
+const UTC_OFFSET = /^[+-]\d{2}:\d{2}$/;
+
 /** Cells containing one of these characters are quoted. */
 const NEEDS_QUOTES = /[",\r\n]/;
 
 /** A text cell with the formula guard applied (no quoting). */
 export function guardCsvText(value: string): string {
-  return CSV_FORMULA_START.test(value) ? `'${value}` : value;
+  return CSV_FORMULA_START.test(value) && !UTC_OFFSET.test(value) ? `'${value}` : value;
 }
 
 /** One cell as CSV text: formula guard, then RFC 4180 quoting. */

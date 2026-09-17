@@ -6,6 +6,8 @@ import { WhoopApiError, WhoopNetworkError, type WhoopClient } from "../../src/ap
 import type { Sleep } from "../../src/api/types.js";
 import { createWhoopServer } from "../../src/server.js";
 import { InvalidDateExpression } from "../../src/tools/date-utils.js";
+import { runSleepAnalysis } from "../../src/tools/get-sleep-analysis.js";
+import type { Logger } from "../../src/logging/logger.js";
 import { aggregateOutputSchemas } from "../../src/tools/output-contracts.js";
 import { analyticsClient, ANALYTICS_NOW, sleepFixture } from "../helpers/analytics-fixtures.js";
 import { MAX_TOOL_TEXT_CHARS } from "../../src/tools/tool-definition.js";
@@ -13,6 +15,7 @@ import { assertNeutralText, connectServer } from "../helpers/contract.js";
 import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
 import {
   liveShapedUser,
+  MATURE_USER_NOW,
   matureUser,
   stressUser,
   type WhoopUserFixture,
@@ -166,8 +169,13 @@ describe("getSleepDebt", () => {
     expect(result.standing_debt_hours).toBe(5);
     expect(result.consistency.bedtime_std_dev_minutes).toBeCloseTo(0);
     expect(result.status).toBe("available");
-    expect(result.notes).toEqual([]);
+    // Four weekday nights (Monday to Thursday) and no weekend night: no social jetlag.
+    expect(result.consistency.social_jetlag_minutes).toBeNull();
+    expect(result.notes).toEqual([
+      "Weekday and weekend midpoints need 2 nights each (weekday 4, weekend 0); social jetlag is null until both have them.",
+    ]);
     expect(result.summary).toContain("not outstanding debt");
+    expect(result.summary).not.toContain("Social jetlag");
   });
   it("excludes naps and pending scores, picks longest main sleep per day", async () => {
     const records = [
@@ -324,7 +332,10 @@ describe("getSleepDebt with a new, calibrating user (live shape)", () => {
     expect(result.status).toBe("available");
     expect(result.nights_analyzed).toBe(3);
     expect(result.total_debt_hours).not.toBeNull();
-    expect(result.notes).toEqual([]);
+    // Monday to Wednesday wake days only.
+    expect(result.notes).toEqual([
+      "Weekday and weekend midpoints need 2 nights each (weekday 3, weekend 0); social jetlag is null until both have them.",
+    ]);
   });
 
   it("notes a night that WHOOP is still scoring", async () => {
@@ -650,5 +661,183 @@ describe("get_sleep_debt on the shared fixture users", () => {
       expect(result.isError, result.text.slice(0, 200)).toBe(false);
       expect(result.text.length).toBeLessThan(MAX_TOOL_TEXT_CHARS);
     }
+  });
+});
+
+describe("get_sleep_debt social jetlag group minimums", () => {
+  const MINUTE_MS = 60_000;
+  const AGGREGATE_JETLAG_NOTE =
+    "Social jetlag needs at least 3 weekday and 3 weekend nights in the released weeks, so it is null.";
+
+  /** Local wake day of a sleep in its own recorded offset. */
+  function wakeDay(sleep: Sleep): string {
+    const match = /^([+-])(\d{2}):(\d{2})$/.exec(sleep.timezone_offset)!;
+    const offset = (match[1] === "-" ? -1 : 1) * (Number(match[2]) * 60 + Number(match[3]));
+    return new Date(Date.parse(sleep.end) + offset * MINUTE_MS).toISOString().slice(0, 10);
+  }
+
+  function mainSleepWaking(data: WhoopUserFixture, day: string): Sleep {
+    const sleep = data.sleeps.find((record) => !record.nap && wakeDay(record) === day);
+    if (!sleep) throw new Error(`no main sleep waking on ${day}`);
+    return sleep;
+  }
+
+  /** Move a night's wake time by `minutes` (as light sleep), keeping its wake day. */
+  function shiftWake(data: WhoopUserFixture, day: string, minutes: number): void {
+    const sleep = mainSleepWaking(data, day);
+    sleep.end = new Date(Date.parse(sleep.end) + minutes * MINUTE_MS).toISOString();
+    sleep.score!.stage_summary.total_in_bed_time_milli += minutes * MINUTE_MS;
+    sleep.score!.stage_summary.total_light_sleep_time_milli += minutes * MINUTE_MS;
+  }
+
+  function markUnscorable(data: WhoopUserFixture, day: string): void {
+    const sleep = mainSleepWaking(data, day);
+    sleep.score_state = "UNSCORABLE";
+    sleep.score = undefined;
+  }
+
+  async function aggregate(
+    data: WhoopUserFixture,
+    days: number
+  ): Promise<Awaited<ReturnType<typeof getSleepDebt>>> {
+    return getSleepDebt(createWhoopFixtureClient(data), { days }, data.now, {
+      privacyMode: "aggregate",
+    });
+  }
+
+  it.each([0, 40])(
+    "keeps aggregate social jetlag null with a single weekday night group (Friday wake +%i min)",
+    async (shift) => {
+      // Data from Thursday 2026-09-10: the released week 09-07..09-13 has two weekday nights.
+      const data = matureUser({ days: 7, splitNightDays: [] });
+      expect(data.now.getTime()).toBe(Date.parse(MATURE_USER_NOW));
+      if (shift) shiftWake(data, "2026-09-11", shift);
+      const result = await aggregate(data, 14);
+      expect(result.status).toBe("available");
+      expect(result.consistency.bedtime_std_dev_minutes).not.toBeNull();
+      expect(result.consistency.waketime_std_dev_minutes).not.toBeNull();
+      expect(result.consistency.social_jetlag_minutes).toBeNull();
+      expect(result.notes).toContain(AGGREGATE_JETLAG_NOTE);
+      expect(aggregateOutputSchemas.get_sleep_debt!.safeParse(result).success).toBe(true);
+      assertNeutralText(result);
+    }
+  );
+
+  it.each([
+    ["as generated (2 weekend nights)", false],
+    ["with the Sunday night unscorable (1 weekend night)", true],
+  ])("keeps aggregate social jetlag null for a Monday-start account %s", async (_label, drop) => {
+    const data = matureUser({
+      days: 10,
+      now: "2026-09-23T23:30:00+02:00",
+      offsetChange: null,
+      splitNightDays: [],
+    });
+    if (drop) markUnscorable(data, "2026-09-20");
+    const result = await aggregate(data, 14);
+    expect(result.status).toBe("available");
+    expect(result.consistency.bedtime_std_dev_minutes).not.toBeNull();
+    expect(result.consistency.social_jetlag_minutes).toBeNull();
+    expect(result.notes).toContain(AGGREGATE_JETLAG_NOTE);
+  });
+
+  it("releases aggregate social jetlag with at least 3 nights in each group, without the note", async () => {
+    const result = await aggregate(matureUser(), 14);
+    expect(result.status).toBe("available");
+    expect(result.consistency.social_jetlag_minutes).not.toBeNull();
+    expect(result.notes).not.toContain(AGGREGATE_JETLAG_NOTE);
+  });
+
+  it("does not add the aggregate jetlag note when there is not enough data", async () => {
+    const result = await aggregate(liveShapedUser(), 14);
+    expect(result.status).toBe("insufficient_data");
+    expect(result.notes).not.toContain(AGGREGATE_JETLAG_NOTE);
+  });
+
+  it("keeps standard social jetlag null with 4 weekday and 1 weekend nights, as get_sleep_analysis", async () => {
+    // Wake days Thursday 09-10 back to Sunday 09-06.
+    const debt = await getSleepDebt(analyticsClient(5), { days: 7 }, ANALYTICS_NOW);
+    const analysis = await runSleepAnalysis(
+      { days: 7 },
+      {
+        client: analyticsClient(5),
+        privacyMode: "standard",
+        now: () => ANALYTICS_NOW,
+        startedAtMs: Date.now(),
+      }
+    );
+    const note =
+      "Weekday and weekend midpoints need 2 nights each (weekday 4, weekend 1); social jetlag is null until both have them.";
+    expect(debt.status).toBe("available");
+    expect(debt.consistency.bedtime_std_dev_minutes).not.toBeNull();
+    expect(debt.consistency.social_jetlag_minutes).toBeNull();
+    expect(debt.notes).toContain(note);
+    expect(debt.summary).not.toContain("Social jetlag");
+    expect(analysis.timing).toMatchObject({
+      weekday_nights: 4,
+      weekend_nights: 1,
+      social_jetlag_minutes: null,
+    });
+    expect(analysis.notes).toContain(note);
+  });
+
+  it("releases standard social jetlag with 2 nights in each group and names the heuristic", async () => {
+    // Wake days Thursday 09-10 back to Saturday 09-05.
+    const result = await getSleepDebt(analyticsClient(6), { days: 7 }, ANALYTICS_NOW);
+    expect(result.consistency.social_jetlag_minutes).not.toBeNull();
+    expect(result.notes.join(" ")).not.toContain("social jetlag is null");
+    expect(result.summary).toContain("Social jetlag is a circular midpoint heuristic.");
+  });
+});
+
+describe("get_sleep_debt with a window starting in the future", () => {
+  type Level = "debug" | "info" | "warn" | "error";
+  type CapturedLine = { level: Level; msg: string; fields: Record<string, unknown> };
+
+  function captureLogger(): Logger & { lines: CapturedLine[] } {
+    const lines: CapturedLine[] = [];
+    const at =
+      (level: Level) =>
+      (msg: string, fields: Record<string, unknown> = {}): void => {
+        lines.push({ level, msg, fields });
+      };
+    return { lines, debug: at("debug"), info: at("info"), warn: at("warn"), error: at("error") };
+  }
+
+  it("returns the date message and logs InvalidDateExpression at info", async () => {
+    const data = liveShapedUser();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    const logger = captureLogger();
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      disableResources: true,
+      logger,
+    });
+    try {
+      const result = await connection.callTool("get_sleep_debt", { start: "2030-01-01" });
+      expect(result.isError).toBe(true);
+      expect(result.text).toBe(
+        'The sleep window "2030-01-01" begins at or after the current time; get_sleep_debt needs a window that starts in the past.'
+      );
+    } finally {
+      await connection.close();
+    }
+    const failures = logger.lines.filter((line) => line.msg === "tool call failed");
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatchObject({
+      level: "info",
+      fields: {
+        tool: "get_sleep_debt",
+        outcome: "invalid_input",
+        errorClass: "InvalidDateExpression",
+      },
+    });
+    expect(JSON.stringify(logger.lines)).not.toContain("2030-01-01");
+  });
+
+  it("throws InvalidDateExpression from getSleepDebt", async () => {
+    await expect(
+      getSleepDebt(analyticsClient(), { start: "2027-01-01" }, ANALYTICS_NOW)
+    ).rejects.toThrow(InvalidDateExpression);
   });
 });

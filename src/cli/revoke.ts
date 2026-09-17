@@ -22,6 +22,7 @@ import {
   redactHomePath,
   resolveTokenDir,
   saveTokens,
+  TokenStoreReadError,
   type OAuthTokens,
 } from "../auth/token-store.js";
 
@@ -267,7 +268,15 @@ export async function runRevoke(
   }
   const location = redactHomePath(tokenDir);
 
-  const stored = await loadTokens(tokenDir);
+  let stored: OAuthTokens | null;
+  try {
+    stored = await loadTokens(tokenDir);
+  } catch (error: unknown) {
+    if (!(error instanceof TokenStoreReadError)) throw error;
+    // The message names the redacted path and how to fix the permissions.
+    deps.write(`${error.message} Nothing was revoked.`);
+    return EXIT_FAILED;
+  }
   if (stored === null) {
     deps.write(`No usable WHOOP tokens found in ${location}. Nothing was revoked.`);
     return EXIT_FAILED;

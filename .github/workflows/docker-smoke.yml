@@ -1,10 +1,15 @@
 name: Docker smoke
 
 # Builds the production image and checks the non-root entrypoint
-# (docker/entrypoint.sh) against the volume layouts deployments use. The
-# server never contacts WHOOP here: every container gets fake, unexpired
-# tokens and fake client credentials, which is enough to reach /health.
-# Never use a copied production tokens.json in this workflow.
+# (docker/entrypoint.sh) against the volume layouts deployments use: plain
+# Docker (/root/.whoop-mcp), a read-only volume, --user, WHOOP_MCP_TOKEN_DIR=/data,
+# a CRLF checkout and Railway's layout (HOME=/home/node, volume at
+# /home/node/.whoop-mcp, no WHOOP_MCP_TOKEN_DIR), with and without the
+# entrypoint. The token-folder decision itself is also unit-tested without
+# Docker in tests/docker/entrypoint.test.ts. The server never contacts WHOOP
+# here: every container gets fake, unexpired tokens and fake client
+# credentials, which is enough to reach /health and initialize /mcp. Never use
+# a copied production tokens.json in this workflow.
 
 on:
   push:
@@ -243,7 +248,8 @@ jobs:
           expect_eq "(c) server uid" "$(node_uid smoke-c)" 0
           logs_c=$(logs_of smoke-c)
           contains "$logs_c" '"level":"warn","msg":"entrypoint: running as root (' || fail "(c) no entrypoint warning"
-          contains "$logs_c" 'set WHOOP_MCP_TOKEN_DIR to a volume path such as /data to run unprivileged' || fail "(c) warning lacks guidance"
+          contains "$logs_c" '); the server still works, see docs/deploy-railway.md"' || fail "(c) warning lacks guidance"
+          contains "$logs_c" 'Using cached WHOOP tokens' || fail "(c) the stored tokens were not used"
           graceful_stop smoke-c
           echo "::endgroup::"
 
@@ -286,6 +292,74 @@ jobs:
           echo "::group::(g) docker stop exits gracefully in under 10 s"
           graceful_stop smoke-e
           graceful_stop smoke-a
+          echo "::endgroup::"
+
+          # Railway: the image runs as root with HOME=/home/node and the volume
+          # (created by 0.7.x, which used os.homedir()) at /home/node/.whoop-mcp.
+          # WHOOP_MCP_TOKEN_DIR is not set. Railway also sets PORT, which
+          # MCP_PORT=3000 from the image overrides.
+          RAILWAY_ENV=(
+            -e HOME=/home/node
+            -e PORT=8080
+            -e MCP_TRUST_PROXY=1
+            -e CALLBACK_HOST=0.0.0.0
+            -e CALLBACK_TIMEOUT_MS=900000
+            -e PUBLIC_URL=https://smoke.up.railway.app
+            -e ALLOWED_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
+            -e WHOOP_REDIRECT_URI=https://smoke.up.railway.app/callback
+          )
+          INIT_BODY='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"docker-smoke","version":"0.0.0"}}}'
+          # POST /mcp initialize; prints the HTTP status, then the body.
+          mcp_initialize() { # host-port [curl header args...]
+            local port=$1
+            shift
+            curl -sS -X POST "http://127.0.0.1:$port/mcp" \
+              -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' \
+              "$@" --data "$INIT_BODY" -w '\n%{http_code}' || true
+          }
+
+          echo "::group::(h) Railway layout: HOME=/home/node, volume at /home/node/.whoop-mcp"
+          seed_root_volume smoke-h
+          docker run -d --name smoke-h -p 127.0.0.1:3108:3000 "${COMMON[@]}" "${RAILWAY_ENV[@]}" \
+            -v smoke-h:/home/node/.whoop-mcp "$IMAGE" >/dev/null
+          wait_healthy smoke-h 3108
+          expect_eq "(h) server uid" "$(node_uid smoke-h)" 1000
+          env_has_line smoke-h WHOOP_MCP_TOKEN_DIR=/home/node/.whoop-mcp || fail "(h) WHOOP_MCP_TOKEN_DIR is not the volume path"
+          env_has_line smoke-h HOME=/home/node || fail "(h) HOME is not /home/node"
+          expect_eq "(h) tokens.json owner and mode" "$(owner_mode smoke-h /home/node/.whoop-mcp/tokens.json)" "1000:1000 600"
+          expect_eq "(h) token folder owner and mode" "$(owner_mode smoke-h /home/node/.whoop-mcp)" "1000:1000 700"
+          docker exec smoke-h test ! -e /root/.whoop-mcp || fail "(h) the entrypoint created /root/.whoop-mcp"
+          logs_h=$(logs_of smoke-h)
+          contains "$logs_h" 'Using cached WHOOP tokens' || fail "(h) the stored tokens were not used"
+          contains "$logs_h" '"oauthMounted":false' || fail "(h) the OAuth connector must stay unmounted without MCP_CONNECTOR_PASSWORD"
+          if contains "$logs_h" 'starting OAuth flow'; then fail "(h) a WHOOP sign-in was started"; fi
+          # Authenticated /health would call WHOOP; /mcp initialize does not.
+          init_h=$(mcp_initialize 3108 -H "Authorization: Bearer $AUTH_TOKEN")
+          expect_eq "(h) /mcp initialize status" "${init_h##*$'\n'}" 200
+          contains "$init_h" '"serverInfo"' || fail "(h) /mcp initialize returned no serverInfo"
+          noauth_h=$(mcp_initialize 3108)
+          expect_eq "(h) /mcp without Authorization" "${noauth_h##*$'\n'}" 401
+          dir_h=$(node_env smoke-h | sed -n 's/^WHOOP_MCP_TOKEN_DIR=//p')
+          expect_eq "(h) token folder the server uses" "$dir_h" /home/node/.whoop-mcp
+          docker exec -u node -e WHOOP_MCP_TOKEN_DIR="$dir_h" smoke-h node /seed/rewrite-tokens.mjs
+          graceful_stop smoke-h
+          echo "::endgroup::"
+
+          echo "::group::(i) Railway layout without the entrypoint (start command node dist/index.js)"
+          # The same volume after (h) handed it to node, and the same variables,
+          # started as root without docker/entrypoint.sh, as a custom start
+          # command or an image before 0.8.0 would: the server must still find
+          # the tokens through os.homedir().
+          docker run -d --name smoke-i -p 127.0.0.1:3109:3000 "${COMMON[@]}" "${RAILWAY_ENV[@]}" \
+            -v smoke-h:/home/node/.whoop-mcp --entrypoint /sbin/tini "$IMAGE" -- node dist/index.js >/dev/null
+          wait_healthy smoke-i 3109
+          expect_eq "(i) server uid" "$(node_uid smoke-i)" 0
+          logs_i=$(logs_of smoke-i)
+          contains "$logs_i" 'Using cached WHOOP tokens' || fail "(i) the stored tokens were not used"
+          if contains "$logs_i" 'starting OAuth flow'; then fail "(i) a WHOOP sign-in was started"; fi
+          if contains "$logs_i" 'entrypoint:'; then fail "(i) the entrypoint must not have run"; fi
+          graceful_stop smoke-i
           echo "::endgroup::"
 
           echo "All docker smoke scenarios passed."

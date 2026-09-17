@@ -363,8 +363,8 @@ describe("release metadata", () => {
 describe("Railway runbook", () => {
   it("covers the volume, first sign-in, rotation, degraded startup, rollback and single instance", () => {
     for (const text of [
-      "WHOOP_MCP_TOKEN_DIR=/data",
-      "/root/.whoop-mcp",
+      "$HOME/.whoop-mcp",
+      "HOME=/home/node",
       "First WHOOP sign-in on the hosted server",
       "Rotating secrets",
       "Without `MCP_JWT_SECRET`",
@@ -374,5 +374,62 @@ describe("Railway runbook", () => {
     ]) {
       expect(RAILWAY, text).toContain(text);
     }
+  });
+
+  // Regression: the runbook required WHOOP_MCP_TOKEN_DIR=/data. On the real
+  // deployment (HOME=/home/node, volume at /home/node/.whoop-mcp) that points
+  // the server at an empty folder: it starts a WHOOP sign-in and loses tokens
+  // on every deploy.
+  it("does not require WHOOP_MCP_TOKEN_DIR and keeps existing deployments unchanged", () => {
+    const variables = section(RAILWAY, "## 3. Variables");
+    const required = variables.slice(0, variables.indexOf("\nToken folder"));
+    expect(required).toContain("Required:");
+    expect(tableNames(required)).toContain("MCP_AUTH_TOKEN");
+    expect(tableNames(required)).not.toContain("WHOOP_MCP_TOKEN_DIR");
+
+    const tokenFolder = section(RAILWAY, "### Token folder");
+    expect(tokenFolder).toContain(
+      "**`WHOOP_MCP_TOKEN_DIR` when it is set, else\n`$HOME/.whoop-mcp`**"
+    );
+    expect(tokenFolder).toContain(
+      "**Existing deployment (`HOME=/home/node`, volume at `/home/node/.whoop-mcp`):\nchange nothing.**"
+    );
+    expect(tokenFolder).toContain("must always equal the volume's mount path");
+    expect(tokenFolder).toContain("**New deployments only:**");
+
+    const rollback = section(RAILWAY, "## 9. Rollback");
+    expect(rollback).not.toContain("mount the volume at `/root/.whoop-mcp`");
+    expect(rollback).toContain("`$HOME/.whoop-mcp`");
+  });
+
+  it("quotes the entrypoint's root warning as the script writes it", () => {
+    const entrypoint = read("docker/entrypoint.sh");
+    const warning = /^log warn "entrypoint: running as root \(\$reason\); ([^"]+)"$/m.exec(
+      entrypoint
+    );
+    expect(warning, "the entrypoint's root warning").not.toBeNull();
+    const guidance = warning![1]!;
+    expect(guidance).toBe("the server still works, see docs/deploy-railway.md");
+    // Docs wrap lines; compare with whitespace collapsed.
+    const flat = (text: string): string => text.replace(/\s+/g, " ");
+    expect(flat(RAILWAY)).toContain(`entrypoint: running as root (<reason>); ${guidance}`);
+    expect(flat(README)).toContain(`entrypoint: running as root (<reason>); ${guidance}`);
+    for (const [name, text] of [
+      ["README", README],
+      ["runbook", RAILWAY],
+      ["CHANGELOG", CHANGELOG],
+    ] as const) {
+      expect(flat(text), name).not.toContain("to a volume path such as /data to run unprivileged");
+    }
+  });
+
+  it("documents HOME for the container token folder", () => {
+    const row = rowFor(section(README, "### Environment variables"), "HOME");
+    expect(row, "HOME row").toBeDefined();
+    expect(row![2]).toContain("`$HOME/.whoop-mcp`");
+    expect(row![2]).toContain("`/home/node/.whoop-mcp`");
+    expect(
+      rowFor(section(README, "### Environment variables"), "WHOOP_MCP_TOKEN_DIR")![1]
+    ).toContain("`$HOME/.whoop-mcp`");
   });
 });

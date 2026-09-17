@@ -19,6 +19,17 @@
  *   with older chunks once the newer ones come from the cache.
  * - Pages use the client without its per-request cache, with the budget's
  *   deadline; the process-wide rate limiter paces them (no fixed delay here).
+ * - A call that joins a chunk another call is already fetching shares that
+ *   fetch. When the other call's budget or deadline cut it short while this
+ *   call can still read, the chunk is fetched again with this call's budget.
+ * - Recent chunks (the open chunk and chunks that ended under 3 days ago) report
+ *   when their data was read (`recent_snapshot`). `loadConsistentHistory` loads
+ *   several collections for one tool call and re-reads, once, any collection
+ *   whose recent data was read more than HISTORY_SNAPSHOT_TOLERANCE_MS before
+ *   the newest, so a WHOOP sync between two reads (e.g. a cached cycle from
+ *   before waking next to a fresh sleep) does not mix old and new data.
+ *   `minRecentStoredAt` forces recent chunks to be read no earlier than a given
+ *   instant (cached entries and fetches in flight from before it are ignored).
  */
 
 import { z } from "zod";
@@ -89,7 +100,18 @@ const PAGE_LIMIT = "25";
 export const HISTORY_LIMITATIONS: readonly string[] = [
   "Records older than 3 days may be served from a server cache for up to 60 minutes (older than 30 days: up to 6 hours); recent edits or deletions in WHOOP may take that long to appear unless webhooks are enabled.",
   "History is read in 30-day chunks within a per-call request and time budget that keeps the server under WHOOP's rate limit; truncated and complete_since show when older data was not read, and repeating the request continues from the cache.",
+  "Records from the last 3 days, including today's, may be served from a server cache for up to 2 minutes; data types read at different times around a WHOOP sync are re-read once, and a cycle, sleep or recovery that synced within the last 2 minutes may not appear yet.",
 ];
+
+/**
+ * Recent data of the sources of one tool call counts as one snapshot when it
+ * was read within this long of the newest read.
+ */
+export const HISTORY_SNAPSHOT_TOLERANCE_MS = 2_000;
+
+/** Warning of {@link loadConsistentHistory} when a mixed snapshot could not be re-read. */
+export const HISTORY_MIXED_SNAPSHOT_WARNING =
+  "Some WHOOP data types were read at different times around a WHOOP sync and could not be re-read within this call's budget; repeat the request if the most recent day looks incomplete.";
 
 /** Collections that can be read as history. */
 export const HISTORY_ENDPOINTS = [
@@ -159,6 +181,13 @@ export type HistorySource<T> = AnalyticsSource<T> & {
   complete_since: string | null;
   chunks_total: number;
   chunks_from_cache: number;
+  /**
+   * When the recent chunks read (the open chunk and chunks that ended under 3
+   * days ago) were read, epoch ms: the stored time of a cached chunk, the start
+   * of the fetch otherwise. Null when no recent chunk was read. Internal: used
+   * by {@link loadConsistentHistory}, never part of a tool output.
+   */
+  recent_snapshot: { oldest: number; newest: number } | null;
 };
 
 /** Options for {@link loadHistory}. */
@@ -169,7 +198,16 @@ export interface LoadHistoryOptions {
   budget?: HistoryBudget;
   /** Logical now (open chunk, cache tiers). Default: the system clock. */
   now?: () => Date;
+  /**
+   * Epoch ms: recent chunks (cache TTL RECENT_TTL_MS) cached before it are
+   * fetched again, and their fetches in flight that started before it are not
+   * joined. `Date.now()` forces one fresh read of the recent data.
+   */
+  minRecentStoredAt?: number;
 }
+
+/** Loads one history source of a tool call; `extra` is merged into its loadHistory options. */
+export type HistoryLoader<T> = (extra: { minRecentStoredAt?: number }) => Promise<HistorySource<T>>;
 
 /** A chunk as fetched (and, when complete, cached). */
 interface ChunkData {
@@ -186,6 +224,8 @@ interface ChunkOutcome {
   hit: boolean;
   /** When the data was stored (hit) or fetched; null when nothing was read. */
   storedAt: number | null;
+  /** When the data was read for the snapshot: storedAt for a hit, the fetch start otherwise. */
+  readAt: number | null;
   error?: unknown;
 }
 
@@ -305,38 +345,105 @@ async function fetchChunk(
   }
 }
 
+/** Attempts of one chunk: the first, plus one when a joined fetch ran out of its owner's budget. */
+const MAX_CHUNK_ATTEMPTS = 2;
+
+/** One attempt at a chunk: the result, or the error, and whether another call's fetch was joined. */
+type ChunkAttempt =
+  | {
+      ok: true;
+      value: ChunkData;
+      storedAt: number;
+      hit: boolean;
+      joined: boolean;
+      fetchStartedAt: number | null;
+    }
+  | { ok: false; error: unknown; joined: boolean };
+
+async function attemptChunk(
+  client: WhoopClient,
+  chunk: Chunk,
+  budget: HistoryBudget,
+  cache: MemoryCache | undefined,
+  minStoredAt: number | undefined
+): Promise<ChunkAttempt> {
+  if (cache === undefined) {
+    const fetchStartedAt = Date.now();
+    try {
+      const value = await fetchChunk(client, chunk, budget);
+      return { ok: true, value, storedAt: Date.now(), hit: false, joined: false, fetchStartedAt };
+    } catch (error: unknown) {
+      return { ok: false, error, joined: false };
+    }
+  }
+  // The fetcher runs synchronously when this call starts the fetch, so a
+  // rejection without it having run came from a fetch another call started.
+  let ownFetch = false;
+  const pending = cache.getOrFetchWithMeta(
+    chunk.key,
+    chunk.ttlMs,
+    () => {
+      ownFetch = true;
+      return fetchChunk(client, chunk, budget);
+    },
+    {
+      store: (data) => data.complete,
+      ...(minStoredAt !== undefined ? { minStoredAt } : {}),
+    }
+  );
+  try {
+    return { ok: true, ...(await pending) };
+  } catch (error: unknown) {
+    return { ok: false, error, joined: !ownFetch };
+  }
+}
+
+/** Whether an attempt was cut short by the budget or deadline of the call that ran the fetch. */
+function limitedByBudget(attempt: ChunkAttempt): boolean {
+  return attempt.ok
+    ? !attempt.value.complete && attempt.value.partialError instanceof WhoopRateBudgetError
+    : attempt.error instanceof WhoopRateBudgetError;
+}
+
 async function loadChunk(
   client: WhoopClient,
   chunk: Chunk,
   budget: HistoryBudget,
-  cache: MemoryCache | undefined
+  cache: MemoryCache | undefined,
+  minRecentStoredAt: number | undefined
 ): Promise<ChunkOutcome> {
-  try {
-    const { value, storedAt, hit } =
-      cache !== undefined
-        ? await cache.getOrFetchWithMeta(
-            chunk.key,
-            chunk.ttlMs,
-            () => fetchChunk(client, chunk, budget),
-            { store: (data) => data.complete }
-          )
-        : { value: await fetchChunk(client, chunk, budget), storedAt: Date.now(), hit: false };
+  const minStoredAt = chunk.ttlMs === RECENT_TTL_MS ? minRecentStoredAt : undefined;
+  let attempt = await attemptChunk(client, chunk, budget, cache, minStoredAt);
+  for (let tries = 1; tries < MAX_CHUNK_ATTEMPTS; tries++) {
+    // A joined fetch runs within the budget of the call that started it: when
+    // that budget or deadline cut it short, read again with this call's own.
+    const retry =
+      attempt.joined &&
+      limitedByBudget(attempt) &&
+      budget.pagesRemaining > 0 &&
+      Date.now() < budget.deadlineMs;
+    if (!retry) break;
+    attempt = await attemptChunk(client, chunk, budget, cache, minStoredAt);
+  }
+  if (!attempt.ok) {
     return {
-      state: value.complete ? "complete" : "incomplete",
-      records: value.records,
-      hit,
-      storedAt,
-      ...(value.partialError !== undefined ? { error: value.partialError } : {}),
-    };
-  } catch (error: unknown) {
-    return {
-      state: error instanceof WhoopRateBudgetError ? "unread" : "failed",
+      state: attempt.error instanceof WhoopRateBudgetError ? "unread" : "failed",
       records: [],
       hit: false,
       storedAt: null,
-      error,
+      readAt: null,
+      error: attempt.error,
     };
   }
+  const { value, storedAt, hit, fetchStartedAt } = attempt;
+  return {
+    state: value.complete ? "complete" : "incomplete",
+    records: value.records,
+    hit,
+    storedAt,
+    readAt: hit ? storedAt : (fetchStartedAt ?? storedAt),
+    ...(value.partialError !== undefined ? { error: value.partialError } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -386,7 +493,13 @@ export async function loadHistory<T>(
     while (!stopped && nextIndex < chunks.length) {
       const index = nextIndex;
       nextIndex += 1;
-      const outcome = await loadChunk(client, chunks[index]!, budget, options.cache);
+      const outcome = await loadChunk(
+        client,
+        chunks[index]!,
+        budget,
+        options.cache,
+        options.minRecentStoredAt
+      );
       outcomes[index] = outcome;
       loadedRecords += outcome.records.length;
       if (outcome.state !== "complete" || loadedRecords >= MAX_RECORDS_PER_SOURCE) {
@@ -413,6 +526,17 @@ export async function loadHistory<T>(
     completeSince = iso(Math.max(startMs, chunks[completePrefix - 1]!.startMs));
   }
   const chunksFromCache = outcomes.filter((outcome) => outcome?.hit === true).length;
+  const recentReads = outcomes.flatMap((outcome, index) =>
+    outcome?.readAt !== null &&
+    outcome?.readAt !== undefined &&
+    chunks[index]!.ttlMs === RECENT_TTL_MS
+      ? [outcome.readAt]
+      : []
+  );
+  const recentSnapshot =
+    recentReads.length > 0
+      ? { oldest: Math.min(...recentReads), newest: Math.max(...recentReads) }
+      : null;
   const meta = {
     complete_since: completeSince,
     chunks_total: chunks.length,
@@ -447,9 +571,15 @@ export async function loadHistory<T>(
   ) {
     const error = newest.error ?? new WhoopRateBudgetError();
     if (error instanceof z.ZodError) {
-      return { records: [], quality: failedQuality("invalid"), ...meta };
+      return { records: [], quality: failedQuality("invalid"), ...meta, recent_snapshot: null };
     }
-    return { records: [], quality: failedQuality("fetch_failed"), error, ...meta };
+    return {
+      records: [],
+      quality: failedQuality("fetch_failed"),
+      error,
+      ...meta,
+      recent_snapshot: null,
+    };
   }
 
   const quality = sourceQuality(rawRecords.length, truncated);
@@ -468,8 +598,89 @@ export async function loadHistory<T>(
       outcome !== undefined && outcome.state !== "complete" && outcome.error !== undefined
   )?.error;
   return partialError !== undefined
-    ? { records, quality, partialError, ...meta }
-    : { records, quality, ...meta };
+    ? { records, quality, partialError, ...meta, recent_snapshot: recentSnapshot }
+    : { records, quality, ...meta, recent_snapshot: recentSnapshot };
+}
+
+// ---------------------------------------------------------------------------
+// Consistent snapshot across sources
+// ---------------------------------------------------------------------------
+
+function usableSnapshot(
+  source: HistorySource<unknown>
+): source is HistorySource<unknown> & { recent_snapshot: { oldest: number; newest: number } } {
+  return (
+    source.quality.status !== "fetch_failed" &&
+    source.quality.status !== "invalid" &&
+    source.recent_snapshot !== null
+  );
+}
+
+/** Start of the complete data, epoch ms; +Infinity when not even the newest chunk is complete. */
+function completeSinceMs(source: HistorySource<unknown>): number {
+  if (source.complete_since === null) return Number.POSITIVE_INFINITY;
+  const ms = Date.parse(source.complete_since);
+  return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
+}
+
+/** Whether `reload` covers less than `original`: newly truncated, or complete from a later instant. */
+function moreTruncated(reload: HistorySource<unknown>, original: HistorySource<unknown>): boolean {
+  if (reload.quality.truncated && !original.quality.truncated) return true;
+  return completeSinceMs(reload) > completeSinceMs(original);
+}
+
+/**
+ * Load several history sources of one tool call so that their recent data
+ * forms one snapshot.
+ *
+ * All loaders run in parallel. Among the usable sources (not fetch_failed or
+ * invalid, with a recent chunk read), every source whose recent data was read
+ * more than HISTORY_SNAPSHOT_TOLERANCE_MS before the newest read — including a
+ * source whose own recent chunks were read at different times — is loaded
+ * once more, in parallel, with `minRecentStoredAt` at that floor. The loaders
+ * close over the call's shared budget, so a re-read spends the same budget.
+ *
+ * A re-read replaces the original only when it is usable and not more
+ * truncated; otherwise the original is kept and HISTORY_MIXED_SNAPSHOT_WARNING
+ * is returned once. Sources that already form one snapshot (e.g. all served
+ * from one earlier call's cache) cost no request.
+ */
+export async function loadConsistentHistory<const L extends readonly HistoryLoader<unknown>[]>(
+  loaders: L
+): Promise<{
+  sources: { -readonly [K in keyof L]: Awaited<ReturnType<L[K]>> };
+  warnings: string[];
+}> {
+  const sources: HistorySource<unknown>[] = await Promise.all(loaders.map((load) => load({})));
+  const warnings: string[] = [];
+
+  const usable = sources.filter(usableSnapshot);
+  if (usable.length > 0) {
+    const newest = Math.max(...usable.map((source) => source.recent_snapshot.newest));
+    const floor = newest - HISTORY_SNAPSHOT_TOLERANCE_MS;
+    const stale = sources.flatMap((source, index) =>
+      usableSnapshot(source) && source.recent_snapshot.oldest < floor ? [index] : []
+    );
+    const reloads = await Promise.all(
+      stale.map((index) => loaders[index]!({ minRecentStoredAt: floor }))
+    );
+    let mixed = false;
+    stale.forEach((index, position) => {
+      const original = sources[index]!;
+      const reload = reloads[position]!;
+      if (usableSnapshot(reload) && !moreTruncated(reload, original)) {
+        sources[index] = reload;
+      } else {
+        mixed = true;
+      }
+    });
+    if (mixed) warnings.push(HISTORY_MIXED_SNAPSHOT_WARNING);
+  }
+
+  return {
+    sources: sources as { -readonly [K in keyof L]: Awaited<ReturnType<L[K]>> },
+    warnings,
+  };
 }
 
 function failedQuality(status: "fetch_failed" | "invalid"): SourceQuality {

@@ -20,6 +20,7 @@ vi.mock("../../src/auth/token-store.js", async (importOriginal) => ({
 }));
 
 import { runSetup } from "../../src/cli/setup.js";
+import { TokenStoreReadError } from "../../src/auth/token-store.js";
 
 function makeIo(): {
   io: { input: NodeJS.ReadableStream; output: NodeJS.WritableStream };
@@ -101,5 +102,35 @@ describe("setup --verify token refresh", () => {
       .join("\n");
     expect(logged).toContain("EBUSY");
     expect(logged).not.toContain("/secret/path");
+  });
+
+  it("keeps an unreadable token file and reports the guidance instead of signing in again", async () => {
+    const unreadable = new TokenStoreReadError("~/.whoop-mcp/tokens.json", "EACCES");
+    mockLoadTokens.mockRejectedValue(unreadable);
+    // The cached access token no longer works, so the client refreshes.
+    mockFetch.mockResolvedValue(new Response("{}", { status: 401 }));
+    const deleteTokens = vi.fn(async () => undefined);
+    const authenticate = vi.fn(async () => "A0");
+    const { io } = makeIo();
+
+    const outcome = await runSetup(
+      { clientId: "id", clientSecret: "s", client: "claude-code", verify: true },
+      { io, authenticate, deleteTokens }
+    ).then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toBe(
+      `Verification failed fetching profile: ${unreadable.message}`
+    );
+    // No token request with a missing refresh token, no deletion, no second sign-in.
+    expect(mockFetch.mock.calls.some(([url]) => String(url).includes("/oauth/oauth2/token"))).toBe(
+      false
+    );
+    expect(deleteTokens).not.toHaveBeenCalled();
+    expect(authenticate).toHaveBeenCalledOnce();
+    expect(mockSaveTokens).not.toHaveBeenCalled();
   });
 });

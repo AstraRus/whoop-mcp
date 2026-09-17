@@ -309,6 +309,64 @@ describe("main() entry point", () => {
       expect(newAccessToken).toBe("new-access-token");
     });
 
+    it("refreshes from the in-memory tokens when the token file cannot be read", async () => {
+      setupHappyPath();
+      const { TokenStoreReadError } = await vi.importActual<
+        typeof import("../src/auth/token-store.js")
+      >("../src/auth/token-store.js");
+      const kept = {
+        access_token: "A-kept",
+        refresh_token: "R-kept",
+        expires_at: Date.now() + 3_600_000,
+        token_type: "Bearer",
+      };
+      mockAuthenticate.mockImplementation(async (...args: unknown[]): Promise<string> => {
+        (args[1] as { onTokens: (t: unknown) => void }).onTokens(kept);
+        return "A-kept";
+      });
+      mockLoadTokens.mockRejectedValue(
+        new TokenStoreReadError("/home/node/.whoop-mcp/tokens.json", "EACCES")
+      );
+      mockRefreshAccessToken.mockResolvedValue({
+        access_token: "A-next",
+        refresh_token: "R-next",
+        expires_in: 3600,
+        token_type: "Bearer",
+        scope: "read:profile",
+      });
+      const next = {
+        access_token: "A-next",
+        refresh_token: "R-next",
+        expires_at: Date.now() + 7_200_000,
+        token_type: "Bearer",
+      };
+      mockToOAuthTokens.mockReturnValue(next);
+      mockSaveTokens.mockResolvedValue(undefined);
+      const stderr: string[] = [];
+      const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        stderr.push(String(chunk));
+        return true;
+      });
+
+      try {
+        const { main } = await importMain();
+        await main();
+        const { onTokenRefresh } = mockCreateWhoopClient.mock.calls[0]![0] as {
+          onTokenRefresh: () => Promise<string>;
+        };
+        await expect(onTokenRefresh()).resolves.toBe("A-next");
+      } finally {
+        writeSpy.mockRestore();
+      }
+
+      expect(mockRefreshAccessToken).toHaveBeenCalledWith("R-kept", expect.anything());
+      expect(mockSaveTokens).toHaveBeenCalledWith(next);
+      const log = stderr.join("");
+      expect(log).toContain('"msg":"whoop token store read failed"');
+      expect(log).toContain('"code":"EACCES"');
+      expect(log).not.toMatch(/R-kept|A-kept|R-next|A-next/);
+    });
+
     it("throws when no stored tokens are found", async () => {
       setupHappyPath();
       mockLoadTokens.mockResolvedValue(null);
@@ -832,6 +890,102 @@ describe("main() entry point", () => {
       );
     });
 
+    it("leaves the OAuth connector unmounted without MCP_CONNECTOR_PASSWORD, and the static bearer works", async () => {
+      // Production after MCP_CONNECTOR_PASSWORD was deleted: PUBLIC_URL and
+      // ALLOWED_REDIRECT_URIS are still set.
+      process.env.MCP_TRANSPORT = "http";
+      process.env.MCP_AUTH_TOKEN = "static-bearer-token-32chars-aaaa";
+      process.env.MCP_PORT = "0";
+      process.env.MCP_HOST = "127.0.0.1";
+      process.env.MCP_TRUST_PROXY = "1";
+      process.env.PUBLIC_URL = "https://whoop.example.com";
+      process.env.ALLOWED_REDIRECT_URIS = "https://claude.ai/api/mcp/auth_callback";
+      delete process.env.MCP_CONNECTOR_PASSWORD;
+      process.env.LOG_LEVEL = "info";
+      setupHappyPath();
+      const { McpServer } = await import("@modelcontextprotocol/sdk/server/mcp.js");
+      mockCreateWhoopServer.mockImplementation(() => ({
+        server: new McpServer({ name: "whoop-test", version: "0.0.0" }),
+      }));
+      const actualHttp = await vi.importActual<typeof import("../src/transport/http.js")>(
+        "../src/transport/http.js"
+      );
+      let started: Awaited<ReturnType<typeof actualHttp.createHttpServer>> | undefined;
+      mockCreateHttpServer.mockImplementation(async (...args: unknown[]) => {
+        started = await actualHttp.createHttpServer(
+          ...(args as Parameters<typeof actualHttp.createHttpServer>)
+        );
+        return started;
+      });
+      const stderr: string[] = [];
+      const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        stderr.push(String(chunk));
+        return true;
+      });
+
+      try {
+        const { main } = await importMain();
+        await main();
+        const address = started!.server.address();
+        if (address === null || typeof address === "string") throw new Error("no port");
+        const base = `http://127.0.0.1:${address.port}`;
+
+        const register = await fetch(`${base}/register`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ redirect_uris: ["https://claude.ai/api/mcp/auth_callback"] }),
+        });
+        expect(register.status).toBe(404);
+        const metadata = await fetch(`${base}/.well-known/oauth-authorization-server`);
+        expect(metadata.status).toBe(404);
+
+        const mcp = await fetch(`${base}/mcp`, {
+          method: "POST",
+          headers: {
+            authorization: "Bearer static-bearer-token-32chars-aaaa",
+            "content-type": "application/json",
+            accept: "application/json, text/event-stream",
+          },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "initialize",
+            params: {
+              protocolVersion: "2025-06-18",
+              capabilities: {},
+              clientInfo: { name: "t", version: "1" },
+            },
+          }),
+        });
+        expect(mcp.status).toBe(200);
+        expect(await mcp.text()).toContain("whoop-test");
+        // Without a verifier, any other token is a plain 401 (no OAuth metadata).
+        const other = await fetch(`${base}/mcp`, {
+          method: "POST",
+          headers: { authorization: "Bearer not-the-token", "content-type": "application/json" },
+          body: "{}",
+        });
+        expect(other.status).toBe(401);
+        expect(other.headers.get("www-authenticate")).toBeNull();
+      } finally {
+        writeSpy.mockRestore();
+        await started?.close();
+      }
+
+      const [options] = mockCreateHttpServer.mock.calls[0] as [Record<string, unknown>];
+      expect(options.oauthHandler).toBeUndefined();
+      expect(options.authenticateBearer).toBeUndefined();
+      const entries = stderr
+        .join("")
+        .split("\n")
+        .filter((line) => line.startsWith("{"))
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      expect(entries.find((e) => e.msg === "http transport listening")).toMatchObject({
+        oauthMounted: false,
+      });
+      expect(entries.some((e) => e.msg === "oauth connector mounted")).toBe(false);
+    });
+
     it("MCP_TRUST_PROXY=1 enables trustProxy on the HTTP server", async () => {
       process.env.MCP_TRANSPORT = "http";
       process.env.MCP_AUTH_TOKEN = "tok";
@@ -1099,6 +1253,82 @@ describe("main() entry point", () => {
         expect.objectContaining({ access_token: "A-fresh", refresh_token: "R-fresh" })
       );
       expect(runtimeStatus().snapshot().whoop_auth.last_refresh?.outcome).toBe("ok");
+    });
+
+    it("serves in degraded mode within STARTUP_AUTH_BUDGET_MS when every refresh hangs", async () => {
+      process.env.MCP_TRANSPORT = "http";
+      process.env.MCP_AUTH_TOKEN = "test-bearer-token-32chars-aaaa";
+      const { STARTUP_AUTH_BUDGET_MS } = await import("../src/index.js");
+      const { TOKEN_REQUEST_TIMEOUT_MS } =
+        await vi.importActual<typeof import("../src/auth/oauth.js")>("../src/auth/oauth.js");
+      expect(STARTUP_AUTH_BUDGET_MS).toBe(120_000);
+      const startedAt = Date.now();
+      let listeningAt: number | undefined;
+      mockCreateHttpServer.mockImplementation(async () => {
+        listeningAt = Date.now();
+        return { server: {}, transport: {}, close: mockHttpClose };
+      });
+      // WHOOP accepts the connection and never answers; like real fetch, the
+      // request rejects with the signal's reason when it aborts.
+      fetchMock.mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise((_, reject) => {
+            const signal = init?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+          })
+      );
+      const { main } = await importMain();
+      const run = main();
+
+      await vi.advanceTimersByTimeAsync(STARTUP_AUTH_BUDGET_MS);
+
+      expect(mockCreateHttpServer).toHaveBeenCalledOnce();
+      await run;
+      expect(listeningAt! - startedAt).toBeLessThanOrEqual(STARTUP_AUTH_BUDGET_MS);
+      // 30 s + 5 s + 30 s + 15 s + 30 s: a third delay (45 s) would pass the budget.
+      expect(listeningAt! - startedAt).toBe(3 * TOKEN_REQUEST_TIMEOUT_MS + 5_000 + 15_000);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      for (const [, init] of fetchMock.mock.calls as Array<[string, RequestInit]>) {
+        expect(init.signal?.aborted).toBe(true);
+      }
+      expect(mockStartCallbackServer).not.toHaveBeenCalled();
+      expect(mockSaveTokens).not.toHaveBeenCalled();
+      expect(mockCreateWhoopClient).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "A-stale" })
+      );
+      const entries = logEntries();
+      expect(entries.filter((e) => e.msg === RETRY_MSG)).toEqual([
+        expect.objectContaining({ errorClass: "WhoopNetworkError", attempt: 1, delayMs: 5_000 }),
+        expect.objectContaining({ errorClass: "WhoopNetworkError", attempt: 2, delayMs: 15_000 }),
+      ]);
+      expect(entries.filter((e) => e.msg === DEGRADED_MSG)).toEqual([
+        expect.objectContaining({
+          level: "error",
+          errorClass: "WhoopNetworkError",
+          outcome: "transient_failure",
+        }),
+      ]);
+      expect(runtimeStatus().snapshot().whoop_auth.last_refresh?.outcome).toBe("transient_failure");
+    });
+
+    it("fails fast with guidance, without signing in, when the token file cannot be read", async () => {
+      const { TokenStoreReadError } = await vi.importActual<
+        typeof import("../src/auth/token-store.js")
+      >("../src/auth/token-store.js");
+      const unreadable = new TokenStoreReadError("/home/node/.whoop-mcp/tokens.json", "EACCES");
+      mockLoadTokens.mockRejectedValue(unreadable);
+      const { main } = await importMain();
+
+      const error = await main().catch((e: unknown) => e);
+
+      expect(error).toBe(unreadable);
+      expect(String((error as Error).message)).toMatch(
+        /Cannot read the WHOOP token file \/home\/node\/\.whoop-mcp\/tokens\.json \(EACCES\)\. .*no new WHOOP sign-in was started/
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(mockStartCallbackServer).not.toHaveBeenCalled();
+      expect(mockSaveTokens).not.toHaveBeenCalled();
+      expect(mockCreateWhoopServer).not.toHaveBeenCalled();
     });
 
     it("starts normally when the second attempt succeeds", async () => {

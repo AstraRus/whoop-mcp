@@ -320,6 +320,14 @@ describe("guidance", () => {
       expect(text).not.toMatch(/recommended \(\d/);
     }
   );
+
+  it.each([...STANDARD_PROMPT_NAMES, ...AGGREGATE_PROMPT_NAMES])(
+    "%s asks for observations, not recommendations",
+    async (name) => {
+      const text = await promptText(name, SAMPLE_ARGUMENTS[name], modeOf(name));
+      expect(text).not.toMatch(/\bactionable\b|recommendations? (based|for)\b/i);
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------

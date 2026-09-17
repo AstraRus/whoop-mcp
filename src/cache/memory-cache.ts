@@ -14,6 +14,10 @@
  *   mid-flight cannot repopulate the cache with stale data.
  * - `getOrFetchWithMeta` also reports hit/miss and the stored-at time, and can
  *   decline to store a value (e.g. an incomplete history chunk).
+ * - `getOrFetchWithMeta` accepts `minStoredAt`: a stored entry written before it
+ *   is a miss, and a fetch that started before it is not joined (a new fetch
+ *   starts). A fetch never overwrites an entry written by a fetch that started
+ *   after it, so an older fetch finishing late cannot replace newer data.
  * - `getOrFetch` honours the reading caller's TTL as well as the writer's: an
  *   entry older than the reader's `ttlMs` is a miss. Callers that share a key
  *   with different freshness needs (e.g. a 2-minute resource and a longer-lived
@@ -48,6 +52,11 @@ export interface MemoryCacheOptions {
 export interface GetOrFetchOptions<R> {
   /** Return false to skip storing a fetched value (it is still returned to the callers). */
   store?: (value: R) => boolean;
+  /**
+   * Epoch ms: a stored entry written before it counts as a miss (fetched again,
+   * then replaced), and a fetch in flight that started before it is not joined.
+   */
+  minStoredAt?: number;
 }
 
 /** A value served by {@link MemoryCache.getOrFetchWithMeta}. */
@@ -57,11 +66,17 @@ export interface CacheFetchResult<R> {
   storedAt: number;
   /** True when the value came from a stored entry rather than a fetch. */
   hit: boolean;
+  /** True only when this caller joined a fetch another caller had already started. */
+  joined: boolean;
+  /** Epoch ms when the fetch that produced the value started (miss or join); null for a hit. */
+  fetchStartedAt: number | null;
 }
 
 interface InflightEntry {
   /** Generation the fetch may store under; `deleteWhere` moves non-matching fetches forward. */
   generation: number;
+  /** Epoch ms when the fetch started. */
+  startedAt: number;
   promise: Promise<{ value: unknown; storedAt: number }>;
 }
 
@@ -71,6 +86,8 @@ interface CacheEntry {
   expiry: number;
   /** Epoch ms when the entry was written, so each reader can apply its own TTL. */
   storedAt: number;
+  /** Epoch ms when the fetch that produced the entry started (storedAt for `set`). */
+  startedAt: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +156,8 @@ export class MemoryCache<T = unknown> {
    */
   set(key: string, value: T, ttlMs?: number): void {
     // Treat a write to an existing key as a use (move to MRU).
-    this.writeEntry(key, value, ttlMs ?? this.defaultTtlMs, Date.now());
+    const now = Date.now();
+    this.writeEntry(key, value, ttlMs ?? this.defaultTtlMs, now, now);
   }
 
   /** Remove a single entry. Returns true if an entry was removed. */
@@ -209,7 +227,15 @@ export class MemoryCache<T = unknown> {
    * A fetched value is stored only when no `clear`/matching `deleteWhere`
    * happened while it was in flight and `options.store(value)` does not return
    * false (e.g. an incomplete result that must not be served to later readers).
-   * Callers joining an in-flight fetch share its result with `hit: false`.
+   * Callers joining an in-flight fetch share its result with `hit: false` and
+   * `joined: true`.
+   *
+   * With `options.minStoredAt`, an entry stored before it is a miss and a fetch
+   * in flight that started before it is not joined: this caller starts a new
+   * fetch, which replaces the in-flight registration. The superseded fetch
+   * still returns its value to its own callers but does not store it, and no
+   * fetch stores over an entry from a fetch that started later (including a
+   * `set` made while it was in flight).
    */
   getOrFetchWithMeta<R>(
     key: string,
@@ -217,30 +243,47 @@ export class MemoryCache<T = unknown> {
     fetcher: () => Promise<R>,
     options: GetOrFetchOptions<R> = {}
   ): Promise<CacheFetchResult<R>> {
+    const minStoredAt = options.minStoredAt;
     const entry = this.store.get(key);
     if (entry !== undefined) {
       const now = Date.now();
       if (now >= entry.expiry) {
         this.store.delete(key);
-      } else if (now - entry.storedAt < ttlMs) {
+      } else if (
+        now - entry.storedAt < ttlMs &&
+        (minStoredAt === undefined || entry.storedAt >= minStoredAt)
+      ) {
         // Fresh enough for this reader: refresh the LRU position and serve it.
         this.store.delete(key);
         this.store.set(key, entry);
-        return Promise.resolve({ value: entry.value as R, storedAt: entry.storedAt, hit: true });
+        return Promise.resolve({
+          value: entry.value as R,
+          storedAt: entry.storedAt,
+          hit: true,
+          joined: false,
+          fetchStartedAt: null,
+        });
       }
     }
 
     const existing = this.inflight.get(key);
-    if (existing !== undefined) {
+    if (
+      existing !== undefined &&
+      (minStoredAt === undefined || existing.startedAt >= minStoredAt)
+    ) {
+      const startedAt = existing.startedAt;
       return existing.promise.then((result) => ({
         value: result.value as R,
         storedAt: result.storedAt,
         hit: false,
+        joined: true,
+        fetchStartedAt: startedAt,
       }));
     }
 
     const flight: InflightEntry = {
       generation: this.generation,
+      startedAt: Date.now(),
       promise: Promise.resolve({ value: undefined, storedAt: 0 }),
     };
     const settle = (): void => {
@@ -254,10 +297,10 @@ export class MemoryCache<T = unknown> {
         const storedAt = Date.now();
         if (
           flight.generation === this.generation &&
-          this.inflight.get(key) === flight &&
+          this.mayStore(key, flight) &&
           options.store?.(value) !== false
         ) {
-          this.writeEntry(key, value, ttlMs, storedAt);
+          this.writeEntry(key, value, ttlMs, storedAt, flight.startedAt);
         }
         return { value, storedAt };
       } finally {
@@ -268,12 +311,36 @@ export class MemoryCache<T = unknown> {
     this.inflight.set(key, flight);
     const promise = run();
     flight.promise = promise;
-    return promise.then(({ value, storedAt }) => ({ value, storedAt, hit: false }));
+    return promise.then(({ value, storedAt }) => ({
+      value,
+      storedAt,
+      hit: false,
+      joined: false,
+      fetchStartedAt: flight.startedAt,
+    }));
   }
 
-  private writeEntry(key: string, value: unknown, ttlMs: number, storedAt: number): void {
+  /**
+   * Whether a finished fetch may store its value: not once a newer fetch has
+   * replaced its in-flight registration (that one stores when it finishes), and
+   * never over an entry from a fetch that started later.
+   */
+  private mayStore(key: string, flight: InflightEntry): boolean {
+    const current = this.inflight.get(key);
+    if (current !== undefined && current !== flight) return false;
+    const stored = this.store.get(key);
+    return stored === undefined || stored.startedAt <= flight.startedAt;
+  }
+
+  private writeEntry(
+    key: string,
+    value: unknown,
+    ttlMs: number,
+    storedAt: number,
+    startedAt: number
+  ): void {
     this.store.delete(key);
-    this.store.set(key, { value, expiry: storedAt + ttlMs, storedAt });
+    this.store.set(key, { value, expiry: storedAt + ttlMs, storedAt, startedAt });
     this.evictIfNeeded();
   }
 

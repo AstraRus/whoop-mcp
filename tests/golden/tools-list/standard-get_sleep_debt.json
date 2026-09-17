@@ -1,6 +1,6 @@
 {
   "name": "get_sleep_debt",
-  "description": "Observed nightly sleep deficits, standing debt and local clock consistency. A range expression in `start` (e.g. \"last week\", \"this month\") covers that whole range unless `days` is also given; `period` is written in the user's UTC offset. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data' and the nights that exist are still listed. status 'unavailable' means the sleep data could not be read. `notes` explains either case.",
+  "description": "Observed nightly sleep deficits, standing debt and local clock consistency. A range expression in `start` (e.g. \"last week\", \"this month\") covers that whole range unless `days` is also given; `period` is written in the user's UTC offset. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data' and the nights that exist are still listed. social_jetlag_minutes needs at least 2 weekday and 2 weekend nights and is otherwise null. status 'unavailable' means the sleep data could not be read. `notes` explains either case.",
   "inputSchema": {
     "type": "object",
     "properties": {

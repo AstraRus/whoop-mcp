@@ -44,6 +44,28 @@ export interface TokenResponse {
   scope: string;
 }
 
+/**
+ * Upper bound for one request to the WHOOP token endpoint, covering the
+ * connection, the response headers and the body. Generous on purpose: WHOOP
+ * rotates refresh tokens, so aborting a request WHOOP already processed
+ * loses the new refresh token and forces a new sign-in.
+ */
+export const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * A signal that aborts with a TimeoutError after TOKEN_REQUEST_TIMEOUT_MS, like
+ * AbortSignal.timeout() (and likewise not keeping the process alive), but on
+ * setTimeout so tests with fake timers can drive it.
+ */
+function tokenRequestSignal(): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
+  }, TOKEN_REQUEST_TIMEOUT_MS);
+  timer.unref?.();
+  return controller.signal;
+}
+
 interface PkcePair {
   codeVerifier: string;
   codeChallenge: string;
@@ -130,11 +152,19 @@ export async function exchangeCodeForTokens(
     body.set("code_verifier", codeVerifier);
   }
 
-  const response = await fetch(WHOOP_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
+  let response: Response;
+  try {
+    // The signal also bounds reading the body below.
+    response = await fetch(WHOOP_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+      signal: tokenRequestSignal(),
+    });
+  } catch (error) {
+    // Transport failure or timeout (TimeoutError), not a rejected code.
+    throw new WhoopNetworkError(error);
+  }
 
   if (!response.ok) {
     const { description } = await readTokenErrorBody(response);
@@ -178,9 +208,12 @@ export async function refreshAccessToken(
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
+      // Bounds the whole exchange, including response.json() and the error body.
+      signal: tokenRequestSignal(),
     });
   } catch (error) {
-    // fetch throws on transport-level failures (DNS, TCP, TLS) — distinct from auth failure.
+    // fetch throws on transport-level failures (DNS, TCP, TLS) and on the
+    // timeout (TimeoutError) — distinct from auth failure.
     throw new WhoopNetworkError(error);
   }
 
@@ -305,8 +338,11 @@ async function saveIssuedTokens(tokens: OAuthTokens, tokenDir: string | undefine
  *
  * - If valid (non-expired) tokens exist on disk → returns `access_token`
  * - If tokens exist but are expired → refreshes and returns new `access_token`
- * - If no tokens or WHOOP rejects the refresh token (invalid_grant) → starts
- *   full OAuth flow
+ * - If the token file is missing, malformed or has an invalid shape, or WHOOP
+ *   rejects the refresh token (invalid_grant) → starts full OAuth flow
+ * - If the token file exists but cannot be read (TokenStoreReadError, e.g.
+ *   EACCES) → rethrows without starting a sign-in: the stored sign-in may be
+ *   valid, and a new one would replace it
  * - If the refresh cannot reach WHOOP (WhoopNetworkError), or WHOOP answers
  *   429/5xx or rejects the client credentials (invalid_client) → rethrows, so
  *   the caller can retry: signing in again would not help, and on a hosted

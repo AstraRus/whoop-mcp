@@ -49,10 +49,22 @@ import {
   parseRecords,
   sourceQuality,
 } from "./analytics-utils.js";
-import { lastReleasedWeeks, roundStep, type LocalWeek } from "./aggregate-window.js";
+import {
+  AGGREGATE_WORKOUT_KJ_STEP,
+  AGGREGATE_WORKOUT_STRAIN_STEP,
+  lastReleasedWeeks,
+  roundStep,
+  type LocalWeek,
+} from "./aggregate-window.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import { parseUtcOffset, resolveDateExpression } from "./date-utils.js";
-import { assignWorkouts, fetchRangeForDays, isOpenCycle, placeDays } from "./day-model.js";
+import {
+  assignWorkouts,
+  fetchRangeForDays,
+  isOpenCycle,
+  openCycleStrainNote,
+  placeDays,
+} from "./day-model.js";
 import {
   AGGREGATE_METRIC_STEP,
   aggregateMetric,
@@ -525,12 +537,12 @@ export async function getWeeklySummary(
 
   // --- Strain: the completed cycle placed on each day ---
   const strainValues: number[] = [];
-  let inProgress = false;
+  const inProgressDays: string[] = [];
   let partialDays = 0;
   for (const day of weekDaysList) {
     const cycle = placement.cycleByDay.get(day);
     if (!cycle) continue;
-    if (isOpenCycle(cycle)) inProgress = true;
+    if (isOpenCycle(cycle)) inProgressDays.push(day);
     else if (isPartialDay(placement, day, cycle)) partialDays += 1;
     else if (cycle.score_state === "SCORED" && cycle.score) strainValues.push(cycle.score.strain);
   }
@@ -538,9 +550,7 @@ export async function getWeeklySummary(
     average_daily_strain: rounded(averageOrNull(strainValues), 2),
     max_daily_strain: strainValues.length ? roundTo(Math.max(...strainValues), 2) : null,
   };
-  if (inProgress) {
-    notes.push("Today's strain is still accumulating and is not included.");
-  }
+  notes.push(...openCycleStrainNote(inProgressDays, today, week.sunday));
   if (partialDays) {
     notes.push(
       `${partialDays === 1 ? "1 day" : `${partialDays} days`} WHOOP covered only in part (the strap was put on that day) ${partialDays === 1 ? "is" : "are"} not included in daily strain.`
@@ -717,11 +727,11 @@ async function aggregateWeeklySummary(
         count: scored.length,
         total_strain: roundStep(
           scored.reduce((sum, workout) => sum + workout.score!.strain, 0),
-          0.1
+          AGGREGATE_WORKOUT_STRAIN_STEP
         ),
         total_calories_kj: roundStep(
           scored.reduce((sum, workout) => sum + workout.score!.kilojoule, 0),
-          1
+          AGGREGATE_WORKOUT_KJ_STEP
         ),
         sport_breakdown: {},
       };

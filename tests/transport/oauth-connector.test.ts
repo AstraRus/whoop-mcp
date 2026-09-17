@@ -541,7 +541,7 @@ describe("SignedClientsStore", () => {
     }
   );
 
-  it("derives the id from the signed payload (sorted redirect URIs, name, mode)", () => {
+  it("derives the id from the signed payload (sorted redirect URIs, name, mode, nonce)", () => {
     const registered = store().registerClient(
       registration({
         redirect_uris: [CLAUDE_COM_CALLBACK, CLAUDE_AI_CALLBACK, CLAUDE_COM_CALLBACK],
@@ -555,10 +555,47 @@ describe("SignedClientsStore", () => {
       r: [CLAUDE_AI_CALLBACK, CLAUDE_COM_CALLBACK].sort(),
       n: "x".repeat(64),
       m: "n",
+      i: expect.stringMatching(/^[A-Za-z0-9_-]{22}$/),
     });
     expect(mac).toBe(createHmac("sha256", secret).update(`dcr-v1|${payload}`).digest("base64url"));
     // The requested scope is ignored.
     expect(registered.scope).toBe("mcp");
+  });
+
+  it("gives two registrations with identical metadata different ids and secrets", () => {
+    const first = store().registerClient(
+      registration({ token_endpoint_auth_method: "client_secret_post" })
+    );
+    const second = store().registerClient(
+      registration({ token_endpoint_auth_method: "client_secret_post" })
+    );
+
+    expect(second.client_id).not.toBe(first.client_id);
+    expect(second.client_secret).toBeDefined();
+    expect(second.client_secret).not.toBe(first.client_secret);
+    for (const registered of [first, second]) {
+      const found = store().getClient(registered.client_id);
+      expect(found?.client_id).toBe(registered.client_id);
+      expect(found?.client_secret).toBe(registered.client_secret);
+    }
+  });
+
+  it("does not recognize a signed id without a nonce, or with a malformed one", () => {
+    const sign = (payload: unknown): string => {
+      const encoded = Buffer.from(JSON.stringify(payload)).toString("base64url");
+      const mac = createHmac("sha256", secret).update(`dcr-v1|${encoded}`).digest("base64url");
+      return `dcr.${encoded}.${mac}`;
+    };
+    expect(store().getClient(sign({ r: [CLAUDE_AI_CALLBACK], m: "p" }))).toBeUndefined();
+    expect(
+      store().getClient(sign({ r: [CLAUDE_AI_CALLBACK], m: "p", i: "short" }))
+    ).toBeUndefined();
+    expect(
+      store().getClient(sign({ r: [CLAUDE_AI_CALLBACK], m: "p", i: "A".repeat(21) + "=" }))
+    ).toBeUndefined();
+    expect(
+      store().getClient(sign({ r: [CLAUDE_AI_CALLBACK], m: "p", i: "A".repeat(22) }))
+    ).toBeDefined();
   });
 
   it("rejects client_secret_basic and unknown auth methods as invalid client metadata", () => {
@@ -1115,6 +1152,65 @@ describe("createOAuthApp (integration)", () => {
         });
         expect(noSecret.status).toBe(400);
         expect(noSecret.json.error).toBe("invalid_client");
+      } finally {
+        await ctx.close();
+      }
+    });
+
+    it("never lets a second identical registration use the first registrant's refresh token", async () => {
+      const ctx = await startApp();
+      try {
+        const owner = await registerClient(ctx.baseUrl, CLAUDE_REGISTRATION);
+        const other = await registerClient(ctx.baseUrl, CLAUDE_REGISTRATION);
+        expect(owner.status).toBe(201);
+        expect(other.status).toBe(201);
+        expect(other.json.client_id).not.toBe(owner.json.client_id);
+        expect(other.json.client_secret).not.toBe(owner.json.client_secret);
+        const ownerId = String(owner.json.client_id);
+        const ownerSecret = String(owner.json.client_secret);
+
+        const { code, verifier } = await authorizeCode(ctx, {
+          client_id: ownerId,
+          redirect_uri: CLAUDE_AI_CALLBACK,
+        });
+        const tokens = await postToken(ctx, {
+          grant_type: "authorization_code",
+          code,
+          redirect_uri: CLAUDE_AI_CALLBACK,
+          client_id: ownerId,
+          client_secret: ownerSecret,
+          code_verifier: verifier,
+        });
+        expect(tokens.status).toBe(200);
+        const refreshToken = String(tokens.json.refresh_token);
+
+        const stolen = await postToken(ctx, {
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: String(other.json.client_id),
+          client_secret: String(other.json.client_secret),
+        });
+        expect(stolen.status).toBe(400);
+        expect(["invalid_grant", "invalid_client"]).toContain(stolen.json.error);
+        expect(stolen.json.access_token).toBeUndefined();
+        // The owner's secret under the other id is refused as well.
+        const mixed = await postToken(ctx, {
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: String(other.json.client_id),
+          client_secret: ownerSecret,
+        });
+        expect(mixed.status).toBe(400);
+
+        // The refused attempts did not consume the owner's refresh token.
+        const refreshed = await postToken(ctx, {
+          grant_type: "refresh_token",
+          refresh_token: refreshToken,
+          client_id: ownerId,
+          client_secret: ownerSecret,
+        });
+        expect(refreshed.status).toBe(200);
+        expect(refreshed.json.access_token).toBeTruthy();
       } finally {
         await ctx.close();
       }

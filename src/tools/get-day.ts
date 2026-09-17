@@ -45,9 +45,13 @@ import {
   createHistoryBudget,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  HISTORY_MIXED_SNAPSHOT_WARNING,
+  loadConsistentHistory,
   loadHistory,
   type HistoryBudget,
+  type HistoryLoader,
   type HistorySource,
+  type LoadHistoryOptions,
 } from "../api/history.js";
 import {
   cycleDay,
@@ -126,6 +130,11 @@ export interface DaySources {
   sleep: HistorySource<Sleep> | null;
   recovery: HistorySource<Recovery> | null;
   workout: HistorySource<Workout> | null;
+  /**
+   * Warnings about the snapshot the sources form: collections read at
+   * different times around a WHOOP sync that could not be re-read.
+   */
+  warnings: string[];
 }
 
 /** How each collection is named in warnings. */
@@ -137,7 +146,84 @@ export const DAY_SOURCE_LABELS: Record<DaySourceName, string> = {
 };
 
 /**
- * Load the needed collections over `range` as history, sharing one budget.
+ * Whether loaded cycles, sleeps and recoveries look like they were read on
+ * different sides of a WHOOP sync, judged from the records themselves. This
+ * also catches WHOOP creating a night's cycle a few seconds before its sleep
+ * and recovery, which no read-time comparison can see.
+ * - A sleep or recovery belongs to a cycle that is not among the loaded cycles
+ *   and started (a recovery: was created, or its sleep started) at or after
+ *   the newest loaded cycle's start.
+ * - The newest loaded main sleep ended after the main sleep linked to the open
+ *   cycle (sleeps already know a newer night that cycles do not).
+ */
+export function daySourcesOutOfStep(
+  cycles: readonly Cycle[],
+  sleeps: readonly Sleep[],
+  recoveries: readonly Recovery[]
+): boolean {
+  let newest: Cycle | undefined;
+  for (const cycle of cycles) {
+    if (newest === undefined || Date.parse(cycle.start) > Date.parse(newest.start)) {
+      newest = cycle;
+    }
+  }
+  if (newest === undefined) return false;
+  const newestStartMs = Date.parse(newest.start);
+  if (!Number.isFinite(newestStartMs)) return false;
+  const cycleIds = new Set(cycles.map((cycle) => cycle.id));
+  const sleepById = new Map(sleeps.map((sleep) => [sleep.id, sleep]));
+  const unknownAndNewer = (cycleId: number, atMs: number): boolean =>
+    !cycleIds.has(cycleId) && Number.isFinite(atMs) && atMs >= newestStartMs;
+  if (sleeps.some((sleep) => unknownAndNewer(sleep.cycle_id, Date.parse(sleep.start)))) {
+    return true;
+  }
+  const recoveryAhead = recoveries.some((recovery) => {
+    const sleep = sleepById.get(recovery.sleep_id);
+    const createdMs = Date.parse(recovery.created_at);
+    const atMs = Math.max(
+      Number.isFinite(createdMs) ? createdMs : Number.NEGATIVE_INFINITY,
+      sleep !== undefined ? Date.parse(sleep.start) : Number.NEGATIVE_INFINITY
+    );
+    return unknownAndNewer(recovery.cycle_id, atMs);
+  });
+  if (recoveryAhead) return true;
+  if (isOpenCycle(newest)) {
+    const openId = newest.id;
+    const mainSleeps = sleeps.filter((sleep) => !sleep.nap);
+    const linkedEnds = mainSleeps
+      .filter((sleep) => sleep.cycle_id === openId)
+      .map((sleep) => Date.parse(sleep.end));
+    if (linkedEnds.length > 0) {
+      const linkedEndMs = Math.max(...linkedEnds);
+      if (mainSleeps.some((sleep) => Date.parse(sleep.end) > linkedEndMs)) return true;
+    }
+  }
+  return false;
+}
+
+/** Whether a re-read covers less than the original: newly truncated, or complete from later. */
+function reloadCoversLess(
+  reload: HistorySource<unknown>,
+  original: HistorySource<unknown>
+): boolean {
+  if (reload.quality.truncated && !original.quality.truncated) return true;
+  const since = (source: HistorySource<unknown>): number => {
+    const ms = source.complete_since === null ? Number.NaN : Date.parse(source.complete_since);
+    return Number.isFinite(ms) ? ms : Number.POSITIVE_INFINITY;
+  };
+  return since(reload) > since(original);
+}
+
+/**
+ * Load the needed collections over `range` as history, sharing one budget, as
+ * one snapshot (loadConsistentHistory re-reads a collection whose recent data
+ * was read earlier than the others').
+ *
+ * When the loaded records still look out of step across a WHOOP sync
+ * (daySourcesOutOfStep), cycles, sleeps and recoveries are read once more with
+ * their recent data fetched now. The re-read replaces them only when every
+ * re-read source is usable and covers as much as before; otherwise the
+ * originals are kept and HISTORY_MIXED_SNAPSHOT_WARNING is returned.
  *
  * @throws the most relevant WHOOP error when every loaded collection failed
  *   (fetch_failed, or unreadable with at least one fetch failure)
@@ -152,25 +238,83 @@ export async function loadDaySources(
     start: new Date(range.startMs).toISOString(),
     end: new Date(Math.max(range.startMs, range.endMs)).toISOString(),
   };
-  const options = {
+  const options = (extra: { minRecentStoredAt?: number }): LoadHistoryOptions => ({
     ...(ctx.historyCache !== undefined ? { cache: ctx.historyCache } : {}),
     budget,
     now: (): Date => ctx.now(),
+    ...extra,
+  });
+  const loadCycles: HistoryLoader<Cycle> = (extra) =>
+    loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, options(extra));
+  const loadSleeps: HistoryLoader<Sleep> = (extra) =>
+    loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, options(extra));
+  const loadRecoveries: HistoryLoader<Recovery> = (extra) =>
+    loadHistory<Recovery>(
+      ctx.client,
+      ENDPOINT_RECOVERY,
+      period,
+      recoveryRecordSchema,
+      options(extra)
+    );
+  const loadWorkouts: HistoryLoader<Workout> = (extra) =>
+    loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, options(extra));
+
+  // A collection that is not needed is not loaded (null), and takes no part in the snapshot.
+  const loaders: Record<DaySourceName, HistoryLoader<unknown>> = {
+    cycle: loadCycles,
+    sleep: loadSleeps,
+    recovery: loadRecoveries,
+    workout: loadWorkouts,
   };
-  const [cycle, sleep, recovery, workout] = await Promise.all([
-    needs.cycle
-      ? loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, options)
-      : null,
-    needs.sleep
-      ? loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, options)
-      : null,
-    needs.recovery
-      ? loadHistory<Recovery>(ctx.client, ENDPOINT_RECOVERY, period, recoveryRecordSchema, options)
-      : null,
-    needs.workout
-      ? loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, options)
-      : null,
-  ]);
+  const needed = DAY_SOURCE_NAMES.filter((name) => needs[name]);
+  const consistent = await loadConsistentHistory(needed.map((name) => loaders[name]));
+  const byName = new Map<DaySourceName, HistorySource<unknown>>();
+  needed.forEach((name, index) => {
+    const source = consistent.sources[index];
+    if (source !== undefined) byName.set(name, source);
+  });
+  const warnings = [...consistent.warnings];
+  let cycle = (byName.get("cycle") ?? null) as HistorySource<Cycle> | null;
+  let sleep = (byName.get("sleep") ?? null) as HistorySource<Sleep> | null;
+  let recovery = (byName.get("recovery") ?? null) as HistorySource<Recovery> | null;
+  const workout = (byName.get("workout") ?? null) as HistorySource<Workout> | null;
+
+  // WHOOP creates a night's cycle a few seconds before its sleep and recovery,
+  // so reads can be out of step even when they were made at the same time.
+  if (
+    cycle !== null &&
+    isUsableSource(cycle) &&
+    daySourcesOutOfStep(recordsOf(cycle), recordsOf(sleep), recordsOf(recovery))
+  ) {
+    // Recent chunks stored up to and including this millisecond (the reads just
+    // made) are fetched again.
+    const fresh = { minRecentStoredAt: Date.now() + 1 };
+    const [cycleReload, sleepReload, recoveryReload] = await Promise.all([
+      loadCycles(fresh),
+      sleep !== null ? loadSleeps(fresh) : null,
+      recovery !== null ? loadRecoveries(fresh) : null,
+    ]);
+    const pairs: Array<[HistorySource<unknown> | null, HistorySource<unknown> | null]> = [
+      [cycle, cycleReload],
+      [sleep, sleepReload],
+      [recovery, recoveryReload],
+    ];
+    const acceptable = pairs.every(
+      ([original, reload]) =>
+        original === null ||
+        (reload !== null &&
+          isUsableSource(reload) &&
+          (!isUsableSource(original) || !reloadCoversLess(reload, original)))
+    );
+    if (acceptable) {
+      cycle = cycleReload;
+      sleep = sleepReload;
+      recovery = recoveryReload;
+    } else if (!warnings.includes(HISTORY_MIXED_SNAPSHOT_WARNING)) {
+      warnings.push(HISTORY_MIXED_SNAPSHOT_WARNING);
+    }
+  }
+
   const loaded: HistorySource<unknown>[] = [cycle, sleep, recovery, workout].filter(
     (source): source is NonNullable<typeof source> => source !== null
   );
@@ -183,7 +327,7 @@ export async function loadDaySources(
   ) {
     throw mostRelevantError(failed.map((source) => source.error));
   }
-  return { cycle, sleep, recovery, workout };
+  return { cycle, sleep, recovery, workout, warnings };
 }
 
 /** True when a source was loaded and its records can be used. */
@@ -996,6 +1140,7 @@ function buildDayResult(input: BuildDayInput): GetDayResult {
       `Some ${incomplete.join(", ")} history around ${day} could not be read completely in this call (request budget, time limit or a failed page), so records for this day may be missing. Repeating the request continues from the cache.`
     );
   }
+  warnings.push(...sources.warnings);
 
   // --- Status notes -------------------------------------------------------------------
   const partlyLoaded = DAY_SOURCE_NAMES.some(
@@ -1047,7 +1192,9 @@ function buildDayResult(input: BuildDayInput): GetDayResult {
   if (cycle && cycleSection) {
     if (cycleSection.kilojoule !== null) {
       notes.push(
-        "Energy covers the whole WHOOP cycle (sleep onset to next sleep onset), not a calendar day."
+        partial
+          ? "Energy covers the whole WHOOP cycle (from local midnight on the first day of wear to the next sleep onset), not a calendar day."
+          : "Energy covers the whole WHOOP cycle (sleep onset to next sleep onset), not a calendar day."
       );
     }
     if (cycle.score_state === "PENDING_SCORE") {
@@ -1157,7 +1304,15 @@ function buildDayResult(input: BuildDayInput): GetDayResult {
   // --- Timeline -----------------------------------------------------------------------
   let timeline: TimelineEntry[] = [];
   if (input.includeTimeline) {
-    const entries = buildTimeline(cycle, mainSleep, sleepSection, naps, napSections, dayWorkouts);
+    const entries = buildTimeline(
+      cycle,
+      partial,
+      mainSleep,
+      sleepSection,
+      naps,
+      napSections,
+      dayWorkouts
+    );
     if (entries.length > MAX_TIMELINE_ENTRIES) {
       outputCapped = true;
       notes.push(
@@ -1387,9 +1542,16 @@ function buildNextMorning(input: {
   };
 }
 
-/** The day's events in time order (all of them; the caller caps the list). */
+/**
+ * The day's events in time order (all of them; the caller caps the list).
+ * On the first day of wear (`partialFirstDay`) WHOOP starts the first cycle at
+ * local midnight rather than at a sleep, so its start is not labelled as sleep
+ * onset. The label does not depend on a missing main sleep alone: right after
+ * waking, the sleep may simply not be synced yet.
+ */
 function buildTimeline(
   cycle: Cycle | undefined,
+  partialFirstDay: boolean,
   mainSleep: Sleep | undefined,
   sleepSection: SleepSection | null,
   naps: readonly Sleep[],
@@ -1406,7 +1568,9 @@ function buildTimeline(
       kind: "cycle_start",
       start_local: localStamp(cycle.start, cycle.timezone_offset),
       end_local: null,
-      label: "WHOOP cycle started (sleep onset)",
+      label: partialFirstDay
+        ? "WHOOP cycle started (first day of wear: WHOOP starts the first cycle at local midnight, not at a sleep)"
+        : "WHOOP cycle started (sleep onset)",
       id: String(cycle.id),
       sortMs: Date.parse(cycle.start),
       order: 0,

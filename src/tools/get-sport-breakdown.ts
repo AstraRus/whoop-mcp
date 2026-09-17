@@ -7,7 +7,11 @@
  * shares, the intensity distribution and the time of day sessions start.
  *
  * - A session counts toward the local day of the WHOOP cycle containing its
- *   start (assignWorkouts); workouts and cycles are read as history over
+ *   start (assignWorkouts), with cycles placed on days by their main sleeps
+ *   exactly as get_calendar places them (split nights, daytime main sleeps;
+ *   without complete sleeps, the day 12 hours after the cycle start, with a
+ *   warning). A session of the open cycle is never placed after today.
+ *   Workouts, cycles and sleeps are read as one snapshot of history over
  *   fetchRangeForDays, so after-midnight sessions on the last day are loaded.
  * - Unscored sessions never contribute values (counted in excluded.not_scored).
  *   Sessions below 90% recorded heart-rate data are included but left out of
@@ -18,6 +22,7 @@
 
 import { z } from "zod";
 import { HISTORY_LIMITATIONS } from "../api/history.js";
+import type { Sleep } from "../api/types.js";
 import {
   dataQualitySchema,
   DAY_MS,
@@ -40,10 +45,13 @@ import {
   placeTrainingDays,
   plural,
   roundPartsToTotal,
+  SLEEP_PLACEMENT_WARNING,
+  sleepsUsable,
   sourceUnreadable,
   sourceWarnings,
   throwIfAllFailed,
   trainingHistoryOptions,
+  TARGETED_SLEEPS_NOTE,
   truncationNote,
   type TrainingSession,
 } from "./get-training-load.js";
@@ -100,7 +108,7 @@ const METHOD_VERSION = "sport-breakdown-1";
 const INTENSITY_BASIS = "recorded minutes in WHOOP %max-HR zones 1-5 (zone 0 excluded)";
 
 const BREAKDOWN_LIMITATIONS: readonly string[] = [
-  "A session counts toward the local day of the WHOOP cycle containing its start; a session after local midnight but before the next sleep belongs to the previous day.",
+  "A session counts toward the local day of the WHOOP cycle containing its start, with cycles placed as get_calendar places them (the day their main sleep ended); a session after local midnight but before the next sleep belongs to the previous day.",
   "Heart-rate zones are WHOOP %max-HR zones, not lab-derived thresholds; TRIMP is Edwards TRIMP (zone number × zone minutes).",
   "Pace uses elapsed time over the whole session (pauses included), not moving time.",
 ];
@@ -710,12 +718,13 @@ export async function getSportBreakdown(
   // --- Load ------------------------------------------------------------------
 
   const range = fetchRangeForDays(firstDay, lastDay, utcOffset, nowMs);
-  const { cycles, workouts } = await loadTrainingSources(
+  const { cycles, workouts, sleeps, sleepsTargeted, ...loaded } = await loadTrainingSources(
     ctx,
     trainingHistoryOptions(ctx),
     range.startMs,
     range.endMs
   );
+  warnings.push(...loaded.warnings);
   throwIfAllFailed([cycles, workouts]);
   const cyclesAvailable = !sourceUnreadable(cycles);
   const workoutsAvailable = !sourceUnreadable(workouts);
@@ -727,19 +736,31 @@ export async function getSportBreakdown(
       "sessions are placed on their local start day and worn days are unknown"
     )
   );
-  const truncated = cycles.quality.truncated || workouts.quality.truncated;
+  const truncated =
+    cycles.quality.truncated || workouts.quality.truncated || sleeps.quality.truncated;
   const workoutQuality = workouts.quality;
   const cycleQuality = cycles.quality;
+  const sleepQuality = sleeps.quality;
 
   // --- Place ------------------------------------------------------------------------
 
-  const placement = placeTrainingDays(cyclesAvailable ? cycles.records : [], today, utcOffset);
+  const sleepsPlaced = cyclesAvailable && sleepsUsable(sleeps);
+  if (cyclesAvailable && !sleepsPlaced) warnings.push(SLEEP_PLACEMENT_WARNING);
+  if (sleepsPlaced && sleepsTargeted) notes.push(TARGETED_SLEEPS_NOTE);
+  const placement = placeTrainingDays({
+    cycles: cyclesAvailable ? cycles.records : [],
+    sleeps: sleeps.records,
+    sleepsAvailable: sleepsPlaced,
+    today,
+    utcOffset,
+  });
   const sessions = workoutsAvailable
     ? buildSessions(
         workouts.records,
         placement,
         cyclesAvailable ? cycles.records : [],
-        workoutQuality
+        workoutQuality,
+        today
       )
     : [];
   const inWindow = (day: string): boolean => day >= firstDay && day <= lastDay;
@@ -1025,6 +1046,21 @@ export async function getSportBreakdown(
     included.map((session) => ({ updated_at: updatedAt.get(session.summary.id) ?? "" }))
   );
   finishQuality(cycleQuality, usedCycles);
+  // Main sleeps are used to place the cycles used.
+  const usedCycleIds = new Set(usedCycles.map((cycle) => cycle.id));
+  const usedSleeps: Sleep[] = [];
+  if (sleepsPlaced) {
+    for (const sleep of sleeps.records) {
+      if (sleep.nap) exclude(sleepQuality, "nap");
+      else if (
+        usedCycleIds.has(sleep.cycle_id) &&
+        placement.mainSleepByCycle.get(sleep.cycle_id)?.id === sleep.id
+      ) {
+        usedSleeps.push(sleep);
+      } else exclude(sleepQuality, "outside_window");
+    }
+  }
+  finishQuality(sleepQuality, usedSleeps);
   const dataQuality: DataQuality = {
     evaluated_at: evaluatedAt,
     requested_period: requestedPeriod,
@@ -1035,7 +1071,7 @@ export async function getSportBreakdown(
         offset: session.summary.timezone_offset,
       }))
     ),
-    sources: { workouts: workoutQuality, cycles: cycleQuality },
+    sources: { workouts: workoutQuality, cycles: cycleQuality, sleeps: sleepQuality },
     method_version: METHOD_VERSION,
     limitations: [...HISTORY_LIMITATIONS, ...BREAKDOWN_LIMITATIONS],
   };

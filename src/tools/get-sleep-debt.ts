@@ -21,7 +21,7 @@ import {
 import { mean } from "./stats-utils.js";
 import { resolveSleepWindow } from "./sleep-window.js";
 import { resolveDateExpression } from "./date-utils.js";
-import { timingStats } from "./sleep-metrics.js";
+import { TIMING_MIN_NIGHTS_PER_GROUP, timingStats } from "./sleep-metrics.js";
 import {
   asleepHours,
   dataQualitySchema,
@@ -184,6 +184,11 @@ export async function getSleepDebt(
   });
   const timing = timingStats(selected);
   const sufficient = nights.length >= SLEEP_DEBT_MIN_NIGHTS;
+  // As get_sleep_analysis: a midpoint mean of a single weekday or weekend night is not released.
+  const jetlagGroupsOk =
+    timing.weekday_nights >= TIMING_MIN_NIGHTS_PER_GROUP &&
+    timing.weekend_nights >= TIMING_MIN_NIGHTS_PER_GROUP;
+  const socialJetlag = sufficient && jetlagGroupsOk ? timing.social_jetlag_minutes : null;
   finishQuality(source.quality, selected);
   const newestNight = selected[0];
   const oldestNight = selected[selected.length - 1];
@@ -221,6 +226,10 @@ export async function getSleepDebt(
     notes.push(
       `${plural(invalidNeed, "sleep")} with an invalid WHOOP sleep-need value ${invalidNeed === 1 ? "was" : "were"} skipped.`
     );
+  if (sufficient && !jetlagGroupsOk)
+    notes.push(
+      `Weekday and weekend midpoints need ${TIMING_MIN_NIGHTS_PER_GROUP} nights each (weekday ${timing.weekday_nights}, weekend ${timing.weekend_nights}); social jetlag is null until both have them.`
+    );
   const partial = source.partialError !== undefined;
   if (partial)
     notes.push(
@@ -253,12 +262,12 @@ export async function getSleepDebt(
     consistency: {
       bedtime_std_dev_minutes: sufficient ? timing.bedtime_sd_minutes : null,
       waketime_std_dev_minutes: sufficient ? timing.waketime_sd_minutes : null,
-      social_jetlag_minutes: sufficient ? timing.social_jetlag_minutes : null,
+      social_jetlag_minutes: socialJetlag,
     },
     nights: nights.slice(0, 30),
     output_capped: nights.length > 30,
     truncated: source.quality.truncated,
-    summary: `${lead}${standing}${status === "available" ? " Social jetlag is a circular midpoint heuristic." : ""}${partial ? " Partial history: older sleeps could not be read." : source.quality.truncated ? " Partial history: pagination limit reached." : ""}`,
+    summary: `${lead}${standing}${socialJetlag !== null ? " Social jetlag is a circular midpoint heuristic." : ""}${partial ? " Partial history: older sleeps could not be read." : source.quality.truncated ? " Partial history: pagination limit reached." : ""}`,
     notes: withOffsetNote(notes, offsetFallback),
     disclaimer: DISCLAIMER,
     data_quality: {
@@ -306,6 +315,11 @@ async function aggregateSleepDebt(
   const timing = timingStats(nights.map((night) => night.sleep!));
   const minutes = (value: number | null): number | null =>
     sufficient && value !== null ? roundStep(value, 1) : null;
+  // A weekday or weekend group smaller than a released week's minimum would let a
+  // single night's midpoint be read back from social jetlag (or by differencing).
+  const jetlagOk =
+    timing.weekday_nights >= AGGREGATE_WEEK_MIN_SAMPLES &&
+    timing.weekend_nights >= AGGREGATE_WEEK_MIN_SAMPLES;
 
   const notes: string[] = [releasedWeeksNote(weeks)];
   if (start !== undefined)
@@ -320,6 +334,10 @@ async function aggregateSleepDebt(
   if (status === "insufficient_data")
     notes.push(
       `Not enough data yet: ${nights.length} of ${SLEEP_DEBT_MIN_NIGHTS} required scored main sleeps in released weeks with at least ${AGGREGATE_WEEK_MIN_SAMPLES} each, so deficit totals and bedtime/wake consistency are not calculated.`
+    );
+  if (status === "available" && !jetlagOk)
+    notes.push(
+      `Social jetlag needs at least ${AGGREGATE_WEEK_MIN_SAMPLES} weekday and ${AGGREGATE_WEEK_MIN_SAMPLES} weekend nights in the released weeks, so it is null.`
     );
   notes.push(...result.notes);
   const truncated = [data.sleep, data.cycle].some((source) => source.quality.truncated);
@@ -342,7 +360,7 @@ async function aggregateSleepDebt(
     consistency: {
       bedtime_std_dev_minutes: minutes(timing.bedtime_sd_minutes),
       waketime_std_dev_minutes: minutes(timing.waketime_sd_minutes),
-      social_jetlag_minutes: minutes(timing.social_jetlag_minutes),
+      social_jetlag_minutes: jetlagOk ? minutes(timing.social_jetlag_minutes) : null,
     },
     output_capped: false,
     truncated,

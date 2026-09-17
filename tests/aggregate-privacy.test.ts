@@ -19,7 +19,13 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../src/api/client.js";
 import type { Cycle, Sleep, Workout } from "../src/api/types.js";
 import { createWhoopServer } from "../src/server.js";
-import { AGGREGATE_WEEK_MIN_SAMPLES } from "../src/tools/aggregate-window.js";
+import {
+  AGGREGATE_WEEK_MIN_SAMPLES,
+  AGGREGATE_WORKOUT_KJ_STEP,
+  AGGREGATE_WORKOUT_STRAIN_STEP,
+  roundStep,
+} from "../src/tools/aggregate-window.js";
+import { addDays, assignWorkouts, placeDays } from "../src/tools/day-model.js";
 import { WEEK_NOT_RELEASED_NOTE } from "../src/tools/get-weekly-summary.js";
 import {
   AGGREGATE_MIN_SAMPLES,
@@ -1260,6 +1266,104 @@ describe("aggregate privacy: week gating and withholding", () => {
       expect((released.sample_sizes as Record<string, number>).recovery_days).toBe(7);
     } finally {
       await connection.close();
+    }
+  });
+});
+
+describe("aggregate privacy: edits to a released week", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const WEEK = "2026-08-31";
+
+  /** Scored workouts the day model places in WEEK, and their exact totals */
+  function weekWorkouts(data: WhoopUserFixture): { scored: Workout[]; kj: number; strain: number } {
+    const placement = placeDays({
+      cycles: data.cycles,
+      sleeps: data.sleeps,
+      recoveries: data.recoveries,
+      sleepsAvailable: true,
+      today: "2026-09-16",
+      utcOffset: data.offset,
+    });
+    const placed = assignWorkouts(data.workouts, placement, data.cycles);
+    const scored = data.workouts.filter((workout) => {
+      const day = placed.get(workout.id)?.day;
+      return (
+        day !== undefined &&
+        day >= WEEK &&
+        day <= addDays(WEEK, 6) &&
+        workout.score_state === "SCORED" &&
+        workout.score !== null &&
+        workout.score !== undefined
+      );
+    });
+    return {
+      scored,
+      kj: scored.reduce((sum, workout) => sum + workout.score!.kilojoule, 0),
+      strain: scored.reduce((sum, workout) => sum + workout.score!.strain, 0),
+    };
+  }
+
+  async function weeklyWorkouts(
+    data: WhoopUserFixture
+  ): Promise<{ count: number; total_strain: number; total_calories_kj: number }> {
+    const connection = await aggregateConnection(data);
+    try {
+      const weekly = await structured(connection, "get_weekly_summary", { week_start: WEEK });
+      return weekly.workouts as { count: number; total_strain: number; total_calories_kj: number };
+    } finally {
+      await connection.close();
+      vi.useRealTimers();
+    }
+  }
+
+  /** a - b is a whole multiple of step */
+  function isMultiple(difference: number, step: number): boolean {
+    return Math.abs(difference / step - Math.round(difference / step)) < 1e-9;
+  }
+
+  it("changes workout totals only in steps of 100 kJ and 1 strain when a workout is removed or added", async () => {
+    const base = matureUser();
+    const reference = weekWorkouts(base);
+    expect(reference.scored.length).toBeGreaterThanOrEqual(AGGREGATE_WEEK_MIN_SAMPLES + 1);
+    const before = await weeklyWorkouts(base);
+
+    const removed = matureUser();
+    const victim = reference.scored[Math.floor(reference.scored.length / 2)]!;
+    removed.workouts = removed.workouts.filter((workout) => workout.id !== victim.id);
+
+    const added = matureUser();
+    const extra = structuredClone(victim);
+    extra.id = "00000000-0000-4000-8000-00000000abcd";
+    extra.start = new Date(Date.parse(victim.start) + 3 * HOUR).toISOString();
+    extra.end = new Date(Date.parse(victim.end) + 3 * HOUR).toISOString();
+    extra.score!.strain = 9.87;
+    extra.score!.kilojoule = 432.1;
+    added.workouts = [...added.workouts, extra].sort(
+      (left, right) => Date.parse(right.start) - Date.parse(left.start)
+    );
+
+    for (const [label, data, countChange] of [
+      ["base", base, 0],
+      ["removed", removed, -1],
+      ["added", added, 1],
+    ] as const) {
+      const expected = weekWorkouts(data);
+      const released = label === "base" ? before : await weeklyWorkouts(data);
+      expect(released.count, label).toBe(reference.scored.length + countChange);
+      expect(released.count, label).toBe(expected.scored.length);
+      expect(released.total_calories_kj, label).toBe(
+        roundStep(expected.kj, AGGREGATE_WORKOUT_KJ_STEP)
+      );
+      expect(released.total_strain, label).toBe(
+        roundStep(expected.strain, AGGREGATE_WORKOUT_STRAIN_STEP)
+      );
+      expect(isMultiple(released.total_calories_kj - before.total_calories_kj, 100), label).toBe(
+        true
+      );
+      expect(isMultiple(released.total_strain - before.total_strain, 1), label).toBe(true);
     }
   });
 });

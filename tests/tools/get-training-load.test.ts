@@ -8,24 +8,34 @@
  * day), day strain on partial and open days, low-recording TRIMP, week totals
  * across a month and an offset change, failed and truncated sources, a strap
  * off for weeks (older history merged), request accounting and output size on
- * stressUser, neutral wording and the MCP contract.
+ * stressUser, neutral wording and the MCP contract. Regression tests: day
+ * placement like get_calendar (a split night whose first sleep is longer, the
+ * two-cycles warning, a day sleeper's open cycle never after today, cycles-only
+ * placement with a warning when sleeps fail) and the window-mean EWMA seed from
+ * the first 28 known loads (a gap at the start of the analysed range).
  */
 
 import { describe, expect, it } from "vitest";
 import { WhoopApiError } from "../../src/api/client.js";
 import { DEFAULT_PAGE_BUDGET, HISTORY_CHUNK_MS } from "../../src/api/history.js";
-import type { Cycle, ScoreState, Workout } from "../../src/api/types.js";
+import type { Cycle, ScoreState, Sleep, Workout } from "../../src/api/types.js";
 import { MemoryCache } from "../../src/cache/memory-cache.js";
 import { localMidnightMs } from "../../src/tools/analytics-utils.js";
-import { addDays, daysBetween, mondayOf } from "../../src/tools/day-model.js";
+import { addDays, daysBetween, mondayOf, placeDays } from "../../src/tools/day-model.js";
+import { getCalendar } from "../../src/tools/get-calendar.js";
 import {
   acuteChronicReading,
+  ewmaWindowSeed,
   getTrainingLoad,
   LOAD_HISTORY_EXTRA_DAYS,
+  SLEEP_PLACEMENT_WARNING,
   trainingLoadOutputSchema,
   type TrainingLoadInput,
   type TrainingLoadOutput,
 } from "../../src/tools/get-training-load.js";
+import { getWeeklySummary } from "../../src/tools/get-weekly-summary.js";
+import { roundTo } from "../../src/tools/stats-utils.js";
+import { getTrainingLoadAggregate } from "../../src/tools/training-aggregate.js";
 import { MAX_TOOL_TEXT_CHARS, type ToolContext } from "../../src/tools/tool-definition.js";
 import { assertNeutralText, connectServer } from "../helpers/contract.js";
 import {
@@ -33,7 +43,12 @@ import {
   type WhoopFixtureClient,
   type WhoopFixtureClientOptions,
 } from "../helpers/whoop-fixture-client.js";
-import { liveShapedUser, matureUser, stressUser } from "../helpers/whoop-users.js";
+import {
+  liveShapedUser,
+  matureUser,
+  stressUser,
+  type WhoopUserFixture,
+} from "../helpers/whoop-users.js";
 
 const MINUTE_MS = 60_000;
 const OFFSET = "+02:00";
@@ -389,7 +404,9 @@ describe("EWMA seeding", () => {
     expect(output.ewma.ctl).toBe(300);
     expect(output.history.first_worn_day).toBe(analysedFrom);
     expect(output.history.first_worn_day_is_lower_bound).toBe(true);
-    expect(output.notes.some((note) => note.includes("mean load of its first 28 days"))).toBe(true);
+    expect(output.notes).toContain(
+      `WHOOP history continues before ${analysedFrom}, so ATL and CTL start there from the mean of its first 28 known daily loads (${analysedFrom} to ${addDays(analysedFrom, 27)}) instead of 0.`
+    );
 
     // Without the older cycle the same loads start from 0 and CTL is null until day 42.
     user.cycles.pop();
@@ -810,6 +827,323 @@ describe("failed and partial sources", () => {
     ).toISOString();
     expect(client.calls.some((path) => path.includes(encodeURIComponent(oldestChunk)))).toBe(true);
     expect(output.truncated).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: EWMA seed from the first known loads
+// ---------------------------------------------------------------------------
+
+describe("EWMA window-mean seed from known loads", () => {
+  const range = (from: number, to: number): number[] =>
+    Array.from({ length: to - from + 1 }, (_, index) => from + index);
+
+  it("keeps CTL and TSB on every day when the analysed range starts with an 8-day gap", async () => {
+    // matureUser starts 120 days ago; days 32..39 are the first 8 analysed days.
+    const fixture = matureUser({ gapDays: range(32, 39), pendingLast: false });
+    const client = createWhoopFixtureClient({ ...fixture, now: fixture.now });
+    const output = await getTrainingLoad(
+      { load_metric: "day_strain" },
+      contextFor(client, fixture.now)
+    );
+    trainingLoadOutputSchema.parse(output);
+    expect(output.ewma_seed).toBe("window_mean");
+    expect(output.days).toHaveLength(42);
+    for (const day of output.days) {
+      expect(day.ctl, day.date).not.toBeNull();
+      expect(day.tsb, day.date).not.toBeNull();
+    }
+    expect(Math.abs(output.ewma.ctl! - 9.3)).toBeLessThanOrEqual(0.2);
+    const analysedFrom = output.history.analysed_from_day!;
+    // The first known load follows the gap; the 28th is 27 known days later.
+    expect(output.notes).toContain(
+      `WHOOP history continues before ${analysedFrom}, so ATL and CTL start there from the mean of its first 28 known daily loads (${addDays(analysedFrom, 8)} to ${addDays(analysedFrom, 35)}) instead of 0.`
+    );
+    assertNeutralText([output.notes, output.warnings]);
+  });
+
+  it("keeps CTL with trimp across a 7-day gap", async () => {
+    const fixture = matureUser({ gapDays: range(33, 39), pendingLast: false });
+    const client = createWhoopFixtureClient({ ...fixture, now: fixture.now });
+    const output = await getTrainingLoad({}, contextFor(client, fixture.now));
+    trainingLoadOutputSchema.parse(output);
+    expect(output.ewma_seed).toBe("window_mean");
+    expect(output.ewma.ctl).not.toBeNull();
+    expect(output.ewma.tsb).not.toBeNull();
+    expect(output.days.every((day) => day.ctl !== null)).toBe(true);
+  });
+
+  it("nulls CTL and TSB only when the analysed range has fewer than 21 known loads", async () => {
+    const days = 14;
+    const asOf = addDays(TODAY, -1);
+    const analysedFrom = addDays(asOf, -(days + LOAD_HISTORY_EXTRA_DAYS));
+    const total = daysBetween(analysedFrom, TODAY) + 1;
+    const oldCycle = (template: Cycle): Cycle => {
+      const oldStart = localMs(addDays(analysedFrom, -150), 23 * 60);
+      return {
+        ...template,
+        id: 1,
+        start: iso(oldStart),
+        end: iso(oldStart + 20 * 3_600_000),
+        created_at: iso(oldStart + 21 * 3_600_000),
+        updated_at: iso(oldStart + 21 * 3_600_000),
+      };
+    };
+    // 20 worn days before today (known loads), then today's open cycle.
+    const plans = Array.from({ length: total }, (_, index) =>
+      index >= total - 21 ? trimpDay(index === total - 1 ? 0 : 120) : unworn
+    );
+    const user = buildUser({ lastDay: TODAY, plans, partialFirst: false });
+    user.cycles.push(oldCycle(user.cycles[0]!));
+    const { output } = await run(user, { days });
+    expect(output.ewma_seed).toBe("window_mean");
+    expect(output.days.every((day) => day.ctl === null && day.tsb === null)).toBe(true);
+    expect(output.ewma.atl).not.toBeNull();
+    expect(output.notes).toContain(
+      `WHOOP history continues before ${analysedFrom}, but only 20 days in the analysed range have a known load (21 needed to seed CTL), so CTL and TSB are null.`
+    );
+
+    // One more known load seeds CTL although the first 28 analysed days are unknown.
+    const more = buildUser({
+      lastDay: TODAY,
+      plans: plans.map((plan, index) => (index === total - 22 ? trimpDay(120) : plan)),
+      partialFirst: false,
+    });
+    more.cycles.push(oldCycle(more.cycles[0]!));
+    const seeded = (await run(more, { days })).output;
+    expect(seeded.days.every((day) => day.ctl !== null && day.tsb !== null)).toBe(true);
+    expect(seeded.notes.some((note) => note.includes("first 21 known daily loads"))).toBe(true);
+  });
+
+  it("limits the seed to the first 42 analysed days when they hold 21 known loads", () => {
+    const loads: (number | null)[] = Array.from({ length: 80 }, (_, index) =>
+      index < 42 ? (index % 2 === 0 ? 10 : null) : 50
+    );
+    // 21 known loads in the first 42 days (even indexes); the 28th known load is day 48.
+    const seed = ewmaWindowSeed(loads);
+    expect(seed.indexes).toHaveLength(21);
+    expect(seed.indexes[seed.indexes.length - 1]).toBe(40);
+    expect(seed.known).toBe(21 + 38);
+    // With only 20 in the first 42 days, the first 28 known loads are used.
+    loads[40] = null;
+    const wider = ewmaWindowSeed(loads);
+    expect(wider.indexes).toHaveLength(28);
+    expect(wider.indexes[27]).toBe(49);
+    // The 28th known load within the first 42 days: the first 28.
+    expect(ewmaWindowSeed(Array.from({ length: 60 }, () => 5)).indexes).toHaveLength(28);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: day placement like get_calendar
+// ---------------------------------------------------------------------------
+
+/** matureUser with a split night on day 50 whose first sleep is the longer one (379 vs 100 minutes) */
+function splitNightFirstLonger(): { fixture: WhoopUserFixture; day: string } {
+  const fixture = structuredClone(matureUser({ days: 60, seed: 3, splitNightDays: [50] }));
+  const placement = placeDays({
+    cycles: fixture.cycles,
+    sleeps: fixture.sleeps,
+    recoveries: [],
+    sleepsAvailable: true,
+    today: TODAY,
+    utcOffset: fixture.offset,
+  });
+  const displaced = placement.displaced[0]!;
+  const first = fixture.cycles.find((cycle) => cycle.id === displaced.other.id)!;
+  const second = fixture.cycles.find((cycle) => cycle.id === displaced.shown.id)!;
+  const firstSleep = fixture.sleeps.find(
+    (sleep) => sleep.id === placement.mainSleepByCycle.get(first.id)!.id
+  )!;
+  const secondSleep = fixture.sleeps.find(
+    (sleep) => sleep.id === placement.mainSleepByCycle.get(second.id)!.id
+  )!;
+  const secondStart = Date.parse(secondSleep.end) - 100 * MINUTE_MS;
+  first.end = iso(secondStart);
+  second.start = iso(secondStart);
+  secondSleep.start = iso(secondStart);
+  firstSleep.end = iso(secondStart - 40 * MINUTE_MS);
+  return { fixture, day: displaced.day };
+}
+
+function fullClient(
+  fixture: WhoopUserFixture,
+  extra: Partial<WhoopFixtureClientOptions> = {}
+): WhoopFixtureClient {
+  return createWhoopFixtureClient({ ...fixture, now: fixture.now, ...extra });
+}
+
+/**
+ * A normal sleeper with one disrupted night (+02:00): awake through the night
+ * of 09-16, main sleep 09-17 13:00-20:00, sessions on 09-16 18:00 and 09-17
+ * 21:15; now 09-17 23:00 local.
+ */
+function daySleeper(): { cycles: Cycle[]; sleeps: Sleep[]; workouts: Workout[]; now: Date } {
+  const bounds: [number, number | null, number][] = [
+    [localMs("2026-09-13", 1393), localMs("2026-09-14", 1393), localMs("2026-09-14", 420)],
+    [localMs("2026-09-14", 1393), localMs("2026-09-15", 1393), localMs("2026-09-15", 420)],
+    [localMs("2026-09-15", 1393), localMs("2026-09-17", 780), localMs("2026-09-16", 420)],
+    [localMs("2026-09-17", 780), null, localMs("2026-09-17", 1200)],
+  ];
+  const cycles: Cycle[] = [];
+  const sleeps: Sleep[] = [];
+  bounds.forEach(([startMs, endMs, sleepEndMs], index) => {
+    cycles.push({
+      id: 7000 + index,
+      user_id: 1,
+      created_at: iso(sleepEndMs + 10 * MINUTE_MS),
+      updated_at: iso((endMs ?? sleepEndMs) + 10 * MINUTE_MS),
+      start: iso(startMs),
+      end: endMs === null ? null : iso(endMs),
+      timezone_offset: OFFSET,
+      score_state: "SCORED",
+      score: { strain: 10 + index, kilojoule: 8000, average_heart_rate: 70, max_heart_rate: 150 },
+    });
+    const inBed = sleepEndMs - startMs;
+    const awake = Math.round(inBed * 0.1);
+    const light = Math.round(inBed * 0.45);
+    const deep = Math.round(inBed * 0.2);
+    sleeps.push({
+      id: `00000000-0000-4000-8000-00000000000${index}`,
+      cycle_id: 7000 + index,
+      v1_id: null,
+      user_id: 1,
+      created_at: iso(sleepEndMs + 5 * MINUTE_MS),
+      updated_at: iso(sleepEndMs + 5 * MINUTE_MS),
+      start: iso(startMs),
+      end: iso(sleepEndMs),
+      timezone_offset: OFFSET,
+      nap: false,
+      score_state: "SCORED",
+      score: {
+        stage_summary: {
+          total_in_bed_time_milli: inBed,
+          total_awake_time_milli: awake,
+          total_no_data_time_milli: 0,
+          total_light_sleep_time_milli: light,
+          total_slow_wave_sleep_time_milli: deep,
+          total_rem_sleep_time_milli: inBed - awake - light - deep,
+          sleep_cycle_count: 4,
+          disturbance_count: 8,
+        },
+        sleep_needed: {
+          baseline_milli: 28_000_000,
+          need_from_sleep_debt_milli: 0,
+          need_from_recent_strain_milli: 0,
+          need_from_recent_nap_milli: 0,
+        },
+        respiratory_rate: 15,
+        sleep_performance_percentage: 80,
+        sleep_consistency_percentage: 70,
+        sleep_efficiency_percentage: 90,
+      },
+    });
+  });
+  const workouts = [
+    sessionRecord("2026-09-16", { minutes: 60, startMinute: 18 * 60 }, "w-0916"),
+    sessionRecord("2026-09-17", { minutes: 45, startMinute: 21 * 60 + 15 }, "w-0917"),
+  ];
+  return { cycles, sleeps, workouts, now: new Date(localMs("2026-09-17", 23 * 60)) };
+}
+
+describe("day placement like get_calendar", () => {
+  it("uses the cycle get_calendar shows after a split night whose first sleep is longer", async () => {
+    const { fixture, day } = splitNightFirstLonger();
+    expect(day).toBe("2026-09-07");
+    const output = await getTrainingLoad(
+      { load_metric: "day_strain" },
+      contextFor(fullClient(fixture), fixture.now)
+    );
+    trainingLoadOutputSchema.parse(output);
+    const calendar = await getCalendar(fullClient(fixture), { start: day, days: 1 }, fixture.now);
+    const row = calendar.days.find((entry) => entry.date === day)!;
+    expect(row.day_strain).not.toBeNull();
+    expect(dayEntry(output, day).day_strain).toBe(roundTo(row.day_strain!, 1));
+    expect(dayEntry(output, day).day_strain).toBe(1.4);
+
+    const weekly = await getWeeklySummary(fullClient(fixture), { week_start: day }, fixture.now);
+    const week = output.weeks.find((entry) => entry.week_start === mondayOf(day))!;
+    expect(week.mean_day_strain).toBe(roundTo(weekly.strain.average_daily_strain!, 1));
+    expect(week.mean_day_strain).toBe(8.7);
+
+    const aggregate = await getTrainingLoadAggregate(
+      { load_metric: "day_strain", weeks: 4 },
+      { ...contextFor(fullClient(fixture), fixture.now), privacyMode: "aggregate" }
+    );
+    const aggregateWeek = aggregate.weeks.find((entry) => entry.week_start === mondayOf(day))!;
+    expect(aggregateWeek.mean_day_strain).toBe(week.mean_day_strain);
+
+    expect(output.warnings.filter((warning) => warning.startsWith("Two WHOOP cycles"))).toEqual([
+      `Two WHOOP cycles belong to ${day} (for example, a second main sleep ended that day). The day uses the cycle that started 2026-09-06 22:41; the cycle that started 2026-09-07 05:39 (strain 5.7) is left out of that day's strain; its workouts count on that day.`,
+    ]);
+    expect(output.data_quality.sources.sleeps!.status).toBe("available");
+    expect(output.data_quality.limitations.join(" ")).toContain("split nights");
+    assertNeutralText([output.notes, output.warnings]);
+  });
+
+  it("warns about the two cycles of the unmodified split night", async () => {
+    const fixture = matureUser({ days: 60, seed: 3, splitNightDays: [50] });
+    const output = await getTrainingLoad(
+      { load_metric: "day_strain" },
+      contextFor(fullClient(fixture), fixture.now)
+    );
+    const calendar = await getCalendar(
+      fullClient(fixture),
+      { start: "2026-09-07", days: 1 },
+      fixture.now
+    );
+    const two = output.warnings.filter((warning) => warning.startsWith("Two WHOOP cycles"));
+    expect(two).toHaveLength(1);
+    expect(two[0]).toContain("belong to 2026-09-07");
+    expect(dayEntry(output, "2026-09-07").day_strain).toBe(
+      roundTo(calendar.days.find((entry) => entry.date === "2026-09-07")!.day_strain!, 1)
+    );
+    expect(output.data_quality.sources.cycles!.exclusions.displaced).toBe(1);
+  });
+
+  it("dates today_so_far on today for a day sleeper, with and without sleeps", async () => {
+    const data = daySleeper();
+    const output = await getTrainingLoad(
+      {},
+      contextFor(createWhoopFixtureClient({ ...data }), data.now)
+    );
+    trainingLoadOutputSchema.parse(output);
+    expect(output.as_of_day).toBe("2026-09-16");
+    expect(output.today_so_far).toMatchObject({ date: "2026-09-17", sessions: 1 });
+    expect(dayEntry(output, "2026-09-16").sessions).toBe(1);
+    expect(output.warnings).not.toContain(SLEEP_PLACEMENT_WARNING);
+
+    // Sleeps unreadable: the open cycle counts toward 12 hours after its start
+    // (tomorrow), but today_so_far is never after today.
+    const failing = createWhoopFixtureClient({
+      ...data,
+      failures: [
+        {
+          path: /^\/v2\/activity\/sleep/,
+          error: new WhoopApiError(503, "Service Unavailable", {}),
+        },
+      ],
+    });
+    const cyclesOnly = await getTrainingLoad({}, contextFor(failing, data.now));
+    trainingLoadOutputSchema.parse(cyclesOnly);
+    expect(cyclesOnly.today_so_far).toMatchObject({ date: "2026-09-17", sessions: 1 });
+    expect(cyclesOnly.warnings).toContain(SLEEP_PLACEMENT_WARNING);
+    expect(cyclesOnly.data_quality.sources.sleeps!.status).toBe("fetch_failed");
+    assertNeutralText([cyclesOnly.notes, cyclesOnly.warnings]);
+  });
+
+  it("repeats a call with sleeps from the cache", async () => {
+    const fixture = matureUser({ days: 60 });
+    const client = fullClient(fixture);
+    const cache = new MemoryCache({ maxEntries: 200 });
+    const first = await getTrainingLoad({}, contextFor(client, fixture.now, cache));
+    expect(client.calls.some((path) => path.startsWith("/v2/activity/sleep"))).toBe(true);
+    expect(first.truncated).toBe(false);
+    const before = client.calls.length;
+    const again = await getTrainingLoad({}, contextFor(client, fixture.now, cache));
+    expect(client.calls.length - before).toBeLessThanOrEqual(2);
+    expect(again.days).toEqual(first.days);
+    expect(again.warnings).toEqual(first.warnings);
   });
 });
 

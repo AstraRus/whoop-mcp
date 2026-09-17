@@ -13,6 +13,7 @@ import {
   toOAuthTokens,
   openBrowser,
   authenticate,
+  TOKEN_REQUEST_TIMEOUT_MS,
   type OAuthConfig,
   type TokenResponse,
 } from "../../src/auth/oauth.js";
@@ -1057,6 +1058,21 @@ describe("authenticate", () => {
     expect(mockLoadTokens).toHaveBeenLastCalledWith("/mock-home/.whoop-mcp");
   });
 
+  it("rethrows an unreadable token file without signing in again (EACCES)", async () => {
+    const { TokenStoreReadError } = await vi.importActual<
+      typeof import("../../src/auth/token-store.js")
+    >("../../src/auth/token-store.js");
+    const unreadable = new TokenStoreReadError("~/.whoop-mcp/tokens.json", "EACCES");
+    mockLoadTokens.mockRejectedValueOnce(unreadable);
+
+    await expect(authenticate(TEST_CONFIG)).rejects.toBe(unreadable);
+
+    expect(mockStartCallbackServer).not.toHaveBeenCalled();
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(mockSaveTokens).not.toHaveBeenCalled();
+  });
+
   it("passes the cached tokens to onTokens", async () => {
     mockLoadTokens.mockResolvedValueOnce(VALID_TOKENS);
     mockIsTokenExpired.mockReturnValueOnce(false);
@@ -1084,5 +1100,121 @@ describe("authenticate", () => {
     expect(onTokens).toHaveBeenCalledWith(
       expect.objectContaining({ refresh_token: "refresh-token-456" })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token endpoint timeout
+// ---------------------------------------------------------------------------
+
+describe("token endpoint requests time out", () => {
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  /** A fetch that never answers, but rejects with the signal's reason like real fetch. */
+  function hangingFetch(_url: string, init?: RequestInit): Promise<never> {
+    return new Promise((_, reject) => {
+      const signal = init?.signal;
+      if (!signal) return;
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+  }
+
+  /** A 200 whose body never arrives, rejecting when the signal aborts. */
+  function hangingBody(_url: string, init?: RequestInit): Promise<unknown> {
+    return Promise.resolve({
+      ok: true,
+      status: 200,
+      json: () => hangingFetch(_url, init),
+    });
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("uses a 30 s bound: long enough not to abort a rotation WHOOP already processed", () => {
+    expect(TOKEN_REQUEST_TIMEOUT_MS).toBe(30_000);
+  });
+
+  it.each([
+    ["refreshAccessToken", (): Promise<unknown> => refreshAccessToken("r", TEST_CONFIG)],
+    ["exchangeCodeForTokens", (): Promise<unknown> => exchangeCodeForTokens("c", TEST_CONFIG)],
+  ])("%s passes an AbortSignal to fetch", async (_, call) => {
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(MOCK_TOKEN_RESPONSE) });
+
+    await call();
+
+    const [, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+    expect(init.signal?.aborted).toBe(false);
+  });
+
+  it.each([
+    ["refreshAccessToken", (): Promise<unknown> => refreshAccessToken("r", TEST_CONFIG)],
+    ["exchangeCodeForTokens", (): Promise<unknown> => exchangeCodeForTokens("c", TEST_CONFIG)],
+  ])(
+    "%s rejects with WhoopNetworkError (cause TimeoutError) when WHOOP never answers",
+    async (_, call) => {
+      mockFetch.mockImplementation(hangingFetch);
+      const outcome = call().catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(TOKEN_REQUEST_TIMEOUT_MS - 1);
+      let settled = false;
+      void outcome.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+
+      const error = await outcome;
+      expect(error).toBeInstanceOf(WhoopNetworkError);
+      expect((error as WhoopNetworkError).cause).toMatchObject({ name: "TimeoutError" });
+    }
+  );
+
+  it.each([
+    ["refreshAccessToken", (): Promise<unknown> => refreshAccessToken("r", TEST_CONFIG)],
+    ["exchangeCodeForTokens", (): Promise<unknown> => exchangeCodeForTokens("c", TEST_CONFIG)],
+  ])(
+    "%s bounds reading the body too: a TimeoutError from json() is a WhoopNetworkError",
+    async (_, call) => {
+      mockFetch.mockImplementation(hangingBody);
+      const outcome = call().catch((e: unknown) => e);
+
+      await vi.advanceTimersByTimeAsync(TOKEN_REQUEST_TIMEOUT_MS);
+
+      const error = await outcome;
+      expect(error).toBeInstanceOf(WhoopNetworkError);
+      expect((error as WhoopNetworkError).cause).toMatchObject({ name: "TimeoutError" });
+    }
+  );
+
+  it("maps a TimeoutError thrown by json() to WhoopNetworkError", async () => {
+    const timeout = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.reject(timeout) });
+
+    const error = await refreshAccessToken("r", TEST_CONFIG).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(WhoopNetworkError);
+    expect((error as WhoopNetworkError).cause).toBe(timeout);
+  });
+
+  it("exchangeCodeForTokens wraps transport failures in WhoopNetworkError", async () => {
+    const cause = new TypeError("fetch failed");
+    mockFetch.mockRejectedValueOnce(cause);
+
+    const error = await exchangeCodeForTokens("c", TEST_CONFIG).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(WhoopNetworkError);
+    expect((error as WhoopNetworkError).cause).toBe(cause);
   });
 });

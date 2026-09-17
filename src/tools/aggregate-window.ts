@@ -8,6 +8,15 @@
  * released value between calls. A released week is still withheld while it
  * is not final (an open cycle or a pending score placed in it), and a week
  * with fewer than AGGREGATE_WEEK_MIN_SAMPLES samples is gated out per metric.
+ *
+ * The release lag covers late syncs only. Aggregate sources are fetched
+ * uncached, so an edit in WHOOP to a record of an already released week (a
+ * workout added, deleted or rescored) changes that week's released values on
+ * the next call, and comparing the values before and after the edit reveals
+ * that record's contribution to within the rounding step. The workout totals
+ * therefore use coarse steps (AGGREGATE_WORKOUT_KJ_STEP,
+ * AGGREGATE_WORKOUT_STRAIN_STEP).
+ *
  * Longer windows use 4- or 13-week blocks aligned to the epoch Monday
  * (1970-01-05), so the same block has the same bounds in every call.
  *
@@ -29,6 +38,12 @@ export const AGGREGATE_WEEK_MIN_SAMPLES = 3;
 
 /** Days after a week ends before it is released (the released week changes at Wednesday 00:00 local) */
 export const AGGREGATE_RELEASE_LAG_DAYS = 2;
+
+/** Rounding step of a released week's total workout energy (kJ), as training-aggregate uses */
+export const AGGREGATE_WORKOUT_KJ_STEP = 100;
+
+/** Rounding step of a released week's summed workout strain */
+export const AGGREGATE_WORKOUT_STRAIN_STEP = 1;
 
 /** The Monday every aggregate block is aligned to */
 export const EPOCH_MONDAY = "1970-01-05";

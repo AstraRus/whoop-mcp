@@ -125,6 +125,42 @@ export function isOpenCycle(cycle: Cycle): boolean {
 }
 
 /**
+ * Notes for days whose cycle is still open, so their strain is left out of
+ * daily strain. `today` is the user's current local day: only an open cycle
+ * placed on today is called today's. An open cycle placed on an earlier day
+ * (between local midnight and the next synced sleep) also explains that the
+ * days after it, up to today and no later than `lastDay` (e.g. the end of the
+ * week summarized), have no cycle yet.
+ */
+export function openCycleStrainNote(
+  openDays: readonly string[],
+  today: string,
+  lastDay: string = today
+): string[] {
+  const days = [...new Set(openDays)].sort();
+  if (days.length === 0) return [];
+  if (days.length === 1 && days[0] === today) {
+    return [`Today's (${today}) strain is still accumulating and is not included in daily strain.`];
+  }
+  const notes = [
+    `Strain for ${days.join(", ")} is still accumulating (${days.length === 1 ? "its WHOOP cycle stays" : "their WHOOP cycles stay"} open until the next sleep syncs) and is not included in daily strain.`,
+  ];
+  const newest = days[days.length - 1]!;
+  if (newest < today) {
+    const waiting: string[] = [];
+    for (let day = addDays(newest, 1); day <= today && day <= lastDay; day = addDays(day, 1))
+      waiting.push(day);
+    if (waiting.length > 0) {
+      const listed = waiting.map((day) => (day === today ? `${day} (today)` : day)).join(", ");
+      notes.push(
+        `No WHOOP cycle has started yet for ${listed}: a new cycle begins at the next sleep and appears once that sleep syncs, so this is not missing data.`
+      );
+    }
+  }
+  return notes;
+}
+
+/**
  * A cycle's main day: the local day its main sleep ended (the morning it
  * covers), or cycleDay() when it has no main sleep.
  */

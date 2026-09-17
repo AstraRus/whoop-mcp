@@ -30,6 +30,7 @@ import {
   createHistoryBudget,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  loadConsistentHistory,
   loadHistory,
   type HistorySource,
 } from "../api/history.js";
@@ -232,14 +233,23 @@ const BY_CONSTRUCTION: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Behaviours that move WHOOP's sleep need, against which sleep performance is
+ * measured: day strain raises the need, a nap lowers it.
+ */
+const SLEEP_NEED_INPUTS: ReadonlySet<string> = new Set(["prior_day_strain", "nap_before"]);
+
+/**
  * Whether a tested combination is partly by construction: a sleep behaviour
- * WHOOP builds recovery values from, with a recovery outcome; or disturbances
- * per hour asleep with hours asleep (its denominator).
+ * WHOOP builds recovery values from, with a recovery outcome; disturbances per
+ * hour asleep with hours asleep (its denominator); or day strain or a nap
+ * (inputs of WHOOP's sleep need) with sleep performance (time asleep against
+ * that need).
  */
 function partlyByConstruction(behaviour: string, outcome: DriverOutcome): boolean {
   return (
     (BY_CONSTRUCTION.has(behaviour) && RECOVERY_OUTCOMES.has(outcome)) ||
-    (behaviour === "disturbances_per_hour" && outcome === "asleep_hours")
+    (behaviour === "disturbances_per_hour" && outcome === "asleep_hours") ||
+    (SLEEP_NEED_INPUTS.has(behaviour) && outcome === "sleep_performance")
   );
 }
 
@@ -839,8 +849,10 @@ function isBinary(behaviour: string): boolean {
 
 /**
  * Test one behaviour-outcome combination, or say why it is not tested:
- * tautological, data_unavailable (its source could not be read, or no pair
- * has a value although enough pairs have the outcome), too_few_pairs,
+ * tautological, data_unavailable (its source could not be read, or its history
+ * is incomplete: no pair has a value although enough pairs have the outcome),
+ * too_few_pairs (including last_workout_to_bed_min when workouts were read in
+ * full but too few analysed nights followed a workout day),
  * group_too_small (binary), too_few_distinct_values or low_effective_sample.
  */
 function evaluateCombination(
@@ -861,7 +873,15 @@ function evaluateCombination(
   )
     return { notTested: { reason: "data_unavailable", n } };
   if (n < DRIVERS_MIN_PAIRS) {
-    const unavailable = withOutcome.length >= DRIVERS_MIN_PAIRS && n === 0;
+    // last_workout_to_bed_min is null on known days without a workout; whether the
+    // workout history itself was known shows in prior_day_workout_minutes.
+    const sourceKey =
+      behaviour === "last_workout_to_bed_min" ? "prior_day_workout_minutes" : behaviour;
+    const known = withOutcome.filter(
+      (pair) => pair.values.get(sourceKey) !== null && pair.values.get(sourceKey) !== undefined
+    ).length;
+    const unavailable =
+      n === 0 && withOutcome.length >= DRIVERS_MIN_PAIRS && known < DRIVERS_MIN_PAIRS;
     return { notTested: { reason: unavailable ? "data_unavailable" : "too_few_pairs", n } };
   }
   const xs = both.map((pair) => pair.values.get(behaviour) as number);
@@ -1219,24 +1239,38 @@ async function runRecoveryDrivers(
     now: () => now,
     ...(ctx.historyCache !== undefined ? { cache: ctx.historyCache } : {}),
   };
-  const [cycles, sleeps, recoveries, workouts] = await Promise.all([
-    loadHistory<Cycle>(ctx.client, "/v2/cycle", period, cycleRecordSchema, historyOptions),
-    loadHistory<Sleep>(ctx.client, "/v2/activity/sleep", period, sleepRecordSchema, historyOptions),
-    loadHistory<Recovery>(ctx.client, "/v2/recovery", period, recoveryRecordSchema, historyOptions),
-    loadHistory<Workout>(
-      ctx.client,
-      "/v2/activity/workout",
-      period,
-      workoutRecordSchema,
-      historyOptions
-    ),
-  ]);
+  // One snapshot: records from before and after a WHOOP sync are not mixed.
+  const {
+    sources: [cycles, sleeps, recoveries, workouts],
+    warnings: historyWarnings,
+  } = await loadConsistentHistory([
+    (extra) =>
+      loadHistory<Cycle>(ctx.client, "/v2/cycle", period, cycleRecordSchema, {
+        ...historyOptions,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Sleep>(ctx.client, "/v2/activity/sleep", period, sleepRecordSchema, {
+        ...historyOptions,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Recovery>(ctx.client, "/v2/recovery", period, recoveryRecordSchema, {
+        ...historyOptions,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Workout>(ctx.client, "/v2/activity/workout", period, workoutRecordSchema, {
+        ...historyOptions,
+        ...extra,
+      }),
+  ] as const);
   const sources = { cycle: cycles, sleep: sleeps, recovery: recoveries, workout: workouts };
   if (Object.values(sources).every((source) => source.quality.status === "fetch_failed")) {
     throw mostRelevantError(Object.values(sources).map((source) => source.error));
   }
 
-  const warnings: string[] = [];
+  const warnings: string[] = [...historyWarnings];
   const notes: string[] = [];
   const failed = (Object.keys(sources) as (keyof typeof sources)[]).filter((key) =>
     unreadable(sources[key].quality)
@@ -1595,9 +1629,29 @@ async function runRecoveryDrivers(
       "WHOOP measures HRV and resting heart rate during sleep and builds recovery from sleep, so associations of hours asleep, sleep efficiency, sleep debt and disturbances with recovery values are partly by construction (partly_by_construction)."
     );
   }
+  if (options.outcomes.includes("sleep_performance") && requiredFailed.length === 0) {
+    notes.push(
+      "WHOOP measures sleep performance against its sleep need, which rises after a higher day strain and falls after a nap, so associations of day strain and naps with sleep performance are partly by construction (partly_by_construction)."
+    );
+  }
   if (options.outcomes.includes("asleep_hours") && requiredFailed.length === 0) {
     notes.push(
       "Disturbances per hour are counted per hour asleep, so their association with hours asleep is partly by construction (partly_by_construction)."
+    );
+  }
+  if (
+    status === "available" &&
+    notTested.some(
+      (entry) => entry.behaviour === "last_workout_to_bed_min" && entry.reason === "too_few_pairs"
+    )
+  ) {
+    const afterWorkout = pairs.filter(
+      (pair) =>
+        pair.values.get("last_workout_to_bed_min") !== null &&
+        pair.values.get("last_workout_to_bed_min") !== undefined
+    ).length;
+    notes.push(
+      `last_workout_to_bed_min exists only on days with a WHOOP workout; ${afterWorkout} of ${plural(pairsAnalyzed, "analysed night")} followed one.`
     );
   }
   if (summary.tautological > 0) {

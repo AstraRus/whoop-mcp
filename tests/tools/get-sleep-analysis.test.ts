@@ -656,3 +656,52 @@ describe("size, requests and contract", () => {
     HEAVY_TEST_TIMEOUT_MS
   );
 });
+
+// ---------------------------------------------------------------------------
+// Naps not scored
+// ---------------------------------------------------------------------------
+
+describe("nap total with a nap that is not scored", () => {
+  const UNSCORED_NOTE =
+    "1 nap in the window is not scored yet or could not be scored, so total nap time asleep is not given.";
+
+  function napsInWindow(user: WhoopUserFixture, days: number): Sleep[] {
+    const startMs = user.now.getTime() - days * DAY_MS;
+    return user.sleeps.filter(
+      (sleep) =>
+        sleep.nap && Date.parse(sleep.end) >= startMs && Date.parse(sleep.end) < user.now.getTime()
+    );
+  }
+
+  it("gives the total when every nap is scored", async () => {
+    const user = matureUser({ days: 15 });
+    expect(napsInWindow(user, 14).length).toBeGreaterThan(1);
+    const report = await analyse(user, { days: 14 });
+    expect(report.naps).toMatchObject({ unscored: 0, total_asleep_hours: 0.97 });
+    expect(report.notes).not.toContain(UNSCORED_NOTE);
+  });
+
+  it.each(["PENDING_SCORE", "UNSCORABLE"] as const)(
+    "is null rather than a partial sum when one nap is %s",
+    async (state) => {
+      const user = matureUser({ days: 15 });
+      const naps = napsInWindow(user, 14);
+      expect(naps.length).toBeGreaterThan(1);
+      naps[0]!.score_state = state;
+      naps[0]!.score = undefined;
+      const report = await analyse(user, { days: 14 });
+      expect(report.naps).toMatchObject({
+        count: naps.length,
+        unscored: 1,
+        total_asleep_hours: null,
+      });
+      expect(report.naps!.mean_duration_min).not.toBeNull();
+      expect(report.notes).toContain(UNSCORED_NOTE);
+      expect(
+        sleepAnalysisOutputSchema.shape.naps.unwrap().shape.total_asleep_hours.description
+      ).toBe(
+        "Time asleep in all naps in the window (light + slow-wave + REM); null when any nap is not scored"
+      );
+    }
+  );
+});

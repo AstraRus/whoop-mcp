@@ -24,6 +24,7 @@ import { WhoopApiError } from "../../src/api/client.js";
 import { createWhoopServer } from "../../src/server.js";
 import { getTrend, TREND_METRICS } from "../../src/tools/get-trend.js";
 import type { TrendMetric } from "../../src/tools/get-trend.js";
+import { sampleStandardDeviation } from "../../src/tools/stats-utils.js";
 import { MAX_TOOL_TEXT_CHARS } from "../../src/tools/tool-definition.js";
 import { assertNeutralText, connectServer } from "../helpers/contract.js";
 import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
@@ -462,7 +463,14 @@ describe("getTrend — sparse data and confidence", () => {
     expect(result.sample_size).toBe(2);
     expect(result.values).toEqual([150, 108]);
     expect(result.dates).toEqual(["2026-09-15", "2026-09-16"]);
-    expect(result.statistics).toEqual({ mean: 129, median: 129, std_dev: 21, min: 108, max: 150 });
+    // Sample standard deviation (n - 1): sqrt((21² + 21²) / 1) = 21·√2
+    expect(result.statistics).toEqual({
+      mean: 129,
+      median: 129,
+      std_dev: expect.closeTo(21 * Math.SQRT2, 10),
+      min: 108,
+      max: 150,
+    });
     expect(result.trend).toEqual({
       direction: null,
       change: null,
@@ -671,7 +679,50 @@ describe("getTrend — windows, joins and data quality", () => {
     const result = await getTrend(fakeWhoop(data).client, { metric: "strain" }, NOW);
 
     expect(result.values).toEqual([12, 14]);
-    expect(result.notes).toContain("Today's strain is still accumulating and is not included.");
+    expect(result.notes).toContain(
+      "Today's (2026-09-16) strain is still accumulating and is not included in daily strain."
+    );
+  });
+
+  /** A history whose first cycle starts at local midnight of 09-13 with no sleep (the strap was put on) */
+  function strapOnHistory(): FakeData {
+    const data = history([
+      { day: "2026-09-13", strain: 4 },
+      { day: "2026-09-14", strain: 12 },
+      { day: "2026-09-15", strain: 14 },
+      { day: "2026-09-16", strain: 3 },
+    ]);
+    const first = data.cycle.find((cycle) => cycle.id === 1)!;
+    first.start = "2026-09-12T22:00:00.000Z"; // 2026-09-13 00:00 local
+    data.sleep = data.sleep.filter((sleep) => sleep.cycle_id !== 1);
+    data.recovery = data.recovery.filter((recovery) => recovery.cycle_id !== 1);
+    return data;
+  }
+
+  it("leaves a partial first day of wear out of strain and says so", async () => {
+    const result = await getTrend(fakeWhoop(strapOnHistory()).client, { metric: "strain" }, NOW);
+
+    expect(result.values).toEqual([12, 14]);
+    expect(result.dates).toEqual(["2026-09-14", "2026-09-15"]);
+    expect(result.sample_size).toBe(2);
+    expect(result.statistics.mean).toBe(13);
+    expect(result.notes).toContain(
+      "1 day WHOOP covered only in part (the strap was put on that day) is left out of strain."
+    );
+  });
+
+  it("still leaves a midnight-start cycle without a main sleep out when sleeps cannot be loaded", async () => {
+    const { client, paths } = fakeWhoop(strapOnHistory(), {
+      fail: { sleep: new WhoopApiError(500, "err", null) },
+    });
+    const result = await getTrend(client, { metric: "strain" }, NOW);
+
+    expect(result.values).toEqual([12, 14]);
+    expect(result.notes.join(" ")).toMatch(/1 day WHOOP covered only in part/);
+    // One cycle request and one sleep request for the window
+    const windowed = paths.filter((path) => path.includes("start="));
+    expect(windowed.filter((path) => path.includes("cycle"))).toHaveLength(1);
+    expect(windowed.filter((path) => path.includes("sleep"))).toHaveLength(1);
   });
 
   it("filters unscored records", async () => {
@@ -1110,6 +1161,118 @@ describe("get_trend on the shared fixture users", () => {
       }
       assertNeutralText(structured);
     }
+  });
+
+  /** Call tools on a standard-mode server at `now` (default: the fixture's own now) */
+  async function callAt(
+    data: ReturnType<typeof liveShapedUser>,
+    calls: Array<[string, Record<string, unknown>]>,
+    now: Date = data.now
+  ): Promise<Array<Record<string, unknown>>> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      disableResources: true,
+    });
+    const results: Array<Record<string, unknown>> = [];
+    try {
+      for (const [name, args] of calls) {
+        const result = await connection.callTool(name, args);
+        expect(result.isError, `${name}: ${result.text}`).toBe(false);
+        results.push(result.structured!);
+      }
+    } finally {
+      await connection.close();
+    }
+    return results;
+  }
+
+  it("leaves the partial first day of the live-shaped user out of strain, as get_calendar does", async () => {
+    const [trend, calendar] = (await callAt(liveShapedUser(), [
+      ["get_trend", { metric: "strain", days: 7 }],
+      ["get_calendar", { days: 7 }],
+    ])) as [
+      { dates: string[]; sample_size: number; statistics: { mean: number }; notes: string[] },
+      { averages: { strain: number; sample_sizes: { strain: number } } },
+    ];
+    // The first cycle starts 2026-09-14 00:00 local, before the first sleep.
+    expect(trend.dates).not.toContain("2026-09-14");
+    expect(trend.dates).toEqual(["2026-09-15"]);
+    expect(trend.sample_size).toBe(calendar.averages.sample_sizes.strain);
+    expect(Math.round(trend.statistics.mean * 10) / 10).toBe(calendar.averages.strain);
+    expect(trend.notes).toContain(
+      "1 day WHOOP covered only in part (the strap was put on that day) is left out of strain."
+    );
+  });
+
+  it("names the open cycle's day, not today, when strain is still accumulating after midnight", async () => {
+    const [trend] = (await callAt(liveShapedUser({ now: "2026-09-17T01:30:00+02:00" }), [
+      ["get_trend", { metric: "strain", days: 7 }],
+    ])) as [{ notes: string[] }];
+    expect(trend.notes).toContain(
+      "Strain for 2026-09-16 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain."
+    );
+    expect(trend.notes.join(" ")).toMatch(
+      /No WHOOP cycle has started yet for 2026-09-17 \(today\)/
+    );
+    expect(trend.notes.join(" ")).not.toMatch(/Today's/);
+  });
+
+  it("names Sunday's open cycle on Monday after midnight", async () => {
+    const [trend] = (await callAt(
+      matureUser({ now: "2026-09-20T22:00:00+01:00" }),
+      [["get_trend", { metric: "strain", days: 7 }]],
+      new Date("2026-09-21T00:30:00+01:00")
+    )) as [{ dates: string[]; notes: string[] }];
+    expect(trend.notes).toContain(
+      "Strain for 2026-09-20 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain."
+    );
+    expect(trend.dates).not.toContain("2026-09-20");
+    expect(trend.notes.join(" ")).not.toMatch(/Today's/);
+  });
+
+  it("reports the same sample standard deviation as get_sleep_analysis and get_recovery_analysis", async () => {
+    type Summary = Record<string, { n: number; mean: number | null; sd: number | null }> | null;
+    const pairs = [
+      ["sleep_duration", 0, "asleep_hours"],
+      ["recovery", 1, "recovery"],
+      ["hrv", 1, "hrv"],
+      ["rhr", 1, "rhr"],
+    ] as const;
+    let compared = 0;
+    for (const [data, days] of [
+      [liveShapedUser(), 7],
+      [matureUser(), 7],
+      [matureUser(), 30],
+    ] as const) {
+      const results = await callAt(data, [
+        ["get_sleep_analysis", { days }],
+        ["get_recovery_analysis", { days }],
+        ...pairs.map(([metric]): [string, Record<string, unknown>] => [
+          "get_trend",
+          { metric, days },
+        ]),
+      ]);
+      vi.useRealTimers();
+      pairs.forEach(([metric, source, field], index) => {
+        const trend = results[index + 2] as {
+          values: number[];
+          sample_size: number;
+          statistics: { mean: number | null; std_dev: number | null };
+        };
+        const label = `${metric} over ${days} days`;
+        // std_dev is the sample (n - 1) standard deviation of the returned values
+        expect(trend.statistics.std_dev, label).toBe(sampleStandardDeviation(trend.values));
+        const other = (results[source]!.summary as Summary)?.[field];
+        if (!other || other.sd === null || other.mean === null) return;
+        if (other.n !== trend.sample_size) return;
+        if (Math.abs(other.mean - trend.statistics.mean!) > 0.051) return;
+        expect(Math.abs(trend.statistics.std_dev! - other.sd), label).toBeLessThanOrEqual(0.005001);
+        compared += 1;
+      });
+    }
+    // Every metric of the 7-day mature window and the recovery metrics of the 30-day one
+    expect(compared).toBeGreaterThanOrEqual(7);
   });
 
   it("snaps 8 to 14 days to the same two released weeks, so one extra day never changes the result", async () => {

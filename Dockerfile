@@ -11,9 +11,9 @@
 #           -v whoop-tokens:/data -e WHOOP_MCP_TOKEN_DIR=/data \
 #           whoop-mcp
 #
-# Tokens live in WHOOP_MCP_TOKEN_DIR (default /root/.whoop-mcp, where existing
-# deployments mount their volume). The server runs as the `node` user; see
-# docker/entrypoint.sh.
+# Tokens live in WHOOP_MCP_TOKEN_DIR, default $HOME/.whoop-mcp (/root/.whoop-mcp
+# unless HOME is set), the folder earlier images used. The server runs as the
+# `node` user; see docker/entrypoint.sh.
 #
 # Final image is ~120-150MB compressed; node:22-alpine base is ~55MB.
 # Built artifact contains only production deps + dist/ (no tests, no source).
@@ -50,7 +50,8 @@ RUN apk add --no-cache tini su-exec \
  && rm -rf /var/cache/apk/*
 
 # Entrypoint: prepares the token folder (WHOOP_MCP_TOKEN_DIR, default
-# /root/.whoop-mcp) for `node` and runs the server as `node`, or stays root
+# $HOME/.whoop-mcp (/root/.whoop-mcp unless HOME is set), the folder earlier
+# images used) for `node` and runs the server as `node`, or stays root
 # with a logged reason when that is not possible (e.g. a read-only volume).
 # Line endings are normalized in case the script was checked out with CRLF.
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh

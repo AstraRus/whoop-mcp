@@ -52,7 +52,7 @@
             "This week is still in progress (data through 2026-09-16).",
             "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
             "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
-            "Today's strain is still accumulating and is not included.",
+            "Today's (2026-09-16) strain is still accumulating and is not included in daily strain.",
             "1 day WHOOP covered only in part (the strap was put on that day) is not included in daily strain."
           ]
         }
@@ -160,7 +160,8 @@
             "This week is still in progress (data through 2026-09-17).",
             "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
             "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
-            "Today's strain is still accumulating and is not included.",
+            "Strain for 2026-09-16 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain.",
+            "No WHOOP cycle has started yet for 2026-09-17 (today): a new cycle begins at the next sleep and appears once that sleep syncs, so this is not missing data.",
             "1 day WHOOP covered only in part (the strap was put on that day) is not included in daily strain."
           ]
         }
@@ -213,7 +214,7 @@
           "notes": [
             "This week is still in progress (data through 2026-09-16).",
             "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
-            "Today's strain is still accumulating and is not included."
+            "Today's (2026-09-16) strain is still accumulating and is not included in daily strain."
           ]
         }
       }

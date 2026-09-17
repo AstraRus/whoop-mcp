@@ -141,9 +141,19 @@ export function newestTokens(
 
 /**
  * Delays before retrying startup authentication after WHOOP could not refresh
- * the stored tokens (about a minute in total); see main().
+ * the stored tokens (65 s of waiting, plus up to TOKEN_REQUEST_TIMEOUT_MS per
+ * attempt); see main(). STARTUP_AUTH_BUDGET_MS caps the total.
  */
 export const STARTUP_REFRESH_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000];
+
+/**
+ * Longest time startup authentication may keep retrying, measured from the
+ * first attempt, before the server starts in degraded mode with the stored
+ * tokens. A hosted server has no /health until then, so its deploy health
+ * check must not time out. An attempt is never started, and a delay never
+ * begun, once it would run past this budget.
+ */
+export const STARTUP_AUTH_BUDGET_MS = 120_000;
 
 // ---------------------------------------------------------------------------
 // Main
@@ -215,6 +225,7 @@ export async function main(): Promise<void> {
    * A rejected refresh token (invalid_grant) still runs the sign-in flow.
    */
   const authenticateAtStartup = async (): Promise<string> => {
+    const startedAt = Date.now();
     for (let attempt = 0; ; attempt++) {
       try {
         const token = await authenticate(oauthConfig, { onTokens });
@@ -230,7 +241,8 @@ export async function main(): Promise<void> {
         }
         // Without stored tokens the failure came from a new sign-in: retrying
         // would start another one, and there is nothing to serve with.
-        const stored = await loadTokens();
+        // An unreadable token file counts as none: nothing to serve with.
+        const stored = await loadTokens().catch(() => null);
         if (!stored) {
           throw error;
         }
@@ -240,7 +252,10 @@ export async function main(): Promise<void> {
             ? { status: error.statusCode }
             : { errorClass: error.name };
         const delayMs = STARTUP_REFRESH_RETRY_DELAYS_MS[attempt];
-        if (delayMs !== undefined) {
+        // Retry only when the delay ends inside the budget, so the next attempt
+        // (itself bounded by the token request timeout) starts within it.
+        const budgetLeftMs = STARTUP_AUTH_BUDGET_MS - (Date.now() - startedAt);
+        if (delayMs !== undefined && delayMs < budgetLeftMs) {
           logger.warn("whoop token refresh failed at startup; retrying", {
             ...failure,
             attempt: attempt + 1,
@@ -299,7 +314,13 @@ export async function main(): Promise<void> {
   };
 
   const onTokenRefresh = async (): Promise<string> => {
-    const tokens = newestTokens(await loadTokens(), latestTokens);
+    // An unreadable token file must not stop the refresh: the in-memory tokens
+    // may be the only copy of a rotated refresh token.
+    const stored = await loadTokens().catch((error: unknown) => {
+      logger.error("whoop token store read failed", { code: errorCode(error) });
+      return null;
+    });
+    const tokens = newestTokens(stored, latestTokens);
     if (!tokens) {
       throw new Error(
         "Token refresh failed: no stored tokens found. Re-authentication may be required."

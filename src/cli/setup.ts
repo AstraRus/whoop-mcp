@@ -30,6 +30,7 @@ import {
   resolveTokenDir,
   saveTokens,
   TOKEN_DIR_ENV,
+  TokenStoreReadError,
   type OAuthTokens,
 } from "../auth/token-store.js";
 import { refreshAccessToken, toOAuthTokens } from "../auth/oauth.js";
@@ -273,7 +274,13 @@ async function defaultFetchProfile(accessToken: string): Promise<unknown> {
   // Newest tokens issued during this run, in case saving them fails.
   let latest: OAuthTokens | null = null;
   const onTokenRefresh = async (): Promise<string> => {
-    const stored = await loadTokens();
+    // An unreadable token file must not stop a refresh when this run already
+    // holds newer tokens (loadTokens logged the code). Without them, keep the
+    // read error and its guidance.
+    const stored = await loadTokens().catch((error: unknown) => {
+      if (latest === null) throw error;
+      return null;
+    });
     const tokens =
       latest !== null && (stored === null || latest.expires_at > stored.expires_at)
         ? latest
@@ -513,14 +520,21 @@ async function verifyCredentials(
  */
 function isRejectedSignIn(error: unknown): boolean {
   if (error instanceof WhoopAuthError) {
-    return !(error.cause instanceof WhoopNetworkError);
+    // An unreadable token file says nothing about the sign-in: deleting it
+    // and authorizing again would replace a sign-in that may still be valid.
+    return !(
+      error.cause instanceof WhoopNetworkError || error.cause instanceof TokenStoreReadError
+    );
   }
   return error instanceof WhoopApiError && (error.statusCode === 401 || error.statusCode === 403);
 }
 
 function profileError(err: unknown): Error {
+  // An unreadable token file: show its guidance, not the generic refresh failure.
+  const reason =
+    err instanceof WhoopAuthError && err.cause instanceof TokenStoreReadError ? err.cause : err;
   return new Error(
-    `Verification failed fetching profile: ${err instanceof Error ? err.message : String(err)}`
+    `Verification failed fetching profile: ${reason instanceof Error ? reason.message : String(reason)}`
   );
 }
 

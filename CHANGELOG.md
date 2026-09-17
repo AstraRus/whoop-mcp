@@ -32,7 +32,7 @@ precision, and aggregate privacy mode now releases only whole released weeks.
     sport; `get_personal_records`: per-sport bests with previous best and
     improvement, `history_complete` and a max heart rate check.
   - `get_training_load`: acute and chronic load and their ratio, EWMA ATL, CTL
-    and TSB (seeded from the window mean when older history exists), Foster
+    and TSB (seeded from the mean of the first 28 known daily loads), Foster
     monotony, ISO week totals and load by sport, ending at the last completed
     WHOOP day; `get_sport_breakdown`: sessions, time, energy, zones, TRIMP, GPS
     pace, efficiency trend, intensity distribution and time of day per sport.
@@ -83,7 +83,8 @@ precision, and aggregate privacy mode now releases only whole released weeks.
 - OAuth connector: connector access tokens accepted on `/mcp`, protected
   resource metadata at `/.well-known/oauth-protected-resource/mcp` (and the root
   alias), stateless dynamic client registration for public (`none`) and
-  confidential (`client_secret_post`) clients such as claude.ai.
+  confidential (`client_secret_post`) clients; every registration gets its own
+  client id and secret.
 - Authenticated `/health` fields `version`, `commit`
   (`RAILWAY_GIT_COMMIT_SHA`/`SOURCE_COMMIT`), `privacyMode`, `oauthConnector`,
   `webhooks`, `whoopAuth` and `whoopRate`; `X-Request-Id` on every `/mcp`
@@ -92,10 +93,15 @@ precision, and aggregate privacy mode now releases only whole released weeks.
 - `PORT` support (used when `MCP_PORT` is unset) and `MCP_MAX_CONNECTIONS`
   (1-100, default 16) with a 32-request queue that waits up to 5 seconds.
 - `WHOOP_MCP_TOKEN_DIR` for the token folder, a container entrypoint that runs
-  the server as the `node` user when it can, and a Docker smoke workflow.
+  the server as the `node` user when it can (token folder `$HOME/.whoop-mcp`
+  unless `WHOOP_MCP_TOKEN_DIR` is set), a Docker smoke workflow that includes
+  Railway's layout (`HOME=/home/node`, volume at `/home/node/.whoop-mcp`) and
+  a Docker-free entrypoint test in the normal test run.
 - Degraded startup: when WHOOP cannot refresh the stored tokens at startup
   (network, 429, 5xx, `invalid_client`), the server retries after 5, 15 and 45
-  seconds and then starts with the stored tokens instead of exiting.
+  seconds within a 120-second budget and then starts with the stored tokens
+  instead of exiting. Token-endpoint requests time out after 30 seconds, so
+  startup with stored tokens takes at most about 2.5 minutes.
 - `whoop-ai-mcp revoke --yes [--keep-tokens]`: a human-only command that revokes
   the app's WHOOP access.
 - Docs: a complete tool reference, privacy matrix, environment variable table,
@@ -139,6 +145,34 @@ precision, and aggregate privacy mode now releases only whole released weeks.
   one `tool call failed` line with its outcome, error class and HTTP status.
 - Resource read failures are logged through the structured logger instead of
   `console.error`.
+- WHOOP request log lines (`whoop api request`, `whoop api rate limited`,
+  `whoop api timeout`, `whoop api network error`) log `endpoint`, a route
+  template such as `/v2/activity/workout/:id` without ids or query, and
+  `errorClass`, instead of `url` and `error`. `whoop token refreshed` is logged
+  once per refresh.
+- `tool call failed`: a `RangeError` or `ZodError` inside a tool is logged as
+  `internal_error` at level error with `stackFrames`; only a date expression
+  that cannot be parsed (`InvalidDateExpression`) is `invalid_input`.
+- Records from the last 3 days may come from a cache entry up to 2 minutes old;
+  when a tool call's data types were read at different times around a WHOOP
+  sync, the older ones are re-read once.
+- `get_workout_log`, `get_personal_records`, `get_training_load` and
+  `get_sport_breakdown` also read sleeps to place sessions on days, as
+  `get_calendar` does (split nights included). The
+  `whoop://v2/user/workout/latest` resource places the workout on the wake day
+  of its cycle's main sleep and may read the cached sleep list.
+- `get_training_load` seeds its EWMA from the mean of the first 28 known daily
+  loads.
+- `get_trend` and `get_baselines` report `std_dev` as the sample standard
+  deviation (n-1).
+- Aggregate `get_weekly_summary` rounds workout `total_strain` to 1 and
+  `total_calories_kj` to 100.
+- Prompts `health_check` and `weekly_health_review` ask for observations
+  instead of recommendations.
+- The container entrypoint's root warning reads `entrypoint: running as root
+(<reason>); the server still works, see docs/deploy-railway.md` (it no longer
+  suggests `/data`, which would point an existing deployment at an empty
+  folder).
 
 ### Fixed
 
@@ -172,6 +206,38 @@ precision, and aggregate privacy mode now releases only whole released weeks.
 - Cache readers' TTLs are honoured, and the time-zone lookup no longer makes the
   latest-cycle resource serve hour-old strain.
 - Connector access tokens were rejected on `/mcp`; they are now verified there.
+- Container token folder: the entrypoint defaulted to `/root/.whoop-mcp`
+  whatever `HOME` was. On a deployment with `HOME=/home/node` and its volume
+  at `/home/node/.whoop-mcp` (the folder 0.7.x used), the server found no
+  tokens, started a WHOOP sign-in, never served `/health` and exited after
+  `CALLBACK_TIMEOUT_MS`. The default is now `$HOME/.whoop-mcp`
+  (`/root/.whoop-mcp` without `HOME`), exported to the server.
+- A `tokens.json` that exists but cannot be read (for example `EACCES` with
+  `--user` on a root-owned volume) fails fast with `Cannot read the WHOOP token
+file <path> (<code>)` and ownership guidance instead of starting a new WHOOP
+  sign-in over a possibly valid one.
+- Token-endpoint requests time out after 30 seconds, and startup retries are
+  bounded (about 2 minutes) before degraded serving, so a hanging WHOOP token
+  endpoint no longer blocks startup and the deploy health check.
+- The failed-verification throttle never refuses a valid connector token (a
+  shared proxy address could lock out a signed-in client); only further
+  invalid tokens get 429.
+- `get_sleep_debt`: `social_jetlag_minutes` needs 2 weekday and 2 weekend
+  nights (3 and 3 in aggregate mode), otherwise it is null with a note.
+- `get_sleep_analysis`: `naps.total_asleep_hours` is null when any nap is
+  unscored.
+- `get_recovery_drivers`: `partly_by_construction` also covers
+  `prior_day_strain` and `nap_before` with `sleep_performance`;
+  `last_workout_to_bed_min` with too few workout days is `too_few_pairs`
+  instead of `data_unavailable`.
+- `export_health_data`: the CSV formula guard no longer prefixes UTC offsets
+  such as `+02:00`.
+- `get_day`: on the first day of wear the timeline labels the cycle start as
+  local midnight instead of sleep onset.
+- `get_training_load` and `get_sport_breakdown` place split nights like
+  `get_calendar`.
+- `get_trend` (strain) and `compare_periods` leave out the partial first day of
+  wear; strain notes name the open cycle's day instead of "Today's".
 
 ### Security
 
@@ -204,6 +270,20 @@ precision, and aggregate privacy mode now releases only whole released weeks.
 - Revoking WHOOP access (`DELETE /v2/user/access`) is a human-only CLI command
   and never an MCP tool.
 - Every new tool result is limited to 100,000 characters.
+- Dynamic client registration signs a random nonce into every client id, so
+  two registrations with the same metadata never share a client id or secret
+  and a secret cannot be recomputed from the metadata.
+- With `MCP_TRUST_PROXY=1` the client IP for rate limits, the auth-failure
+  throttle and logs is the rightmost `X-Forwarded-For` hop (the one the proxy
+  appended), so a client cannot choose its own rate-limit key.
+- WHOOP request logs no longer contain record ids, dates or query parameters.
+- Aggregate `get_sport_breakdown`: a `sport` filter for a sport pooled as `other`
+  gets the same answer as a sport that does not exist, so it no longer reveals
+  which sports had only 1 or 2 sessions in a block.
+- Aggregate mode (documented): an edit in WHOOP to a record in an already
+  released week changes released values on the next call, and comparing
+  outputs from before and after the edit reveals that record's contribution
+  to within the rounding step; the 2-day lag covers late syncs only.
 
 ### Compatibility
 
@@ -228,10 +308,12 @@ precision, and aggregate privacy mode now releases only whole released weeks.
 - HTTP: `/mcp` is stateless; the default concurrency is 16 requests with a
   queue instead of 5 with an immediate 503; 500 bodies no longer include a
   message.
-- Docker: the image still defaults to the token folder `/root/.whoop-mcp`
-  (existing volumes keep working) and now switches to the `node` user after
-  preparing it. Set `WHOOP_MCP_TOKEN_DIR` to use another volume path. Images
-  before 0.8.0 ignore `WHOOP_MCP_TOKEN_DIR`.
+- Docker: the image still defaults to the folder earlier images used,
+  `$HOME/.whoop-mcp` (`/root/.whoop-mcp` unless HOME is set), so existing
+  volumes keep working (for example `/home/node/.whoop-mcp` on Railway with
+  `HOME=/home/node`: change nothing). It now switches to the `node` user after
+  preparing the folder. `WHOOP_MCP_TOKEN_DIR` must equal the volume's mount
+  path when set; images before 0.8.0 ignore it.
 - No new runtime dependencies and no new OAuth scopes; the token file format is
   unchanged. The only new WHOOP endpoint, `DELETE /v2/user/access`, is used by
   the `revoke` command alone.

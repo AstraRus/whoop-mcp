@@ -21,8 +21,8 @@ const DEFAULT_OPTIONS: SleepWindowOptions = { toolName: "get_sleep_debt", maxDay
  * date-time `start` runs for `days`; a range expression covers its own range
  * unless `days` was given explicitly. The end is clamped to now.
  *
- * @throws InvalidDateExpression for unparseable or oversized windows
- * @throws RangeError when the window would begin at or after now
+ * @throws InvalidDateExpression for unparseable or oversized windows, and for
+ *   a window that would begin at or after now
  */
 export function resolveSleepWindow(
   start: string | undefined,
@@ -44,7 +44,9 @@ export function resolveSleepWindow(
     nowMs
   );
   if (!Number.isFinite(startTime) || startTime >= endTime)
-    throw new RangeError("Sleep window must begin before the evaluation time.");
+    throw new InvalidDateExpression(
+      `The sleep window "${start}" begins at or after the current time; ${options.toolName} needs a window that starts in the past.`
+    );
   const spanDays = (endTime - startTime) / DAY_MS;
   if (spanDays > options.maxDays + 1)
     throw new InvalidDateExpression(

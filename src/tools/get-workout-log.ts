@@ -3,10 +3,11 @@
  *
  * A filterable, sortable list of WHOOP workouts on the user's local days.
  * Each session counts toward the local day of the WHOOP cycle containing its
- * start (assignWorkouts), so a session after local midnight but before the
- * next sleep belongs to the previous day. Workouts and cycles are read as
- * cached history over fetchRangeForDays (two extra days on each side), so an
- * after-midnight session on the last day is always loaded.
+ * start (assignWorkouts; the day its main sleep ended, as get_day shows), so
+ * a session after local midnight but before the next sleep belongs to the
+ * previous day. Workouts, cycles and sleeps are read as one cached history
+ * snapshot (loadConsistentHistory) over fetchRangeForDays (two extra days on
+ * each side), so an after-midnight session on the last day is always loaded.
  *
  * Filters apply to scored sessions; unscored sessions are listed only with
  * include_unscored (every score field null). Totals cover every match, not only
@@ -21,18 +22,23 @@ import {
   WhoopNetworkError,
   WhoopRateBudgetError,
 } from "../api/client.js";
-import { ENDPOINT_CYCLE, ENDPOINT_WORKOUT } from "../api/endpoints.js";
+import { ENDPOINT_CYCLE, ENDPOINT_SLEEP, ENDPOINT_WORKOUT } from "../api/endpoints.js";
 import {
   createHistoryBudget,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  loadConsistentHistory,
   loadHistory,
   type HistoryBudget,
   type HistorySource,
   type LoadHistoryOptions,
 } from "../api/history.js";
-import { cycleRecordSchema, workoutRecordSchema } from "../api/record-schemas.js";
-import type { Cycle, Workout } from "../api/types.js";
+import {
+  cycleRecordSchema,
+  sleepRecordSchema,
+  workoutRecordSchema,
+} from "../api/record-schemas.js";
+import type { Cycle, Sleep, Workout } from "../api/types.js";
 import {
   dataQualitySchema,
   DISCLAIMER,
@@ -55,6 +61,8 @@ import {
   localClock,
   placeDays,
   resolveDayWindow,
+  type DayPlacement,
+  type WorkoutPlacement,
 } from "./day-model.js";
 import { roundTo } from "./stats-utils.js";
 import { defineTool, type ToolContext } from "./tool-definition.js";
@@ -191,6 +199,47 @@ export function truncationNote(
       ? "even the most recent records may be missing"
       : `records starting before ${localClock(source.complete_since, utcOffset)} local time may be missing`;
   return `${label} history could not be read completely (${reason}): ${since}, so ${consequence}. Repeating the request continues loading from the cache.`;
+}
+
+/** What a sleep stream failure means for the day a session is placed on */
+export const SLEEP_PLACEMENT_CONSEQUENCE =
+  "sessions after a daytime main sleep may be dated one day later than get_day shows";
+
+/**
+ * Keep a session of the newest, still open cycle from being dated after
+ * today. Without that cycle's main sleep its day is estimated from the cycle
+ * start, which for a cycle begun in the afternoon is tomorrow; a session that
+ * started today or earlier then counts toward today instead. Returns the
+ * placement unchanged, or moved to today with `clamped: true`.
+ */
+export function clampOpenCycleDay(
+  workout: Workout,
+  workoutPlacement: WorkoutPlacement | null,
+  placement: DayPlacement,
+  today: string
+): { placement: WorkoutPlacement | null; clamped: boolean } {
+  const cycle = workoutPlacement?.cycle ?? null;
+  if (
+    workoutPlacement === null ||
+    workoutPlacement.fallback ||
+    cycle === null ||
+    !isOpenCycle(cycle) ||
+    placement.newestCycle?.id !== cycle.id ||
+    workoutPlacement.day <= today ||
+    localDay(workout.start, workout.timezone_offset) > today
+  ) {
+    return { placement: workoutPlacement, clamped: false };
+  }
+  return {
+    placement: { ...workoutPlacement, day: today, after_midnight_in_previous_cycle: false },
+    clamped: true,
+  };
+}
+
+/** The note for sessions clampOpenCycleDay moved to today; null without any */
+export function clampedDayNote(count: number, today: string): string | null {
+  if (count === 0) return null;
+  return `${plural(count, "session")} in the WHOOP cycle still open would be dated after today because that cycle's main sleep was not loaded, so ${count === 1 ? "it counts" : "they count"} toward today (${today}).`;
 }
 
 /** Options for loadHistory within one tool call */
@@ -473,7 +522,7 @@ function listNames(names: readonly string[]): string {
 const METHOD_VERSION = "workout-log-1";
 
 const LOG_LIMITATIONS: readonly string[] = [
-  "A session counts toward the local day of the WHOOP cycle containing its start; a session after local midnight but before the next sleep belongs to the previous day.",
+  "A session counts toward the local day of the WHOOP cycle containing its start (the day that cycle's main sleep ended, as get_day shows); a session after local midnight but before the next sleep belongs to the previous day.",
   "Pace and speed use elapsed time over the whole session (pauses included), not moving time or splits.",
   "Heart-rate zones are WHOOP %max-HR zones; TRIMP is Edwards TRIMP (zone number × zone minutes).",
 ];
@@ -568,9 +617,25 @@ export async function getWorkoutLog(
     end: new Date(range.endMs).toISOString(),
   };
   const options = historyOptions(ctx);
-  const [workouts, cycles] = await Promise.all([
-    loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, options),
-    loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, options),
+  const {
+    sources: [workouts, cycles, sleeps],
+    warnings: snapshotWarnings,
+  } = await loadConsistentHistory([
+    (extra) =>
+      loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, {
+        ...options,
+        ...extra,
+      }),
   ]);
   if (workouts.quality.status === "fetch_failed") {
     throw mostRelevantError(
@@ -585,16 +650,19 @@ export async function getWorkoutLog(
       "Cycle",
       cycles,
       "every session is placed on its local start day (flag day_by_fallback)"
-    )
+    ),
+    ...sourceWarnings("Sleep", sleeps, SLEEP_PLACEMENT_CONSEQUENCE),
+    ...snapshotWarnings
   );
 
   // --- Place and normalize --------------------------------------------------------
 
+  const sleepsUnreadable = sourceUnreadable(sleeps);
   const placement = placeDays({
     cycles: cycles.records,
-    sleeps: [],
+    sleeps: sleepsUnreadable ? [] : sleeps.records,
     recoveries: [],
-    sleepsAvailable: false,
+    sleepsAvailable: !sleepsUnreadable,
     today,
     utcOffset,
   });
@@ -602,8 +670,10 @@ export async function getWorkoutLog(
   const workoutQuality = workouts.quality;
   const inWindow: LogItem[] = [];
   const recordsById = new Map<string, Workout>();
+  let clampedCount = 0;
   for (const workout of workouts.records) {
-    const workoutPlacement = placements.get(workout.id) ?? null;
+    const clamp = clampOpenCycleDay(workout, placements.get(workout.id) ?? null, placement, today);
+    const workoutPlacement = clamp.placement;
     const summary = normalizeWorkout(
       workout,
       workoutPlacement,
@@ -617,6 +687,7 @@ export async function getWorkoutLog(
       exclude(workoutQuality, "outside_window");
       continue;
     }
+    if (clamp.clamped) clampedCount += 1;
     recordsById.set(workout.id, workout);
     inWindow.push({
       summary,
@@ -788,6 +859,10 @@ export async function getWorkoutLog(
     "sessions in that part of the window may be placed on their local start day (flag day_by_fallback)"
   );
   if (cycleTruncation) notes.push(cycleTruncation);
+  const sleepTruncation = truncationNote("Sleep", sleeps, utcOffset, SLEEP_PLACEMENT_CONSEQUENCE);
+  if (sleepTruncation) notes.push(sleepTruncation);
+  const clampedNote = clampedDayNote(clampedCount, today);
+  if (clampedNote) notes.push(clampedNote);
   if (sportsCapped) {
     notes.push(
       `available_sports shows the ${WORKOUT_LOG_MAX_SPORTS} sports with the most sessions of ${allSports.length}.`
@@ -828,6 +903,21 @@ export async function getWorkoutLog(
     else exclude(cycleQuality, "outside_window");
   }
   finishQuality(cycleQuality, usedCycles);
+  // Sleeps only date the sessions: the main sleeps of the used cycles count as used.
+  const sleepQuality = sleeps.quality;
+  const usedSleeps: Sleep[] = [];
+  const usedCycleIds = new Set(usedCycles.map((cycle) => cycle.id));
+  for (const sleep of sleeps.records) {
+    if (
+      placement.mainSleepByCycle.get(sleep.cycle_id) === sleep &&
+      usedCycleIds.has(sleep.cycle_id)
+    ) {
+      usedSleeps.push(sleep);
+    } else {
+      exclude(sleepQuality, "not_joined");
+    }
+  }
+  finishQuality(sleepQuality, usedSleeps);
 
   const dataQuality: DataQuality = {
     evaluated_at: now.toISOString(),
@@ -839,7 +929,7 @@ export async function getWorkoutLog(
         offset: item.summary.timezone_offset,
       }))
     ),
-    sources: { workouts: workoutQuality, cycles: cycleQuality },
+    sources: { workouts: workoutQuality, cycles: cycleQuality, sleeps: sleepQuality },
     method_version: METHOD_VERSION,
     limitations: [...HISTORY_LIMITATIONS, ...LOG_LIMITATIONS],
   };
@@ -853,7 +943,7 @@ export async function getWorkoutLog(
     workouts: matches.slice(0, limit).map((item) => roundWorkoutSummary(item.summary)),
     totals: totalsOf(matches),
     available_sports: availableSports,
-    truncated: workouts.quality.truncated || cycles.quality.truncated,
+    truncated: workouts.quality.truncated || cycles.quality.truncated || sleeps.quality.truncated,
     notes: withOffsetNote(notes, offsetFallback),
     warnings,
     disclaimer: DISCLAIMER,

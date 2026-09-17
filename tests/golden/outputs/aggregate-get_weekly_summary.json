@@ -202,8 +202,8 @@
           },
           "workouts": {
             "count": 7,
-            "total_strain": 53.5,
-            "total_calories_kj": 1958
+            "total_strain": 53,
+            "total_calories_kj": 2000
           },
           "strain": {
             "average_daily_strain": 9.4
@@ -245,8 +245,8 @@
           },
           "workouts": {
             "count": 4,
-            "total_strain": 35.1,
-            "total_calories_kj": 1838
+            "total_strain": 35,
+            "total_calories_kj": 1800
           },
           "strain": {
             "average_daily_strain": 8.8
@@ -290,8 +290,8 @@
           },
           "workouts": {
             "count": 7,
-            "total_strain": 63.4,
-            "total_calories_kj": 2499
+            "total_strain": 63,
+            "total_calories_kj": 2500
           },
           "strain": {
             "average_daily_strain": 10.3
@@ -336,8 +336,8 @@
           },
           "workouts": {
             "count": 7,
-            "total_strain": 61.8,
-            "total_calories_kj": 3390
+            "total_strain": 62,
+            "total_calories_kj": 3400
           },
           "strain": {
             "average_daily_strain": 10

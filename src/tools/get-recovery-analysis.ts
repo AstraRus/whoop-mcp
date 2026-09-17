@@ -22,6 +22,7 @@ import {
   createHistoryBudget,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  loadConsistentHistory,
   loadHistory,
 } from "../api/history.js";
 import {
@@ -472,11 +473,21 @@ export async function runRecoveryAnalysis(
 
   const budget = createHistoryBudget({ deadlineMs: ctx.startedAtMs + HISTORY_DEADLINE_MS });
   const options = { budget, now: (): Date => ctx.now(), cache: ctx.historyCache };
-  const [recovery, cycle, sleep] = await Promise.all([
-    loadHistory(ctx.client, ENDPOINT_RECOVERY, period, recoveryRecordSchema, options),
-    loadHistory(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, options),
-    loadHistory(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, options),
-  ]);
+  // One snapshot: a cached cycle from before a WHOOP sync is not paired with a fresh recovery.
+  const {
+    sources: [recovery, cycle, sleep],
+    warnings: historyWarnings,
+  } = await loadConsistentHistory([
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_RECOVERY, period, recoveryRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_CYCLE, period, cycleRecordSchema, { ...options, ...extra }),
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_SLEEP, period, sleepRecordSchema, { ...options, ...extra }),
+  ] as const);
   if (recovery.quality.status === "fetch_failed") {
     throw mostRelevantError(
       [recovery, cycle, sleep]
@@ -734,7 +745,7 @@ export async function runRecoveryAnalysis(
 
   // --- Notes --------------------------------------------------------------------------
   const notes: string[] = [];
-  const warnings: string[] = [];
+  const warnings: string[] = [...historyWarnings];
   const newestScored = allDays[allDays.length - 1];
   if (newestScored?.calibrating)
     notes.push(

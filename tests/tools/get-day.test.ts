@@ -764,6 +764,61 @@ describe("get_day on the live-shaped account (+02:00)", () => {
     expect(stable({ ...day, timeline: [] })).toEqual(stable({ ...plain, timeline: [] }));
   });
 
+  it("09-14: the first cycle of wear starts at local midnight, not at a sleep onset", async () => {
+    const user = liveShapedUser();
+    const day = await runDay(user, { date: "2026-09-14", include_timeline: true });
+
+    expect(day.cycle?.partial_first_day).toBe(true);
+    expect(day.timeline[0]).toEqual({
+      kind: "cycle_start",
+      start_local: "2026-09-14T00:00:00.000+02:00",
+      end_local: null,
+      label:
+        "WHOOP cycle started (first day of wear: WHOOP starts the first cycle at local midnight, not at a sleep)",
+      id: String(IDS.cycles.firstDay),
+    });
+    expect(day.timeline[0]!.label).toContain("first day of wear");
+    expect(day.notes).toContain(
+      "Energy covers the whole WHOOP cycle (from local midnight on the first day of wear to the next sleep onset), not a calendar day."
+    );
+    // Only the cycle end (the 00:39 sleep onset that opened the next cycle) is a sleep onset.
+    const onset = [
+      ...day.notes,
+      ...day.warnings,
+      ...day.timeline.filter((entry) => entry.kind !== "cycle_end").map((entry) => entry.label),
+    ].filter((text) => text.includes("sleep onset") && !text.includes("to the next sleep onset"));
+    expect(onset).toEqual([]);
+    expect(day.timeline.find((entry) => entry.kind === "cycle_end")?.label).toBe(
+      "WHOOP cycle ended (next sleep onset)"
+    );
+    assertNeutralText(textOf(day));
+  });
+
+  it("keeps the sleep-onset label when the main sleep is only not synced yet (not the first day)", async () => {
+    // Right after waking, today's cycle exists but its sleep has not synced: that is
+    // not a first day of wear, so the cycle start stays a sleep onset.
+    const user = liveShapedUser();
+    const open = user.cycles.find((cycle) => cycle.end === null || cycle.end === undefined)!;
+    const withoutSleep: WhoopUserFixture = {
+      ...user,
+      sleeps: user.sleeps.filter((sleep) => sleep.cycle_id !== open.id),
+      recoveries: user.recoveries.filter((recovery) => recovery.cycle_id !== open.id),
+    };
+    const day = await runDay(withoutSleep, { date: "today", include_timeline: true });
+    expect(day.status).toBe("in_progress");
+    expect(day.sleep).toBeNull();
+    expect(day.cycle).toMatchObject({ id: open.id, partial_first_day: false });
+    expect(day.timeline[0]).toMatchObject({
+      kind: "cycle_start",
+      label: "WHOOP cycle started (sleep onset)",
+      id: String(open.id),
+    });
+    expect(day.notes).toContain(
+      "Energy covers the whole WHOOP cycle (sleep onset to next sleep onset), not a calendar day."
+    );
+    expect(textOf(day).some((text) => text.includes("first day of wear"))).toBe(false);
+  });
+
   it("caps workouts at 25 and the timeline at 60 while totals cover every workout", async () => {
     const user = liveShapedUser();
     const extra = 60;

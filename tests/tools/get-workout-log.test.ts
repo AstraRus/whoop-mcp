@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { WhoopApiError } from "../../src/api/client.js";
 import { HISTORY_CHUNK_MS } from "../../src/api/history.js";
 import { MemoryCache } from "../../src/cache/memory-cache.js";
-import type { Cycle, ScoreState, Workout } from "../../src/api/types.js";
+import type { Cycle, Recovery, ScoreState, Sleep, Workout } from "../../src/api/types.js";
 import { localMidnightMs } from "../../src/tools/analytics-utils.js";
 import { addDays } from "../../src/tools/day-model.js";
 import {
@@ -686,5 +686,287 @@ describe("contract", () => {
   it("is absent in aggregate mode", async () => {
     expect(await listToolNames("standard")).toContain("get_workout_log");
     expect(await listToolNames("aggregate")).not.toContain("get_workout_log");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day parity with get_day: cycles are placed by their main sleep
+// ---------------------------------------------------------------------------
+
+describe("day parity with get_day and get_workout_context", () => {
+  /** A local instant in +02:00 */
+  const at = (day: string, hhmm: string): number => Date.parse(`${day}T${hhmm}:00.000+02:00`);
+
+  interface Scenario {
+    now: Date;
+    cycles: Cycle[];
+    sleeps: Sleep[];
+    recoveries: Recovery[];
+    workouts: Workout[];
+  }
+
+  function scenario(now: number): Scenario & {
+    night: (id: string, startMs: number, endMs: number, cycleEndMs: number | null) => void;
+    session: (id: string, startMs: number, endMs: number) => void;
+  } {
+    const built: Scenario = {
+      now: new Date(now),
+      cycles: [],
+      sleeps: [],
+      recoveries: [],
+      workouts: [],
+    };
+    return {
+      ...built,
+      night(id, startMs, endMs, cycleEndMs) {
+        const cycleId = 7000 + built.cycles.length;
+        built.cycles.push({
+          id: cycleId,
+          user_id: 1,
+          created_at: iso(endMs + 5 * MINUTE_MS),
+          updated_at: iso((cycleEndMs ?? endMs) + 5 * MINUTE_MS),
+          start: iso(startMs),
+          end: cycleEndMs === null ? null : iso(cycleEndMs),
+          timezone_offset: OFFSET,
+          score_state: "SCORED",
+          score: { strain: 10, kilojoule: 8000, average_heart_rate: 70, max_heart_rate: 150 },
+        });
+        const inBed = endMs - startMs;
+        const asleep = Math.round(inBed * 0.9);
+        const light = Math.round(asleep * 0.5);
+        const deep = Math.round(asleep * 0.2);
+        built.sleeps.push({
+          id,
+          cycle_id: cycleId,
+          v1_id: null,
+          user_id: 1,
+          created_at: iso(endMs + 5 * MINUTE_MS),
+          updated_at: iso(endMs + 5 * MINUTE_MS),
+          start: iso(startMs),
+          end: iso(endMs),
+          timezone_offset: OFFSET,
+          nap: false,
+          score_state: "SCORED",
+          score: {
+            stage_summary: {
+              total_in_bed_time_milli: inBed,
+              total_awake_time_milli: inBed - asleep,
+              total_no_data_time_milli: 0,
+              total_light_sleep_time_milli: light,
+              total_slow_wave_sleep_time_milli: deep,
+              total_rem_sleep_time_milli: asleep - light - deep,
+              sleep_cycle_count: 4,
+              disturbance_count: 8,
+            },
+            sleep_needed: {
+              baseline_milli: 28_000_000,
+              need_from_sleep_debt_milli: 1_000_000,
+              need_from_recent_strain_milli: 500_000,
+              need_from_recent_nap_milli: 0,
+            },
+            respiratory_rate: 15,
+            sleep_performance_percentage: 80,
+            sleep_consistency_percentage: 70,
+            sleep_efficiency_percentage: 90,
+          },
+        });
+        built.recoveries.push({
+          cycle_id: cycleId,
+          sleep_id: id,
+          user_id: 1,
+          created_at: iso(endMs + 10 * MINUTE_MS),
+          updated_at: iso(endMs + 10 * MINUTE_MS),
+          score_state: "SCORED",
+          score: {
+            user_calibrating: true,
+            recovery_score: 60,
+            resting_heart_rate: 55,
+            hrv_rmssd_milli: 80,
+            spo2_percentage: 96,
+            skin_temp_celsius: 33.4,
+          },
+        });
+      },
+      session(id, startMs, endMs) {
+        const minutes = (endMs - startMs) / MINUTE_MS;
+        const workout = workoutOf({ day: "2026-09-01", minute: 0, minutes, km: 8 }, id);
+        built.workouts.push({
+          ...workout,
+          start: iso(startMs),
+          end: iso(endMs),
+          created_at: iso(endMs + MINUTE_MS),
+          updated_at: iso(endMs + MINUTE_MS),
+        });
+      },
+    };
+  }
+
+  /** A: main sleeps 12:30-19:30 every day; now 23:30 on 09-17 */
+  function daySleeper(): Scenario {
+    const built = scenario(at("2026-09-17", "23:30"));
+    const days = [
+      "2026-09-12",
+      "2026-09-13",
+      "2026-09-14",
+      "2026-09-15",
+      "2026-09-16",
+      "2026-09-17",
+    ];
+    days.forEach((day, index) =>
+      built.night(
+        `s-${day}`,
+        at(day, "12:30"),
+        at(day, "19:30"),
+        index + 1 < days.length ? at(days[index + 1]!, "12:30") : null
+      )
+    );
+    built.session("w-0915-2200", at("2026-09-15", "22:00"), at("2026-09-15", "23:00"));
+    built.session("w-0917-2100", at("2026-09-17", "21:00"), at("2026-09-17", "22:00"));
+    return built;
+  }
+
+  /** B: owner-like nights, awake through 09-16/17, main sleep 09-17 13:00-20:00; now 23:00 */
+  function disruptedNight(): Scenario {
+    const built = scenario(at("2026-09-17", "23:00"));
+    built.night(
+      "s-a",
+      at("2026-09-13", "23:13"),
+      at("2026-09-14", "07:00"),
+      at("2026-09-14", "23:13")
+    );
+    built.night(
+      "s-b",
+      at("2026-09-14", "23:13"),
+      at("2026-09-15", "07:00"),
+      at("2026-09-15", "23:13")
+    );
+    built.night(
+      "s-c",
+      at("2026-09-15", "23:13"),
+      at("2026-09-16", "07:00"),
+      at("2026-09-17", "13:00")
+    );
+    built.night("s-d", at("2026-09-17", "13:00"), at("2026-09-17", "20:00"), null);
+    built.session("w-0916-1800", at("2026-09-16", "18:00"), at("2026-09-16", "19:00"));
+    built.session("w-0917-2115", at("2026-09-17", "21:15"), at("2026-09-17", "22:00"));
+    return built;
+  }
+
+  /** C (control): bed 23:13 / 00:39, evening sessions; now 23:00 on 09-17, not asleep yet */
+  function control(): Scenario {
+    const built = scenario(at("2026-09-17", "23:00"));
+    built.night(
+      "s-a",
+      at("2026-09-14", "23:13"),
+      at("2026-09-15", "07:10"),
+      at("2026-09-16", "00:39")
+    );
+    built.night(
+      "s-b",
+      at("2026-09-16", "00:39"),
+      at("2026-09-16", "07:30"),
+      at("2026-09-16", "23:13")
+    );
+    built.night("s-c", at("2026-09-16", "23:13"), at("2026-09-17", "07:05"), null);
+    built.session("w-0916-2130", at("2026-09-16", "21:30"), at("2026-09-16", "22:15"));
+    built.session("w-0917-2100", at("2026-09-17", "21:00"), at("2026-09-17", "21:50"));
+    return built;
+  }
+
+  interface DayOutput {
+    workouts: { id: string; day: string }[];
+  }
+
+  async function checkParity(
+    data: Scenario,
+    expected: Record<string, string>,
+    extra: Pick<WhoopFixtureClientOptions, "failures"> = {}
+  ): Promise<{ log: WorkoutLogOutput; records: Record<string, unknown> }> {
+    const fixture = createWhoopFixtureClient({ ...data, now: () => data.now, ...extra });
+    const connection = await connectServer(fixture, { now: () => data.now });
+    try {
+      const logResult = await connection.callTool("get_workout_log", {});
+      expect(logResult.isError).toBe(false);
+      const log = workoutLogOutputSchema.parse(logResult.structured);
+      assertNeutralText([log.notes, log.warnings]);
+      expect(Object.fromEntries(log.workouts.map((workout) => [workout.id, workout.day]))).toEqual(
+        expected
+      );
+      expect(log.data_quality.sources.workouts!.exclusions.outside_window ?? 0).toBe(0);
+
+      const records = (await connection.callTool("get_personal_records", {})).structured!;
+      const sports = records.sports as {
+        sport_name: string;
+        sessions_considered: number;
+        records: { workout_id: string; date: string }[];
+      }[];
+      const running = sports.find((sport) => sport.sport_name === "running")!;
+      expect(running.sessions_considered).toBe(Object.keys(expected).length);
+      for (const record of running.records) {
+        expect(record.date).toBe(expected[record.workout_id]);
+      }
+
+      if (extra.failures === undefined) {
+        for (const [id, day] of Object.entries(expected)) {
+          const context = (await connection.callTool("get_workout_context", { id })).structured as {
+            day: { date: string };
+            notes: string[];
+          };
+          expect(context.day.date).toBe(day);
+          const dayResult = (await connection.callTool("get_day", { date: day }))
+            .structured as unknown as DayOutput;
+          expect(dayResult.workouts.map((workout) => [workout.id, workout.day])).toContainEqual([
+            id,
+            day,
+          ]);
+        }
+      }
+      return { log, records };
+    } finally {
+      await connection.close();
+    }
+  }
+
+  it("A: a day sleeper's sessions are on get_day's days, and today's session is listed", async () => {
+    const { log } = await checkParity(daySleeper(), {
+      "w-0917-2100": "2026-09-17",
+      "w-0915-2200": "2026-09-15",
+    });
+    expect(log.period.end_day).toBe("2026-09-17");
+    expect(log.warnings).toEqual([]);
+    expect(log.data_quality.sources.sleeps!.status).toBe("available");
+  });
+
+  it("B: a disrupted night places the long cycle and today's afternoon cycle as get_day does", async () => {
+    await checkParity(disruptedNight(), {
+      "w-0917-2115": "2026-09-17",
+      "w-0916-1800": "2026-09-16",
+    });
+  });
+
+  it("C: an owner-like account keeps its days (control)", async () => {
+    await checkParity(control(), {
+      "w-0917-2100": "2026-09-17",
+      "w-0916-2130": "2026-09-16",
+    });
+  });
+
+  it("warns when sleeps cannot be read and still lists today's session on today", async () => {
+    const { log, records } = await checkParity(
+      daySleeper(),
+      // Without sleeps the 09-15 session falls back to the cycle-start estimate (the warning's case).
+      { "w-0917-2100": "2026-09-17", "w-0915-2200": "2026-09-16" },
+      { failures: [{ path: /^\/v2\/activity\/sleep/, error: new WhoopApiError(503, "x", {}) }] }
+    );
+    expect(log.warnings).toContain(
+      "Sleep data could not be loaded (WHOOP API returned HTTP 503), so sessions after a daytime main sleep may be dated one day later than get_day shows."
+    );
+    expect(log.notes).toContain(
+      "1 session in the WHOOP cycle still open would be dated after today because that cycle's main sleep was not loaded, so it counts toward today (2026-09-17)."
+    );
+    expect(log.workouts[0]!.flags).not.toContain("after_midnight_in_previous_cycle");
+    expect(records.warnings as string[]).toContain(
+      "Sleep data could not be loaded (WHOOP API returned HTTP 503), so sessions after a daytime main sleep may be dated one day later than get_day shows."
+    );
   });
 });

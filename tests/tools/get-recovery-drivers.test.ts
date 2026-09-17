@@ -1480,3 +1480,106 @@ describe("registration", { timeout: TEST_TIMEOUT_MS }, () => {
     assertNeutralText(report);
   });
 });
+
+describe("sleep need inputs and workout-only behaviours", { timeout: TEST_TIMEOUT_MS }, () => {
+  const SLEEP_NEED_NOTE =
+    "WHOOP measures sleep performance against its sleep need, which rises after a higher day strain and falls after a nap, so associations of day strain and naps with sleep performance are partly by construction (partly_by_construction).";
+
+  function flagOf(report: RecoveryDriversReport, behaviour: string, outcome: string): boolean {
+    const finding = findingOf(report, behaviour, outcome);
+    expect(finding, `${behaviour} x ${outcome} tested`).toBeDefined();
+    return finding!.partly_by_construction;
+  }
+
+  it("flags day strain and naps with sleep performance as partly by construction", async () => {
+    const random = createLcg(hashSeed("p9-need-inputs"));
+    // Naps on every third day, so both nap groups are large enough to test.
+    const plans = Array.from({ length: 91 }, (_, index) =>
+      noiseNight(random, index % 3 === 0 ? { nap: "SCORED" } : {})
+    );
+    const user = buildUser(plans);
+    const report = await runDrivers(user, {
+      outcomes: ["hrv", "sleep_performance", "asleep_hours"],
+    });
+    expect(report.status).toBe("available");
+    expect(flagOf(report, "prior_day_strain", "sleep_performance")).toBe(true);
+    expect(flagOf(report, "nap_before", "sleep_performance")).toBe(true);
+    expect(flagOf(report, "prior_day_strain", "hrv")).toBe(false);
+    expect(flagOf(report, "nap_before", "hrv")).toBe(false);
+    expect(flagOf(report, "prior_day_strain", "asleep_hours")).toBe(false);
+    expect(flagOf(report, "bedtime_min", "sleep_performance")).toBe(false);
+    expect(report.notes).toContain(SLEEP_NEED_NOTE);
+    assertNeutralText(report);
+
+    // Without sleep performance among the outcomes the note is not added.
+    const recoveryOnly = await runDrivers(user, { outcomes: ["hrv"] });
+    expect(recoveryOnly.notes).not.toContain(SLEEP_NEED_NOTE);
+  });
+
+  it("does not add the sleep need note when a required source failed", async () => {
+    const user = plantedUser(6);
+    const client = clientFor(user, {
+      failures: [{ path: /\/v2\/cycle/, error: new WhoopApiError(500, "Server Error", {}) }],
+    });
+    const report = await runDrivers(user, { outcomes: ["sleep_performance"] }, { client });
+    expect(report.status).toBe("unavailable");
+    expect(report.notes).not.toContain(SLEEP_NEED_NOTE);
+  });
+
+  it("reports last_workout_to_bed_min as too_few_pairs, not data_unavailable, when no workout was recorded", async () => {
+    const random = createLcg(hashSeed("p9-no-workouts"));
+    const user = buildUser(Array.from({ length: 91 }, () => noiseNight(random, { workouts: [] })));
+    expect(user.workouts).toEqual([]);
+    const report = await runDrivers(user);
+    expect(report.status).toBe("available");
+    expect(report.pairs_analyzed).toBe(90);
+    for (const outcome of ["recovery", "hrv", "rhr"]) {
+      expect(notTestedOf(report, "last_workout_to_bed_min", outcome)).toEqual({
+        behaviour: "last_workout_to_bed_min",
+        outcome,
+        reason: "too_few_pairs",
+        n: 0,
+      });
+    }
+    expect(report.not_tested_summary.data_unavailable).toBe(0);
+    expect(report.warnings).toEqual([]);
+    expect(report.notes).toContain(
+      "last_workout_to_bed_min exists only on days with a WHOOP workout; 0 of 90 analysed nights followed one."
+    );
+    assertNeutralText(report);
+  });
+
+  it("keeps last_workout_to_bed_min data_unavailable when the workout history is incomplete", async () => {
+    const random = createLcg(hashSeed("p9-truncated-workouts"));
+    // Three workouts a day: the newest 30-day chunk needs a second page, which fails.
+    const plans = Array.from({ length: 91 }, () =>
+      noiseNight(random, {
+        workouts: [
+          { startLocalMin: 8 * 60, durationMin: 30 },
+          { startLocalMin: 12 * 60, durationMin: 30 },
+          { startLocalMin: 16 * 60, durationMin: 30 },
+        ],
+      })
+    );
+    const user = buildUser(plans);
+    const client = clientFor(user, {
+      failures: [
+        {
+          path: /\/v2\/activity\/workout/,
+          page: 2,
+          error: new WhoopApiError(500, "Server Error", {}),
+        },
+      ],
+    });
+    const report = await runDrivers(user, {}, { client });
+    expect(report.status).toBe("available");
+    expect(report.data_quality.sources.workout!.truncated).toBe(true);
+    expect(report.data_quality.sources.workout!.status).not.toBe("fetch_failed");
+    for (const behaviour of ["last_workout_to_bed_min", "prior_day_workout_minutes"]) {
+      for (const outcome of ["recovery", "hrv", "rhr"]) {
+        expect(notTestedOf(report, behaviour, outcome)?.reason).toBe("data_unavailable");
+      }
+    }
+    expect(report.notes.join(" ")).not.toContain("last_workout_to_bed_min exists only");
+  });
+});

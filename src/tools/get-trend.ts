@@ -75,6 +75,7 @@ import {
   isLocalMidnight,
   isOpenCycle,
   mondayOf,
+  openCycleStrainNote,
   placeDays,
   type DayPlacement,
   type WorkoutPlacement,
@@ -88,7 +89,7 @@ import {
 import {
   mean,
   median,
-  standardDeviation,
+  sampleStandardDeviation,
   linearRegressionXY,
   trendDirection,
   detectAnomalies,
@@ -633,24 +634,63 @@ function sleepMetricLoader(metric: TrendMetric): MetricDefinition["load"] {
   };
 }
 
+/**
+ * Daily strain: the completed, scored cycle of each local day in the window.
+ * Days come from the day model (as get_calendar places cycles, using the
+ * window's sleeps), the open cycle is left out and named in a note, and so is
+ * a day WHOOP covered only in part (the strap was put on that day).
+ */
 async function loadStrain(client: WhoopClient, window: TrendWindow): Promise<LoadedObservations> {
   const page = await fetchWindow(client, ENDPOINT_CYCLE, window);
   const quality = sourceQuality(page.records.length, page.truncated);
-  const cycles = parseRecords(page.records, cycleRecordSchema, quality).filter((cycle) =>
-    inWindow(cycleDay(cycle), window)
-  );
+  const allCycles = parseRecords(page.records, cycleRecordSchema, quality);
   const notes = invalidNote(quality.exclusions.invalid ?? 0, "cycle");
-  if (cycles.some((cycle) => cycle.end == null)) {
-    notes.push("Today's strain is still accumulating and is not included.");
+
+  let sleeps: Sleep[] = [];
+  let sleepsAvailable = true;
+  try {
+    const sleepPage = await fetchWindow(client, ENDPOINT_SLEEP, window);
+    sleeps = parseRecords(sleepPage.records, sleepRecordSchema, sourceQuality());
+  } catch {
+    sleepsAvailable = false;
   }
-  const observations = cycles
-    .filter((cycle) => cycle.end != null && cycle.score_state === "SCORED" && cycle.score)
-    .map((cycle) => ({
-      day: cycleDay(cycle),
+  const placement = placeDays({
+    cycles: allCycles,
+    sleeps,
+    recoveries: [],
+    sleepsAvailable,
+    today: window.lastDay,
+    utcOffset: window.offset,
+  });
+
+  const openDays: string[] = [];
+  let partialDays = 0;
+  const observations: Observation[] = [];
+  for (const cycle of allCycles) {
+    const day = placement.dayOfCycle.get(cycle.id) ?? cycleDay(cycle);
+    if (!inWindow(day, window)) continue;
+    if (isOpenCycle(cycle)) {
+      openDays.push(day);
+      continue;
+    }
+    if (cycle.score_state !== "SCORED" || !cycle.score) continue;
+    if (isPartialDay(placement, day, cycle)) {
+      partialDays += 1;
+      continue;
+    }
+    observations.push({
+      day,
       anchor: Date.parse(cycle.start),
-      value: cycle.score!.strain,
+      value: cycle.score.strain,
       calibrating: false,
-    }));
+    });
+  }
+  notes.push(...openCycleStrainNote(openDays, window.lastDay));
+  if (partialDays > 0) {
+    notes.push(
+      `${plural(partialDays, ["day", "days"])} WHOOP covered only in part (the strap was put on that day) ${partialDays === 1 ? "is" : "are"} left out of strain.`
+    );
+  }
   return { observations, skipped: 0, truncated: page.truncated, notes };
 }
 
@@ -902,7 +942,7 @@ export async function getTrend(
     ? {
         mean: mean(values),
         median: median(values),
-        std_dev: sampleSize >= 2 ? standardDeviation(values) : null,
+        std_dev: sampleStandardDeviation(values),
         min: Math.min(...values),
         max: Math.max(...values),
       }
@@ -1632,7 +1672,7 @@ async function aggregateTrend(
     statistics = {
       mean: roundStep(mean(values), step),
       median: null,
-      std_dev: roundStep(standardDeviation(values), step),
+      std_dev: roundStep(sampleStandardDeviation(values)!, step),
       min: null,
       max: null,
     };

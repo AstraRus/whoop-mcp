@@ -72,7 +72,8 @@
                   "type": "number"
                 },
                 "std_dev": {
-                  "type": "number"
+                  "type": "number",
+                  "description": "Sample standard deviation (n-1)"
                 },
                 "p25": {
                   "type": "number"

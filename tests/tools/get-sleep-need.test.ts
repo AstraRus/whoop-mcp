@@ -12,13 +12,14 @@
  * requests on stressUser; neutral wording and the MCP contract.
  */
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { WhoopApiError, type WhoopClient } from "../../src/api/client.js";
 import { DEFAULT_PAGE_BUDGET } from "../../src/api/history.js";
 import { MemoryCache } from "../../src/cache/memory-cache.js";
 import type { Cycle, Recovery, ScoreState, Sleep } from "../../src/api/types.js";
 import { addDays } from "../../src/tools/day-model.js";
+import { getSyncStatus } from "../../src/tools/get-sync-status.js";
 import {
   buildSleepNeedPairs,
   DEBT_MODEL_MIN_PAIRS,
@@ -785,4 +786,82 @@ describe("failures, size and contract", () => {
     },
     HEAVY_TEST_TIMEOUT_MS
   );
+});
+
+describe("history read around a WHOOP sync", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const BEFORE_SYNC = "2026-09-17T07:28:00+02:00";
+  const AFTER_SYNC = "2026-09-17T07:29:30+02:00";
+  const NEW_SLEEP_ID = "6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4b03";
+
+  /** WHOOP processes the night 23:40-07:10 local: cycle 81003 closes and 81004 opens with its sleep and recovery. */
+  function applySync(user: WhoopUserFixture): void {
+    const closed = user.cycles.find((cycle) => cycle.id === 81003)!;
+    closed.end = "2026-09-16T21:40:00.000Z";
+    closed.updated_at = "2026-09-17T05:29:00.000Z";
+    user.cycles.unshift({
+      ...structuredClone(closed),
+      id: 81004,
+      start: "2026-09-16T21:40:00.000Z",
+      end: null,
+      created_at: "2026-09-17T05:29:00.000Z",
+      updated_at: "2026-09-17T05:29:00.000Z",
+    });
+    const sleep: Sleep = {
+      ...structuredClone(user.sleeps[0]!),
+      id: NEW_SLEEP_ID,
+      cycle_id: 81004,
+      start: "2026-09-16T21:40:00.000Z",
+      end: "2026-09-17T05:10:00.000Z",
+      created_at: "2026-09-17T05:29:05.000Z",
+      updated_at: "2026-09-17T05:29:05.000Z",
+    };
+    user.sleeps.unshift(sleep);
+    user.recoveries.unshift({
+      ...structuredClone(user.recoveries[0]!),
+      cycle_id: 81004,
+      sleep_id: NEW_SLEEP_ID,
+      created_at: "2026-09-17T05:29:05.000Z",
+      updated_at: "2026-09-17T05:29:05.000Z",
+    });
+  }
+
+  async function afterSync(shared: boolean): Promise<SleepNeedReport> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(BEFORE_SYNC));
+    const user = liveShapedUser({ now: BEFORE_SYNC });
+    const client = clientFor(user, { now: () => new Date() });
+    const cache = new MemoryCache();
+    const context = (at: string): ToolContext => ({
+      client,
+      privacyMode: "standard",
+      now: () => new Date(at),
+      startedAtMs: Date.now(),
+      ...(shared ? { historyCache: cache } : {}),
+    });
+    // get_sync_status before the sync caches the open cycle chunk (cycle 81003 still open).
+    await getSyncStatus(context(BEFORE_SYNC));
+    applySync(user);
+    vi.setSystemTime(new Date(AFTER_SYNC));
+    const report = await runSleepNeed({}, context(AFTER_SYNC));
+    sleepNeedOutputSchema.parse(report);
+    assertNeutralText([report.notes, report.warnings]);
+    return report;
+  }
+
+  it("does not pair a cycle cached before the sync with the sleep and recovery read after it", async () => {
+    const fresh = await afterSync(false);
+    const shared = await afterSync(true);
+    expect(fresh.history.pairs).toBe(2);
+    expect(shared.history.pairs).toBe(2);
+    expect(shared.last_night?.date).toBe("2026-09-17");
+    expect(shared.notes.join(" ")).not.toContain("has not processed a newer one");
+    expect(shared.warnings).toEqual([]);
+    expect(shared.last_night).toEqual(fresh.last_night);
+    expect(shared.today_so_far).toEqual(fresh.today_so_far);
+    expect(shared.notes).toEqual(fresh.notes);
+  });
 });

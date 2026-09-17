@@ -1,7 +1,7 @@
 /**
  * Tests for stats-utils.ts — statistical functions for analytical tools.
  *
- * Covers: isConstant, mean, median, standardDeviation, linearRegression,
+ * Covers: isConstant, mean, median, linearRegression,
  * detectAnomalies, trendDirection. Edge cases: empty arrays,
  * single values, constant data, monotonic sequences.
  */
@@ -11,7 +11,6 @@ import {
   isConstant,
   mean,
   median,
-  standardDeviation,
   linearRegression,
   linearRegressionXY,
   MIN_TREND_POINTS,
@@ -113,38 +112,6 @@ describe("median", () => {
 
   it("throws for empty array", () => {
     expect(() => median([])).toThrow(/empty/i);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// standardDeviation
-// ---------------------------------------------------------------------------
-
-describe("standardDeviation", () => {
-  it("computes population standard deviation", () => {
-    // [2, 4, 4, 4, 5, 5, 7, 9] → mean=5, pop stddev=2
-    expect(standardDeviation([2, 4, 4, 4, 5, 5, 7, 9])).toBe(2);
-  });
-
-  it("returns exactly 0 for identical decimal values", () => {
-    expect(standardDeviation(Array(21).fill(70.1))).toBe(0);
-  });
-
-  it("returns 0 for constant values", () => {
-    expect(standardDeviation([5, 5, 5, 5])).toBe(0);
-  });
-
-  it("returns 0 for a single value", () => {
-    expect(standardDeviation([42])).toBe(0);
-  });
-
-  it("handles two values", () => {
-    // [0, 10] → mean=5, variance=25, stddev=5
-    expect(standardDeviation([0, 10])).toBe(5);
-  });
-
-  it("throws for empty array", () => {
-    expect(() => standardDeviation([])).toThrow(/empty/i);
   });
 });
 
@@ -279,14 +246,24 @@ describe("detectAnomalies", () => {
   });
 
   it("returns correct index, value, and deviation", () => {
-    // Mean=2, stddev=4, value 100 is clearly >2σ
+    // Mean 50/3, sample SD sqrt(5000/3) ≈ 40.82: 100 lies 2.04 SD above the mean
     const values = [0, 0, 0, 0, 0, 100];
     const anomalies = detectAnomalies(values);
 
-    const anomaly = anomalies.find((a) => a.value === 100);
-    expect(anomaly).toBeDefined();
-    expect(anomaly!.index).toBe(5);
-    expect(anomaly!.deviation).toBeGreaterThan(0);
+    expect(anomalies).toHaveLength(1);
+    const anomaly = anomalies[0]!;
+    expect(anomaly.index).toBe(5);
+    expect(anomaly.value).toBe(100);
+    expect(anomaly.deviation).toBeCloseTo((100 - 50 / 3) / Math.sqrt(5000 / 3), 12);
+  });
+
+  it("measures deviations in sample standard deviations (the std_dev tools report)", () => {
+    // Population SD of [0, 0, 0, 0, 10] is 4 (10 lies 2.0 SD above the mean 2);
+    // the sample SD is sqrt(20) ≈ 4.47, so 10 lies only 1.79 SD above it.
+    const values = [0, 0, 0, 0, 10];
+    expect(detectAnomalies(values, 1.9)).toEqual([]);
+    const [anomaly] = detectAnomalies(values, 1.5);
+    expect(anomaly!.deviation).toBeCloseTo(8 / sampleStandardDeviation(values)!, 12);
   });
 
   it("returns empty array for single value", () => {

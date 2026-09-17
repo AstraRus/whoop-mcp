@@ -45,7 +45,14 @@ import {
   type TrendMetric,
 } from "./get-trend.js";
 import { LOW_DATA_COVERAGE_FRACTION, stageBreakdown } from "./sleep-metrics.js";
-import { mean, median, percentile, percentileRank, standardDeviation } from "./stats-utils.js";
+import {
+  isConstant,
+  mean,
+  median,
+  percentile,
+  percentileRank,
+  sampleStandardDeviation,
+} from "./stats-utils.js";
 
 /** Earlier observations (besides the most recent one and today) a baseline needs. */
 export const BASELINE_MIN_SAMPLES = 14;
@@ -92,7 +99,7 @@ const bandSchema = z.object({
   sample_size: z.number().int(),
   mean: z.number(),
   median: z.number(),
-  std_dev: z.number(),
+  std_dev: z.number().describe("Sample standard deviation (n-1)"),
   p10: z.number(),
   p25: z.number(),
   p50: z.number(),
@@ -563,7 +570,7 @@ export async function getBaselines(
             sample_size: values.length,
             mean: mean(values),
             median: median(values),
-            std_dev: standardDeviation(values),
+            std_dev: sampleStandardDeviation(values)!,
             p10: percentile(values, 10),
             p25: percentile(values, 25),
             p50: percentile(values, 50),
@@ -571,7 +578,7 @@ export async function getBaselines(
             p90: percentile(values, 90),
             latest: latest?.value ?? null,
             latest_percentile: latest ? percentileRank(values, latest.value) : null,
-            constant_baseline: standardDeviation(values) === 0,
+            constant_baseline: isConstant(values),
           };
   }
   finishQuality(recovery.quality, usedRecoveries);
@@ -722,11 +729,11 @@ async function aggregateBaselines(
             sample_size: count,
             mean: round(mean(values)),
             median: round(median(values)),
-            std_dev: round(standardDeviation(values)),
+            std_dev: round(sampleStandardDeviation(values)!),
             p25: round(percentile(values, 25)),
             p50: round(percentile(values, 50)),
             p75: round(percentile(values, 75)),
-            constant_baseline: standardDeviation(values) === 0,
+            constant_baseline: isConstant(values),
           };
   }
 

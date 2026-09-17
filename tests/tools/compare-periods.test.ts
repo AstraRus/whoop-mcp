@@ -807,6 +807,44 @@ describe("comparePeriods — comparison math", () => {
     period_b_end: "2026-09-20",
   };
 
+  it("leaves a partial first day of wear out of strain, so 3 worn days can be too few", async () => {
+    const history = buildHistory(
+      dayRange("2026-09-14", "2026-09-19").map((day) => ({ day, strain: 10 })),
+      false
+    );
+    // The strap was put on 2026-09-14: the first cycle starts at local midnight, before any sleep.
+    const first = history.cycles.find((cycle) => cycle.id === 20260914)!;
+    first.start = "2026-09-13T22:00:00.000Z";
+    first.score!.strain = 4;
+    history.sleeps = history.sleeps.filter((sleep) => sleep.cycle_id !== first.id);
+    history.recoveries = history.recoveries.filter((recovery) => recovery.cycle_id !== first.id);
+    const { client } = fakeWhoop(history);
+
+    const result = await comparePeriods(
+      client,
+      {
+        period_a_start: "2026-09-14",
+        period_a_end: "2026-09-16",
+        period_b_start: "2026-09-17",
+        period_b_end: "2026-09-19",
+      },
+      new Date("2026-09-20T12:00:00.000Z")
+    );
+
+    expect(result.strain).toMatchObject({
+      period_a_avg: 10,
+      period_a_n: 2,
+      period_b_n: 3,
+      change_pct: null,
+      direction: "insufficient_data",
+    });
+    expect(result.notes).toContain(
+      "Period A: 1 day WHOOP covered only in part (the strap was put on that day) is left out of strain."
+    );
+    // Training still counts the partial day as worn, as get_training_load does.
+    expect(result.training?.period_a.worn_days).toBe(3);
+  });
+
   it("computes percentage change and 'improved' with enough samples", async () => {
     const { client } = fakeWhoop(twoPeriods({ recovery: 60 }, { recovery: 80 }));
 
@@ -1618,6 +1656,27 @@ describe("compare_periods on the shared fixture users", () => {
       period_b: { sessions: 8, worn_days: 3 },
       direction: "insufficient_data",
     });
+    assertNeutralText(result.structured);
+  });
+
+  it("leaves the live-shaped user's partial first day out of strain", async () => {
+    const result = await call(liveShapedUser(), "standard", {
+      period_a_start: "2026-09-14",
+      period_a_end: "2026-09-15",
+      period_b_start: "2026-09-16",
+      period_b_end: "2026-09-17",
+    });
+    expect(result.isError, result.text).toBe(false);
+    // 09-14 is partial and 09-16 is still open: only 09-15's strain counts.
+    expect(result.structured?.strain).toMatchObject({
+      period_a_avg: 15.9,
+      period_a_n: 1,
+      period_b_n: 0,
+      direction: "insufficient_data",
+    });
+    expect(result.structured?.notes).toContain(
+      "Period A: 1 day WHOOP covered only in part (the strap was put on that day) is left out of strain."
+    );
     assertNeutralText(result.structured);
   });
 

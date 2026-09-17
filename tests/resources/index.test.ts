@@ -787,15 +787,19 @@ describe("latest workout resource", () => {
 
   function workoutClient(
     workouts: unknown[],
-    cycles: unknown = pageOf(LIVE_OPEN_CYCLE)
+    cycles: unknown = pageOf(LIVE_OPEN_CYCLE),
+    sleeps: unknown = pageOf(...LIVE.sleeps),
+    extra: Pages = {}
   ): WhoopClient {
     return linkedClient({
       [WORKOUT_LIST_PATH]: pageOf(...workouts),
       [CYCLE_PATH]: cycles,
+      [SLEEP_PATH]: sleeps,
+      ...extra,
     });
   }
 
-  it("reads get_today's workout list key and the cycle resource's key, both with the cycle TTL", async () => {
+  it("reads get_today's workout list key and the cycle and sleep resources' keys, all with the cycle TTL", async () => {
     pinNow();
     const client = workoutClient([eveningRun]);
     await workoutDef.fetch(client);
@@ -807,6 +811,158 @@ describe("latest workout resource", () => {
       ttlMs: CYCLE_TTL_MS,
     });
     expect(client.get).toHaveBeenCalledWith(CYCLE_PATH, { cache: true, ttlMs: CYCLE_TTL_MS });
+    expect(client.get).toHaveBeenCalledWith(SLEEP_PATH, { cache: true, ttlMs: CYCLE_TTL_MS });
+    // The open cycle's main sleep is in the sleep page: no request by cycle id.
+    expect(client.get).toHaveBeenCalledTimes(3);
+  });
+
+  describe("day of a day sleeper (main sleep 13:00-20:00 local, workout 21:00-21:45)", () => {
+    const OFFSET = "+02:00";
+    const DAY_CYCLES = [
+      ["2026-09-14T11:00:00.000Z", "2026-09-14T18:00:00.000Z"],
+      ["2026-09-15T11:00:00.000Z", "2026-09-15T18:00:00.000Z"],
+      ["2026-09-16T11:00:00.000Z", "2026-09-16T18:00:00.000Z"],
+    ] as const;
+    const template = LIVE.sleeps[0]!;
+    const cycles = DAY_CYCLES.map(([onset, wake], index) => ({
+      ...LIVE_OPEN_CYCLE,
+      id: 91_001 + index,
+      created_at: wake,
+      updated_at: wake,
+      start: onset,
+      end: index < DAY_CYCLES.length - 1 ? DAY_CYCLES[index + 1]![0] : null,
+      timezone_offset: OFFSET,
+    }));
+    const sleeps = DAY_CYCLES.map(([onset, wake], index) => {
+      const inBed = Date.parse(wake) - Date.parse(onset);
+      const stages = template.score!.stage_summary;
+      return {
+        ...template,
+        id: `6f1d2c3b-4a59-4e68-9b7c-0d1e2f3a4c0${index}`,
+        cycle_id: 91_001 + index,
+        created_at: wake,
+        updated_at: wake,
+        start: onset,
+        end: wake,
+        timezone_offset: OFFSET,
+        nap: false,
+        score: {
+          ...template.score!,
+          stage_summary: {
+            ...stages,
+            total_in_bed_time_milli: inBed,
+            total_rem_sleep_time_milli:
+              inBed -
+              stages.total_awake_time_milli -
+              stages.total_no_data_time_milli -
+              stages.total_light_sleep_time_milli -
+              stages.total_slow_wave_sleep_time_milli,
+          },
+        },
+      };
+    });
+    const openCycle = cycles[cycles.length - 1]!;
+    const openSleep = sleeps[sleeps.length - 1]!;
+    const recoveries = LIVE.recoveries.slice(0, 1).map((recovery) => ({
+      ...recovery,
+      cycle_id: openCycle.id,
+      sleep_id: openSleep.id,
+      created_at: openSleep.end,
+      updated_at: openSleep.end,
+    }));
+    const run: Workout = {
+      ...eveningRun,
+      id: "b3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c99",
+      start: "2026-09-16T19:00:00.000Z",
+      end: "2026-09-16T19:45:00.000Z",
+      created_at: "2026-09-16T19:45:00.000Z",
+      updated_at: "2026-09-16T19:45:00.000Z",
+      timezone_offset: OFFSET,
+    };
+    const NOW = "2026-09-16T20:00:00.000Z"; // 22:00 local
+    const CYCLE_SLEEP_PATH = `/v2/cycle/${openCycle.id}/sleep`;
+
+    it("dates the workout by the cycle's main sleep, as get_day and get_workout_context do", async () => {
+      pinNow(NOW);
+      const fixture = createWhoopFixtureClient({
+        cycles: cycles as never,
+        sleeps: sleeps as never,
+        recoveries,
+        workouts: [run],
+      });
+      const connection = await connectServer(fixture, { now: () => new Date(NOW) });
+      try {
+        const read = await connection.readResource("whoop://v2/user/workout/latest");
+        const resource = JSON.parse((read.contents[0] as { text: string }).text) as Summary;
+        const context = await connection.callTool("get_workout_context", { id: run.id });
+        const day = await connection.callTool("get_day", { date: "2026-09-16" });
+        const dayOut = day.structured as { workouts: { id: string; day: string }[] };
+        const contextOut = context.structured as { day: { date: string } };
+
+        expect(resource).toMatchObject({ id: run.id, day: "2026-09-16" });
+        expect(resource.notes).toBeUndefined();
+        expect(contextOut.day.date).toBe("2026-09-16");
+        expect(dayOut.workouts.map((workout) => [workout.id, workout.day])).toEqual([
+          [run.id, "2026-09-16"],
+        ]);
+      } finally {
+        await connection.close();
+      }
+    });
+
+    it("reads the cycle's sleep by id when it is not in the sleep page", async () => {
+      pinNow(NOW);
+      const client = workoutClient([run], pageOf(openCycle), pageOf(sleeps[0]), {
+        [CYCLE_SLEEP_PATH]: openSleep,
+      });
+      const result = (await workoutDef.fetch(client)) as Summary;
+
+      expect(result).toMatchObject({ day: "2026-09-16" });
+      expect(result.notes).toBeUndefined();
+      expect(client.get).toHaveBeenCalledWith(CYCLE_SLEEP_PATH, {
+        cache: true,
+        ttlMs: CYCLE_TTL_MS,
+      });
+    });
+
+    it("never dates a finished workout after today when the cycle has no main sleep (404)", async () => {
+      pinNow(NOW);
+      const client = workoutClient([run], pageOf(openCycle), pageOf(), {
+        [CYCLE_SLEEP_PATH]: new WhoopApiError(404, "Not Found", {}),
+      });
+      const result = (await workoutDef.fetch(client)) as Summary;
+
+      // The cycle start estimate (13:00 + 12 h) would be 2026-09-17.
+      expect(result).toMatchObject({ day: "2026-09-16", local_date: "2026-09-16" });
+      expect(result.flags).not.toContain("after_midnight_in_previous_cycle");
+      expect(result.notes).toEqual([
+        "The current WHOOP cycle has no main sleep record, and its start would place this workout after today, so day is today.",
+      ]);
+    });
+
+    it("keeps the cycle-start estimate with a note when sleep data cannot be read", async () => {
+      pinNow(NOW);
+      const client = workoutClient([run], pageOf(openCycle), new WhoopApiError(503, "x", {}));
+      const result = (await workoutDef.fetch(client)) as Summary;
+
+      expect(result).toMatchObject({ day: "2026-09-16" });
+      expect(result.notes).toEqual([
+        "The day is estimated because sleep data could not be read: the cycle start would place it after today, so it is shown on today.",
+      ]);
+    });
+
+    it("says the day is estimated from the cycle start when sleep data cannot be read", async () => {
+      pinNow();
+      const client = workoutClient([eveningRun], pageOf(LIVE_OPEN_CYCLE), pageOf(), {
+        [`/v2/cycle/${LIVE_OPEN_CYCLE.id}/sleep`]: new WhoopApiError(500, "x", {}),
+      });
+      const result = (await workoutDef.fetch(client)) as Summary;
+
+      expect(result).toMatchObject({ id: eveningRun.id, day: "2026-09-16" });
+      expect(result.notes).toEqual([
+        "The day is estimated from the cycle start because sleep data could not be read.",
+      ]);
+    });
   });
 
   it("summarizes the live-shaped evening run, keeping sport_id 0 and placing it on the cycle's day", async () => {

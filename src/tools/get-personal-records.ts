@@ -8,11 +8,12 @@
  * marathon and a marathon. Each record names the best before it and the
  * improvement, and whether it was set within the last `recent_days`.
  *
- * Workouts and cycles are read as cached history over fetchRangeForDays, and
- * each session counts on the local day of the WHOOP cycle containing its start
- * (assignWorkouts). A probe for workouts before the period decides whether the
- * bests cover the account's whole history (history_complete); notes never call
- * them all-time otherwise.
+ * Workouts, cycles and sleeps are read as one cached history snapshot
+ * (loadConsistentHistory) over fetchRangeForDays, and each session counts on
+ * the local day of the WHOOP cycle containing its start (assignWorkouts; the
+ * day its main sleep ended, as get_day shows). A probe for workouts before the
+ * period decides whether the bests cover the account's whole history
+ * (history_complete); notes never call them all-time otherwise.
  *
  * Only scored sessions count. Duration, energy, strain, TRIMP, high-intensity
  * minutes and max heart rate need at least 90% of the session recorded; GPS
@@ -21,10 +22,24 @@
  */
 
 import { z } from "zod";
-import { ENDPOINT_BODY_MEASUREMENT, ENDPOINT_CYCLE, ENDPOINT_WORKOUT } from "../api/endpoints.js";
-import { HISTORY_LIMITATIONS, loadHistory } from "../api/history.js";
-import { cycleRecordSchema, workoutRecordSchema } from "../api/record-schemas.js";
-import type { Cycle, Workout } from "../api/types.js";
+import {
+  ENDPOINT_BODY_MEASUREMENT,
+  ENDPOINT_CYCLE,
+  ENDPOINT_SLEEP,
+  ENDPOINT_WORKOUT,
+} from "../api/endpoints.js";
+import {
+  HISTORY_LIMITATIONS,
+  loadConsistentHistory,
+  loadHistory,
+  type HistoryLoader,
+} from "../api/history.js";
+import {
+  cycleRecordSchema,
+  sleepRecordSchema,
+  workoutRecordSchema,
+} from "../api/record-schemas.js";
+import type { Cycle, Sleep, Workout } from "../api/types.js";
 import { PROFILE_TTL_MS } from "../resources/index.js";
 import {
   dataQualitySchema,
@@ -41,6 +56,8 @@ import {
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import { addDays, assignWorkouts, fetchRangeForDays, isOpenCycle, placeDays } from "./day-model.js";
 import {
+  clampedDayNote,
+  clampOpenCycleDay,
   failureReason,
   historyOptions,
   observedSpan,
@@ -48,6 +65,7 @@ import {
   sourceUnreadable,
   sourceWarnings,
   sportKey,
+  SLEEP_PLACEMENT_CONSEQUENCE,
   truncationNote,
 } from "./get-workout-log.js";
 import { roundTo } from "./stats-utils.js";
@@ -390,8 +408,11 @@ function eligibleValue(definition: MetricDefinition, summary: WorkoutSummary): n
     return null;
   }
   const value = definition.value(summary);
-  // A best of 0 (no zone 4-5 minutes, no elevation) is not a record.
-  return value !== null && Number.isFinite(value) && value > 0 ? value : null;
+  // A best that shows as 0 (no zone 4-5 minutes, no elevation, or less than the
+  // output precision) is not a record; the unrounded value is kept for comparing.
+  return value !== null && Number.isFinite(value) && roundTo(value, definition.digits) > 0
+    ? value
+    : null;
 }
 
 /**
@@ -426,21 +447,22 @@ export function computeRecords(
     if (best === null) continue;
     const summary = best.session.summary;
     const prior = options.fewSessions ? null : previous;
+    // The improvement is computed from the values as shown, so it matches them.
+    const shownBest = roundTo(best.value, definition.digits);
+    const shownPrior = prior === null ? null : roundTo(prior.value, definition.digits);
     const improvement =
-      prior === null || prior.value <= 0
+      shownPrior === null || shownPrior <= 0
         ? null
         : roundTo(
-            ((definition.better === "higher"
-              ? best.value - prior.value
-              : prior.value - best.value) /
-              prior.value) *
+            ((definition.better === "higher" ? shownBest - shownPrior : shownPrior - shownBest) /
+              shownPrior) *
               100,
             1
           );
     records.push({
       metric: definition.metric,
       label: definition.label,
-      value: roundTo(best.value, definition.digits),
+      value: shownBest,
       unit: definition.unit,
       workout_id: summary.id,
       date: summary.day,
@@ -449,7 +471,7 @@ export function computeRecords(
         prior === null
           ? null
           : {
-              value: roundTo(prior.value, definition.digits),
+              value: shownPrior ?? roundTo(prior.value, definition.digits),
               date: prior.session.summary.day,
             },
       improvement_pct: improvement,
@@ -549,26 +571,25 @@ export async function getPersonalRecords(
       })
       .then((raw) => bodySchema.parse(raw).max_heart_rate)
   );
-  const workouts = await loadHistory<Workout>(
-    ctx.client,
-    ENDPOINT_WORKOUT,
-    period,
-    workoutRecordSchema,
-    options
-  );
-  if (workouts.quality.status === "fetch_failed") {
+  const loadWorkouts: HistoryLoader<Workout> = (extra) =>
+    loadHistory<Workout>(ctx.client, ENDPOINT_WORKOUT, period, workoutRecordSchema, {
+      ...options,
+      ...extra,
+    });
+  const initialWorkouts = await loadWorkouts({});
+  if (initialWorkouts.quality.status === "fetch_failed") {
     const probeResult = await probePromise;
     await bodyPromise;
     throw mostRelevantError(
-      [workouts.error, probeResult.ok ? undefined : probeResult.error].filter(
+      [initialWorkouts.error, probeResult.ok ? undefined : probeResult.error].filter(
         (error) => error !== undefined
       )
     );
   }
-  // Cycles only date the loaded workouts, so they are read from two local days
-  // before the earliest one: a sparse or new account then spends its request
-  // budget on the workout history instead of empty cycle chunks.
-  const earliestStartMs = workouts.records.reduce(
+  // Cycles and sleeps only date the loaded workouts, so they are read from two
+  // local days before the earliest one: a sparse or new account then spends its
+  // request budget on the workout history instead of empty cycle chunks.
+  const earliestStartMs = initialWorkouts.records.reduce(
     (earliest, workout) => Math.min(earliest, Date.parse(workout.start)),
     Infinity
   );
@@ -581,29 +602,52 @@ export async function getPersonalRecords(
           utcOffset
         )
       );
-  const [cycles, probe, body] = await Promise.all([
-    loadHistory<Cycle>(
-      ctx.client,
-      ENDPOINT_CYCLE,
-      { start: new Date(Math.min(cyclesStartMs, range.endMs)).toISOString(), end: period.end },
-      cycleRecordSchema,
-      options
-    ),
+  const datingPeriod = {
+    start: new Date(Math.min(cyclesStartMs, range.endMs)).toISOString(),
+    end: period.end,
+  };
+  // The workouts already loaded join the snapshot; they are read again only
+  // when their recent data is older than the cycles' and sleeps'.
+  let workoutLoads = 0;
+  const [
+    {
+      sources: [workouts, cycles, sleeps],
+      warnings: snapshotWarnings,
+    },
+    probe,
+    body,
+  ] = await Promise.all([
+    loadConsistentHistory([
+      (extra) => (workoutLoads++ === 0 ? Promise.resolve(initialWorkouts) : loadWorkouts(extra)),
+      (extra) =>
+        loadHistory<Cycle>(ctx.client, ENDPOINT_CYCLE, datingPeriod, cycleRecordSchema, {
+          ...options,
+          ...extra,
+        }),
+      (extra) =>
+        loadHistory<Sleep>(ctx.client, ENDPOINT_SLEEP, datingPeriod, sleepRecordSchema, {
+          ...options,
+          ...extra,
+        }),
+    ]),
     probePromise,
     bodyPromise,
   ]);
   warnings.push(
     ...sourceWarnings("Workout", workouts, "no records can be listed"),
-    ...sourceWarnings("Cycle", cycles, "sessions are dated by their local start day")
+    ...sourceWarnings("Cycle", cycles, "sessions are dated by their local start day"),
+    ...sourceWarnings("Sleep", sleeps, SLEEP_PLACEMENT_CONSEQUENCE),
+    ...snapshotWarnings
   );
 
   // --- Place and normalize --------------------------------------------------------
 
+  const sleepsUnreadable = sourceUnreadable(sleeps);
   const placement = placeDays({
     cycles: cycles.records,
-    sleeps: [],
+    sleeps: sleepsUnreadable ? [] : sleeps.records,
     recoveries: [],
-    sleepsAvailable: false,
+    sleepsAvailable: !sleepsUnreadable,
     today,
     utcOffset,
   });
@@ -624,10 +668,13 @@ export async function getPersonalRecords(
   const groups = new Map<string, SportGroup>();
   const allSports = new Map<string, number>();
   let olderLoaded = false;
+  let outsideLoaded = false;
   let fallbackCount = 0;
   let notScoredTotal = 0;
+  let clampedCount = 0;
   for (const workout of workouts.records) {
-    const workoutPlacement = placements.get(workout.id) ?? null;
+    const clamp = clampOpenCycleDay(workout, placements.get(workout.id) ?? null, placement, today);
+    const workoutPlacement = clamp.placement;
     const summary = normalizeWorkout(
       workout,
       workoutPlacement,
@@ -643,9 +690,11 @@ export async function getPersonalRecords(
       continue;
     }
     if (summary.day > today) {
+      outsideLoaded = true;
       exclude(workoutQuality, "outside_window");
       continue;
     }
+    if (clamp.clamped) clampedCount += 1;
     allSports.set(summary.sport_name, (allSports.get(summary.sport_name) ?? 0) + 1);
     if (sportFilter !== null && sportKey(summary.sport_name) !== sportFilter) {
       exclude(workoutQuality, "other_sport");
@@ -780,6 +829,7 @@ export async function getPersonalRecords(
   const historyComplete =
     probeFound === false &&
     !olderLoaded &&
+    !outsideLoaded &&
     !workouts.quality.truncated &&
     !sourceUnreadable(workouts);
   const scope = `${startDay} to ${today}`;
@@ -790,6 +840,10 @@ export async function getPersonalRecords(
   } else if (probeFound === true || olderLoaded) {
     notes.push(
       `WHOOP has workouts before ${startDay}, outside this period: the records are the bests from ${scope} only.`
+    );
+  } else if (outsideLoaded) {
+    notes.push(
+      `Some loaded sessions count toward a day after ${today}, outside this period: the records are the bests among the sessions placed on ${scope}.`
     );
   } else if (!probe.ok) {
     warnings.push(
@@ -815,6 +869,10 @@ export async function getPersonalRecords(
     "sessions from that part of the period may be dated by their local start day"
   );
   if (cycleTruncation) notes.push(cycleTruncation);
+  const sleepTruncation = truncationNote("Sleep", sleeps, utcOffset, SLEEP_PLACEMENT_CONSEQUENCE);
+  if (sleepTruncation) notes.push(sleepTruncation);
+  const clampedNote = clampedDayNote(clampedCount, today);
+  if (clampedNote) notes.push(clampedNote);
 
   // --- Notes --------------------------------------------------------------------------
 
@@ -890,6 +948,21 @@ export async function getPersonalRecords(
     else exclude(cycleQuality, "outside_window");
   }
   finishQuality(cycleQuality, usedCycles);
+  // Sleeps only date the sessions: the main sleeps of the used cycles count as used.
+  const sleepQuality = sleeps.quality;
+  const usedSleeps: Sleep[] = [];
+  const usedCycleIds = new Set(usedCycles.map((cycle) => cycle.id));
+  for (const sleep of sleeps.records) {
+    if (
+      placement.mainSleepByCycle.get(sleep.cycle_id) === sleep &&
+      usedCycleIds.has(sleep.cycle_id)
+    ) {
+      usedSleeps.push(sleep);
+    } else {
+      exclude(sleepQuality, "not_joined");
+    }
+  }
+  finishQuality(sleepQuality, usedSleeps);
   const bodyQuality = singleSourceQuality(body.ok ? "available" : "fetch_failed", null);
   const probeQuality = singleSourceQuality(probe.ok ? "available" : "fetch_failed", null);
   if (probe.ok) {
@@ -904,7 +977,7 @@ export async function getPersonalRecords(
     recent_records: recentRecords,
     max_hr_check: maxHrCheck,
     output_capped: sportsCapped || recentCapped,
-    truncated: workouts.quality.truncated || cycles.quality.truncated,
+    truncated: workouts.quality.truncated || cycles.quality.truncated || sleeps.quality.truncated,
     notes: withOffsetNote(notes, offsetFallback),
     warnings,
     disclaimer: DISCLAIMER,
@@ -926,6 +999,7 @@ export async function getPersonalRecords(
       sources: {
         workouts: workoutQuality,
         cycles: cycleQuality,
+        sleeps: sleepQuality,
         older_workouts_probe: probeQuality,
         body_measurement: bodyQuality,
       },
@@ -934,7 +1008,7 @@ export async function getPersonalRecords(
         ...HISTORY_LIMITATIONS,
         "Records are per WHOOP sport_name over scored sessions; duration, energy, strain, TRIMP, high-intensity minutes and max heart rate need at least 90% of the session recorded, and GPS records need a plausible speed.",
         "Pace records use each session's elapsed average pace (pauses included); WHOOP provides no splits, so a fast stretch inside a longer session is not a record.",
-        "A session counts toward the local day of the WHOOP cycle containing its start.",
+        "A session counts toward the local day of the WHOOP cycle containing its start (the day that cycle's main sleep ended, as get_day shows).",
       ],
     },
   };

@@ -341,6 +341,105 @@ describe("distance and pace records", () => {
     expect(recordOf(output, "walking", "farthest_distance")).toBeUndefined();
   });
 
+  /** No record value or previous best shows as 0 anywhere in the output */
+  function expectNoZeroValues(output: PersonalRecordsOutput): void {
+    const all = [...output.sports.flatMap((sport) => sport.records), ...output.recent_records];
+    for (const record of all) {
+      expect(record.value, record.metric).not.toBe(0);
+      expect(record.previous_best?.value, record.metric).not.toBe(0);
+    }
+  }
+
+  it("sets no high-intensity record from one second in zone 4 (shown as 0.0 minutes)", async () => {
+    const output = await run(
+      planned([
+        {
+          day: "2026-09-15",
+          minutes: 65,
+          sport: "weightlifting_msk",
+          km: null,
+          zones: [1, 20, 44, 1000 / MINUTE_MS, 0],
+        },
+      ])
+    );
+    expect(recordOf(output, "weightlifting_msk", "most_high_intensity_minutes")).toBeUndefined();
+    expect(output.recent_records.map((record) => record.metric)).not.toContain(
+      "most_high_intensity_minutes"
+    );
+    expect(recordOf(output, "weightlifting_msk", "longest_duration")).toBeDefined();
+    expectNoZeroValues(output);
+  });
+
+  it("gives no previous best of 0 when an earlier session rounds to 0 minutes", async () => {
+    const zones = (ms: number): [number, number, number, number, number] => [
+      0,
+      10,
+      20,
+      ms / MINUTE_MS,
+      0,
+    ];
+    const output = await run(
+      planned([
+        {
+          day: "2026-09-10",
+          minutes: 60,
+          sport: "weightlifting_msk",
+          km: null,
+          zones: zones(1000),
+        },
+        {
+          day: "2026-09-12",
+          minutes: 60,
+          sport: "weightlifting_msk",
+          km: null,
+          zones: zones(90_000),
+        },
+        {
+          day: "2026-09-14",
+          minutes: 60,
+          sport: "weightlifting_msk",
+          km: null,
+          zones: zones(36_000),
+        },
+      ])
+    );
+    expect(sportOf(output, "weightlifting_msk").status).toBe("available");
+    expect(recordOf(output, "weightlifting_msk", "most_high_intensity_minutes")).toMatchObject({
+      workout_id: "s-1",
+      value: 1.5,
+      previous_best: null,
+      improvement_pct: null,
+    });
+    expectNoZeroValues(output);
+  });
+
+  it("sets no elevation record from 0.4 m (shown as 0 m)", async () => {
+    const output = await run(
+      planned([
+        { day: "2026-09-10", minutes: 30, km: 5, altitude: 0.4 },
+        { day: "2026-09-12", minutes: 31, km: 5.2, altitude: 0.4 },
+        { day: "2026-09-14", minutes: 29, km: 4.9, altitude: 0.4 },
+      ])
+    );
+    expect(recordOf(output, "running", "most_elevation_gain")).toBeUndefined();
+    expect(recordOf(output, "running", "farthest_distance")).toBeDefined();
+    expectNoZeroValues(output);
+  });
+
+  it("computes improvement_pct from the values as shown", async () => {
+    // 10.004 then 10.255 km: shown 10 and 10.26, so 2.6 % (the unrounded values give 2.5 %).
+    const output = await run(
+      planned([
+        { day: "2026-09-10", minutes: 60, km: 10.004 },
+        { day: "2026-09-12", minutes: 60, km: 9 },
+        { day: "2026-09-14", minutes: 60, km: 10.255 },
+      ])
+    );
+    const record = recordOf(output, "running", "farthest_distance")!;
+    expect(record).toMatchObject({ value: 10.26, previous_best: { value: 10 } });
+    expect(record.improvement_pct).toBe(2.6);
+  });
+
   it("groups running with sport_id 0 and counts unscored sessions", async () => {
     const output = await run(
       planned([
@@ -529,6 +628,37 @@ describe("history completeness", () => {
     expect(sportOf(output, "running").sessions_considered).toBe(1);
     expect(output.period.history_complete).toBe(false);
     expect(output.data_quality.sources.workouts!.exclusions.outside_window).toBe(1);
+  });
+
+  it("does not call the records all-time when a loaded session falls after today", async () => {
+    // Strap off from 22:00 local; a session recorded in +14:00 starts on 09-17 there.
+    const cycles = cyclesFor("2026-08-01", TODAY).map(
+      (cycle): Cycle =>
+        cycle.end === null ? { ...cycle, end: iso(localMs(TODAY, 22 * 60)) } : cycle
+    );
+    const travel: Workout = {
+      ...workoutOf({ day: "2026-09-12", minutes: 20, km: 3 }, "travel"),
+      start: "2026-09-16T21:00:00.000Z",
+      end: "2026-09-16T21:20:00.000Z",
+      created_at: "2026-09-16T21:21:00.000Z",
+      updated_at: "2026-09-16T21:21:00.000Z",
+      timezone_offset: "+14:00",
+    };
+    const options = planned([{ day: "2026-09-10", minutes: 30, km: 5 }], { cycles });
+    const output = await run(
+      {
+        ...options,
+        workouts: [travel, ...options.workouts!],
+        now: new Date("2026-09-16T21:30:00.000Z"),
+      },
+      { days: 365 }
+    );
+    expect(output.data_quality.sources.workouts!.exclusions.outside_window).toBe(1);
+    expect(output.period.history_complete).toBe(false);
+    expect(output.notes.join(" ")).not.toMatch(/all-time/i);
+    expect(output.notes).toContain(
+      "Some loaded sessions count toward a day after 2026-09-16, outside this period: the records are the bests among the sessions placed on 2025-09-17 to 2026-09-16."
+    );
   });
 
   it("is not complete when the history was truncated, and a repeat continues from the cache", async () => {

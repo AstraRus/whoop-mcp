@@ -293,6 +293,8 @@ describe("MemoryCache", () => {
         value: { v: 1 },
         storedAt: Date.parse("2026-09-16T10:00:00Z"),
         hit: false,
+        joined: false,
+        fetchStartedAt: Date.parse("2026-09-16T10:00:00Z"),
       });
 
       vi.advanceTimersByTime(30_000);
@@ -301,6 +303,8 @@ describe("MemoryCache", () => {
         value: { v: 1 },
         storedAt: Date.parse("2026-09-16T10:00:00Z"),
         hit: true,
+        joined: false,
+        fetchStartedAt: null,
       });
       expect(fetcher).toHaveBeenCalledTimes(1);
     });
@@ -377,6 +381,176 @@ describe("MemoryCache", () => {
       resolveSecond("new");
       await expect(Promise.all([p2, p3])).resolves.toEqual(["new", "new"]);
       expect(cache.get("k")).toBe("new");
+    });
+
+    it("reports joined and the flight's start time to a joiner, and the start time to the owner", async () => {
+      vi.setSystemTime(10_000);
+      const cache = new MemoryCache();
+      let resolve!: (v: unknown) => void;
+      const fetcher = vi.fn().mockImplementation(() => new Promise((r) => (resolve = r)));
+
+      const owner = cache.getOrFetchWithMeta("k", 60_000, fetcher);
+      vi.setSystemTime(10_500);
+      const joiner = cache.getOrFetchWithMeta("k", 60_000, fetcher);
+      vi.setSystemTime(11_000);
+      resolve("x");
+
+      await expect(owner).resolves.toEqual({
+        value: "x",
+        storedAt: 11_000,
+        hit: false,
+        joined: false,
+        fetchStartedAt: 10_000,
+      });
+      await expect(joiner).resolves.toEqual({
+        value: "x",
+        storedAt: 11_000,
+        hit: false,
+        joined: true,
+        fetchStartedAt: 10_000,
+      });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("treats an entry stored before minStoredAt as a miss and replaces it", async () => {
+      vi.setSystemTime(10_000);
+      const cache = new MemoryCache();
+      const fetcher = vi.fn().mockResolvedValueOnce("old").mockResolvedValueOnce("new");
+
+      await cache.getOrFetchWithMeta("k", 120_000, fetcher);
+      vi.setSystemTime(100_000);
+      // Fresh for the TTL, but stored before minStoredAt
+      const reread = await cache.getOrFetchWithMeta("k", 120_000, fetcher, {
+        minStoredAt: 99_000,
+      });
+      expect(reread).toEqual({
+        value: "new",
+        storedAt: 100_000,
+        hit: false,
+        joined: false,
+        fetchStartedAt: 100_000,
+      });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      // The replacement is served to readers without minStoredAt, and to readers whose
+      // minStoredAt it satisfies
+      vi.setSystemTime(101_000);
+      await expect(cache.getOrFetchWithMeta("k", 120_000, fetcher)).resolves.toMatchObject({
+        value: "new",
+        hit: true,
+      });
+      await expect(
+        cache.getOrFetchWithMeta("k", 120_000, fetcher, { minStoredAt: 100_000 })
+      ).resolves.toMatchObject({ value: "new", hit: true, storedAt: 100_000 });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    });
+
+    it("serves an entry stored exactly at minStoredAt, and forces a re-read with minStoredAt now", async () => {
+      vi.setSystemTime(50_000);
+      const cache = new MemoryCache();
+      const fetcher = vi.fn().mockResolvedValueOnce("a").mockResolvedValueOnce("b");
+      await cache.getOrFetchWithMeta("k", 120_000, fetcher);
+
+      await expect(
+        cache.getOrFetchWithMeta("k", 120_000, fetcher, { minStoredAt: 50_000 })
+      ).resolves.toMatchObject({ value: "a", hit: true });
+
+      vi.setSystemTime(50_001);
+      await expect(
+        cache.getOrFetchWithMeta("k", 120_000, fetcher, { minStoredAt: Date.now() })
+      ).resolves.toMatchObject({ value: "b", hit: false, fetchStartedAt: 50_001 });
+    });
+
+    it("does not join a fetch that started before minStoredAt, and the older fetch cannot overwrite the newer entry", async () => {
+      vi.setSystemTime(10_000);
+      const cache = new MemoryCache();
+      let resolveOld!: (v: unknown) => void;
+      let resolveNew!: (v: unknown) => void;
+      const fetcher = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((r) => (resolveOld = r)))
+        .mockImplementationOnce(() => new Promise((r) => (resolveNew = r)));
+
+      const older = cache.getOrFetchWithMeta("k", 120_000, fetcher);
+      vi.setSystemTime(12_000);
+      const newer = cache.getOrFetchWithMeta("k", 120_000, fetcher, { minStoredAt: 11_000 });
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      // A plain reader now joins the newer fetch
+      const plain = cache.getOrFetchWithMeta("k", 120_000, fetcher);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+
+      vi.setSystemTime(13_000);
+      resolveNew("new");
+      await expect(newer).resolves.toMatchObject({
+        value: "new",
+        joined: false,
+        fetchStartedAt: 12_000,
+      });
+      await expect(plain).resolves.toMatchObject({
+        value: "new",
+        joined: true,
+        fetchStartedAt: 12_000,
+      });
+
+      vi.setSystemTime(14_000);
+      resolveOld("old");
+      await expect(older).resolves.toMatchObject({ value: "old", fetchStartedAt: 10_000 });
+      expect(cache.get("k")).toBe("new");
+    });
+
+    it("does not let a superseded older fetch store while the newer one is still in flight", async () => {
+      vi.setSystemTime(10_000);
+      const cache = new MemoryCache();
+      let resolveOld!: (v: unknown) => void;
+      let resolveNew!: (v: unknown) => void;
+      const fetcher = vi
+        .fn()
+        .mockImplementationOnce(() => new Promise((r) => (resolveOld = r)))
+        .mockImplementationOnce(() => new Promise((r) => (resolveNew = r)));
+
+      const older = cache.getOrFetchWithMeta("k", 120_000, fetcher);
+      vi.setSystemTime(12_000);
+      const newer = cache.getOrFetchWithMeta("k", 120_000, fetcher, { minStoredAt: 12_000 });
+
+      resolveOld("old");
+      await older;
+      expect(cache.has("k")).toBe(false);
+
+      resolveNew("new");
+      await newer;
+      expect(cache.get("k")).toBe("new");
+    });
+
+    it("joins a fetch that started at or after minStoredAt", async () => {
+      vi.setSystemTime(20_000);
+      const cache = new MemoryCache();
+      let resolve!: (v: unknown) => void;
+      const fetcher = vi.fn().mockImplementation(() => new Promise((r) => (resolve = r)));
+
+      const owner = cache.getOrFetchWithMeta("k", 120_000, fetcher);
+      vi.setSystemTime(21_000);
+      const joiner = cache.getOrFetchWithMeta("k", 120_000, fetcher, { minStoredAt: 20_000 });
+      expect(fetcher).toHaveBeenCalledTimes(1);
+      resolve("x");
+      await owner;
+      await expect(joiner).resolves.toMatchObject({ joined: true, fetchStartedAt: 20_000 });
+    });
+
+    it("does not store a fetch over a value set while it was in flight", async () => {
+      vi.setSystemTime(10_000);
+      const cache = new MemoryCache();
+      let resolve!: (v: unknown) => void;
+      const pending = cache.getOrFetchWithMeta(
+        "k",
+        120_000,
+        () => new Promise((r) => (resolve = r))
+      );
+      vi.setSystemTime(11_000);
+      cache.set("k", "set-later", 120_000);
+      resolve("fetched-earlier");
+      await expect(pending).resolves.toMatchObject({ value: "fetched-earlier" });
+      expect(cache.get("k")).toBe("set-later");
     });
   });
 

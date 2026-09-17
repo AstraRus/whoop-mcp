@@ -5,8 +5,10 @@
 # Started as root (the image has no USER line), it prepares the token folder
 # for the unprivileged built-in `node` user and runs the server as `node`:
 #
-#   - Token folder: WHOOP_MCP_TOKEN_DIR, default /root/.whoop-mcp (the path
-#     existing deployments mount their volume at). It is exported, because the
+#   - Token folder: WHOOP_MCP_TOKEN_DIR, default $HOME/.whoop-mcp — the folder
+#     earlier images (running as root) used: /root/.whoop-mcp in plain Docker,
+#     or wherever a deployment pointed HOME (e.g. Railway with HOME=/home/node
+#     and its volume at /home/node/.whoop-mcp). It is exported, because the
 #     server's HOME becomes /home/node and it would otherwise look there.
 #   - The folder, tokens.json and stale tokens.json.*.tmp files are handed to
 #     node (never recursively) with 0700/0600 permissions, then a probe as node
@@ -37,7 +39,7 @@ if [ "$(id -u)" != "0" ]; then
   exec "$@"
 fi
 
-TOKEN_DIR="${WHOOP_MCP_TOKEN_DIR:-/root/.whoop-mcp}"
+TOKEN_DIR="${WHOOP_MCP_TOKEN_DIR:-${HOME:-/root}/.whoop-mcp}"
 export WHOOP_MCP_TOKEN_DIR="$TOKEN_DIR"
 
 NODE_USER="node"
@@ -123,5 +125,5 @@ elif prepare_token_dir; then
   exec su-exec "$NODE_USER" "$@"
 fi
 
-log warn "entrypoint: running as root ($reason); set WHOOP_MCP_TOKEN_DIR to a volume path such as /data to run unprivileged"
+log warn "entrypoint: running as root ($reason); the server still works, see docs/deploy-railway.md"
 exec "$@"

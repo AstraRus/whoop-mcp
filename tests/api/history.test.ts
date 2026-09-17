@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, expectTypeOf, vi, beforeEach, afterEach } from "vitest";
 import {
   ARCHIVE_TTL_MS,
   CLOSED_TTL_MS,
@@ -7,18 +7,30 @@ import {
   HISTORY_CHUNK_MS,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  HISTORY_MIXED_SNAPSHOT_WARNING,
+  HISTORY_SNAPSHOT_TOLERANCE_MS,
+  loadConsistentHistory,
   loadHistory,
   MAX_PAGES_PER_CHUNK,
   MAX_RECORDS_PER_CHUNK,
   MAX_RECORDS_PER_SOURCE,
   RECENT_TTL_MS,
+  type HistoryLoader,
+  type HistorySource,
 } from "../../src/api/history.js";
 import { WhoopApiError, WhoopRateBudgetError, type WhoopClient } from "../../src/api/client.js";
-import { cycleRecordSchema, recoveryRecordSchema } from "../../src/api/record-schemas.js";
-import type { Cycle, Recovery } from "../../src/api/types.js";
+import { createRateLimiter } from "../../src/api/rate-limiter.js";
+import {
+  cycleRecordSchema,
+  recoveryRecordSchema,
+  sleepRecordSchema,
+  workoutRecordSchema,
+} from "../../src/api/record-schemas.js";
+import type { Cycle, Recovery, Sleep, Workout } from "../../src/api/types.js";
 import { MemoryCache } from "../../src/cache/memory-cache.js";
 import { CYCLE_TTL_MS } from "../../src/resources/index.js";
 import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
+import { stressUser } from "../helpers/whoop-users.js";
 
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
@@ -694,10 +706,473 @@ describe("loadHistory", () => {
   });
 
   it("exports the history limitations", () => {
-    expect(HISTORY_LIMITATIONS).toHaveLength(2);
-    expect(HISTORY_LIMITATIONS[0]).toContain(
-      "up to 60 minutes (older than 30 days: up to 6 hours)"
+    expect(HISTORY_LIMITATIONS).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("up to 60 minutes (older than 30 days: up to 6 hours)"),
+        expect.stringContaining("complete_since"),
+        "Records from the last 3 days, including today's, may be served from a server cache for up to 2 minutes; data types read at different times around a WHOOP sync are re-read once, and a cycle, sleep or recovery that synced within the last 2 minutes may not appear yet.",
+      ])
     );
-    expect(HISTORY_LIMITATIONS[1]).toContain("complete_since");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recent snapshot and consistent loading
+// ---------------------------------------------------------------------------
+
+describe("recent_snapshot and minRecentStoredAt", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const cycles = consecutiveCycles(B - 60 * DAY_MS - 2 * HOUR_MS, DAY_MS);
+
+  it("reports the fetch start of recent chunks on a miss and the stored time on a hit", async () => {
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const fixture = createWhoopFixtureClient({ cycles });
+    const client: WhoopClient = {
+      get: async <T>(path: string, options?: Parameters<WhoopClient["get"]>[1]): Promise<T> => {
+        const result = await fixture.get<T>(path, options);
+        // Each page takes 1 s: the fetch start differs from the stored time
+        vi.setSystemTime(Date.now() + 1_000);
+        return result;
+      },
+    };
+
+    const miss = await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+      cache,
+      now: () => new Date(NOW),
+    });
+    expect(miss.recent_snapshot).toEqual({ oldest: NOW, newest: NOW });
+    expect(miss.quality.fetched_at).toBe(iso(NOW + 1_000));
+
+    vi.setSystemTime(NOW + 30_000);
+    const hit = await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+      cache,
+      now: () => new Date(NOW),
+    });
+    expect(hit.chunks_from_cache).toBe(1);
+    expect(hit.recent_snapshot).toEqual({ oldest: NOW + 1_000, newest: NOW + 1_000 });
+  });
+
+  it("is null when only settled chunks were read and on a failed source", async () => {
+    const client = createWhoopFixtureClient({ cycles });
+    const settled = await loadHistory(
+      client,
+      "/v2/cycle",
+      period(B - 45 * DAY_MS, B - 20 * DAY_MS),
+      cycleRecordSchema,
+      { now }
+    );
+    expect(settled.chunks_total).toBe(2);
+    expect(settled.recent_snapshot).toBeNull();
+
+    const failing = createWhoopFixtureClient({
+      cycles,
+      failures: [{ path: /^\/v2\/cycle/, error: new WhoopApiError(500, "Error", null) }],
+    });
+    const failed = await loadHistory(failing, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+      now,
+    });
+    expect(failed.quality.status).toBe("fetch_failed");
+    expect(failed.recent_snapshot).toBeNull();
+  });
+
+  it("minRecentStoredAt: Date.now() re-reads recent chunks only", async () => {
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const client = createWhoopFixtureClient({ cycles });
+    const load = (minRecentStoredAt?: number): ReturnType<typeof loadHistory<Cycle>> =>
+      loadHistory(client, "/v2/cycle", period(B - 45 * DAY_MS), cycleRecordSchema, {
+        cache,
+        now,
+        ...(minRecentStoredAt !== undefined ? { minRecentStoredAt } : {}),
+      });
+    await load();
+    const firstCalls = client.calls.length;
+
+    vi.setSystemTime(NOW + 10_000);
+    const forced = await load(Date.now());
+    expect(client.calls.slice(firstCalls)).toEqual([
+      `/v2/cycle?start=${encodeURIComponent(iso(B))}&limit=25`,
+    ]);
+    expect(forced.chunks_from_cache).toBe(2);
+    expect(forced.recent_snapshot).toEqual({ oldest: NOW + 10_000, newest: NOW + 10_000 });
+  });
+
+  it("minRecentStoredAt does not join a recent chunk fetch that started before it", async () => {
+    vi.useRealTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const fixture = createWhoopFixtureClient({ cycles });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let gated = true;
+    const client: WhoopClient = {
+      get: async <T>(path: string, options?: Parameters<WhoopClient["get"]>[1]): Promise<T> => {
+        if (gated) {
+          gated = false;
+          await gate;
+        }
+        return fixture.get<T>(path, options);
+      },
+    };
+    const load = (minRecentStoredAt?: number): ReturnType<typeof loadHistory<Cycle>> =>
+      loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+        cache,
+        now,
+        ...(minRecentStoredAt !== undefined ? { minRecentStoredAt } : {}),
+      });
+
+    const older = load();
+    vi.setSystemTime(NOW + 5_000);
+    const newer = load(Date.now());
+    const newerSource = await newer;
+    expect(newerSource.recent_snapshot).toEqual({ oldest: NOW + 5_000, newest: NOW + 5_000 });
+    release();
+    const olderSource = await older;
+    expect(olderSource.recent_snapshot).toEqual({ oldest: NOW, newest: NOW });
+    expect(fixture.calls).toHaveLength(2);
+  });
+});
+
+describe("loadConsistentHistory", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function loaders(
+    client: WhoopClient,
+    cache: MemoryCache,
+    budget: ReturnType<typeof createHistoryBudget>,
+    startMs = B + DAY_MS
+  ): readonly [HistoryLoader<Cycle>, HistoryLoader<Sleep>] {
+    const base = { cache, budget, now };
+    return [
+      (extra) =>
+        loadHistory(client, "/v2/cycle", period(startMs), cycleRecordSchema, { ...base, ...extra }),
+      (extra) =>
+        loadHistory(client, "/v2/activity/sleep", period(startMs), sleepRecordSchema, {
+          ...base,
+          ...extra,
+        }),
+    ];
+  }
+
+  it("re-reads a cycle cached before a WHOOP sync when the sleep is read after it", async () => {
+    const recent = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({ cycles: recent, sleeps: [] });
+    const cache = new MemoryCache({ maxEntries: 500 });
+
+    // T1: a resource or earlier tool call caches the open cycle chunk
+    const T1 = NOW;
+    await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, { cache, now });
+    const openBefore = recent[recent.length - 1]!;
+
+    // WHOOP syncs after waking: the open cycle closes and a new one starts
+    const wakeMs = T1 + 60_000;
+    openBefore.end = iso(wakeMs);
+    const newCycle = cycle(9_999, wakeMs, null);
+    recent.push(newCycle);
+
+    vi.setSystemTime(T1 + 90_000);
+    const callsBefore = client.calls.length;
+    const { sources, warnings } = await loadConsistentHistory(loaders(client, cache, farBudget()));
+    const [cycles, sleeps] = sources;
+
+    expect(warnings).toEqual([]);
+    expect(cycles.records.map((record) => record.id)).toContain(newCycle.id);
+    expect(cycles.records.find((record) => record.id === openBefore.id)?.end).toBe(iso(wakeMs));
+    expect(cycles.recent_snapshot).toEqual({ oldest: T1 + 90_000, newest: T1 + 90_000 });
+    expect(sleeps.recent_snapshot).toEqual({ oldest: T1 + 90_000, newest: T1 + 90_000 });
+    // The cycle hit, the sleep miss, then the cycle re-read
+    expect(client.calls.slice(callsBefore)).toEqual([
+      `/v2/activity/sleep?start=${encodeURIComponent(iso(B))}&limit=25`,
+      `/v2/cycle?start=${encodeURIComponent(iso(B))}&limit=25`,
+    ]);
+    // The re-read replaced the cached chunk
+    const later = await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+      cache,
+      now,
+    });
+    expect(later.chunks_from_cache).toBe(1);
+    expect(later.records.map((record) => record.id)).toContain(newCycle.id);
+  });
+
+  it("makes no extra request for a snapshot served from one earlier call", async () => {
+    const recent = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({ cycles: recent, sleeps: [] });
+    const cache = new MemoryCache({ maxEntries: 500 });
+
+    await loadConsistentHistory(loaders(client, cache, farBudget()));
+    const callsAfterFirst = client.calls.length;
+    expect(callsAfterFirst).toBe(2);
+
+    vi.setSystemTime(NOW + 90_000);
+    const { sources, warnings } = await loadConsistentHistory(loaders(client, cache, farBudget()));
+    expect(client.calls).toHaveLength(callsAfterFirst);
+    expect(warnings).toEqual([]);
+    expect(sources[0].chunks_from_cache).toBe(1);
+    expect(sources[1].chunks_from_cache).toBe(1);
+  });
+
+  it("keeps sources read within the tolerance as they are", async () => {
+    const recent = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({ cycles: recent, sleeps: [] });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, { cache, now });
+
+    vi.setSystemTime(NOW + HISTORY_SNAPSHOT_TOLERANCE_MS);
+    const { warnings } = await loadConsistentHistory(loaders(client, cache, farBudget()));
+    expect(warnings).toEqual([]);
+    expect(client.calls.filter((path) => path.startsWith("/v2/cycle"))).toHaveLength(1);
+  });
+
+  it("keeps the original and warns once when the budget is spent before the re-read", async () => {
+    const recent = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({ cycles: recent, sleeps: [] });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, { cache, now });
+    const cachedIds = recent.map((record) => record.id);
+    recent.push(cycle(9_999, NOW + 60_000, null));
+
+    vi.setSystemTime(NOW + 90_000);
+    // One page: the sleep read spends it, the cycle re-read cannot run
+    const budget = farBudget(1);
+    const { sources, warnings } = await loadConsistentHistory(loaders(client, cache, budget));
+
+    expect(warnings).toEqual([HISTORY_MIXED_SNAPSHOT_WARNING]);
+    expect(budget.pagesRemaining).toBe(0);
+    expect(sources[0].quality.status).not.toBe("fetch_failed");
+    expect(sources[0].records.map((record) => record.id).sort()).toEqual([...cachedIds].sort());
+    expect(sources[0].recent_snapshot).toEqual({ oldest: NOW, newest: NOW });
+  });
+
+  it("re-reads a source whose own recent chunks were read at different times", async () => {
+    // One day into a chunk: the previous chunk ended under 3 days ago and is recent
+    const now1 = B + DAY_MS;
+    vi.setSystemTime(now1);
+    const recent = consecutiveCycles(B - 20 * DAY_MS - 2 * HOUR_MS, DAY_MS, now1);
+    const client = createWhoopFixtureClient({ cycles: recent });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const closedPath = `/v2/cycle?start=${encodeURIComponent(iso(B - 30 * DAY_MS))}&end=${encodeURIComponent(iso(B))}&limit=25`;
+
+    // T1: the closed recent chunk alone is cached
+    await loadHistory(client, "/v2/cycle", period(B - 10 * DAY_MS, B), cycleRecordSchema, {
+      cache,
+      now,
+    });
+    expect(client.calls).toEqual([closedPath]);
+
+    vi.setSystemTime(now1 + 90_000);
+    const load: HistoryLoader<Cycle> = (extra) =>
+      loadHistory(client, "/v2/cycle", period(B - 10 * DAY_MS), cycleRecordSchema, {
+        cache,
+        now,
+        budget: farBudget(),
+        ...extra,
+      });
+    const { sources, warnings } = await loadConsistentHistory([load]);
+
+    expect(warnings).toEqual([]);
+    expect(client.calls.filter((path) => path === closedPath)).toHaveLength(2);
+    expect(sources[0].recent_snapshot).toEqual({ oldest: now1 + 90_000, newest: now1 + 90_000 });
+  });
+
+  it("ignores failed sources when choosing the snapshot and does not re-read them", async () => {
+    const recent = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({
+      cycles: recent,
+      sleeps: [],
+      failures: [{ path: /^\/v2\/activity\/sleep/, error: new WhoopApiError(503, "Error", null) }],
+    });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    await loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, { cache, now });
+
+    vi.setSystemTime(NOW + 90_000);
+    const { sources, warnings } = await loadConsistentHistory(loaders(client, cache, farBudget()));
+    expect(warnings).toEqual([]);
+    expect(sources[1].quality.status).toBe("fetch_failed");
+    expect(client.calls.filter((path) => path.startsWith("/v2/cycle"))).toHaveLength(1);
+    expect(client.calls.filter((path) => path.startsWith("/v2/activity/sleep"))).toHaveLength(1);
+  });
+
+  it("does not replace a source with a more truncated re-read", async () => {
+    const recent = consecutiveCycles(B - 40 * DAY_MS - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({ cycles: recent, sleeps: [] });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const cyclePeriod = period(B - 20 * DAY_MS);
+    // T1: both cycle chunks cached; the settled chunk stays cached for 60 minutes
+    await loadHistory(client, "/v2/cycle", cyclePeriod, cycleRecordSchema, { cache, now });
+
+    vi.setSystemTime(NOW + 90_000);
+    const budget = farBudget();
+    const [, sleepLoader] = loaders(client, cache, budget);
+    // The re-read uses a client whose settled-chunk request fails (and no cache),
+    // so it is usable but truncated
+    const failingClosed = createWhoopFixtureClient({
+      cycles: recent,
+      failures: [{ path: /^\/v2\/cycle\?.*&end=/, error: new WhoopApiError(503, "Error", null) }],
+    });
+    const cycleLoader: HistoryLoader<Cycle> = (extra) =>
+      extra.minRecentStoredAt === undefined
+        ? loadHistory(client, "/v2/cycle", cyclePeriod, cycleRecordSchema, { cache, now, budget })
+        : loadHistory(failingClosed, "/v2/cycle", cyclePeriod, cycleRecordSchema, {
+            now,
+            budget,
+            ...extra,
+          });
+    const { sources, warnings } = await loadConsistentHistory([cycleLoader, sleepLoader]);
+
+    expect(failingClosed.calls).toHaveLength(2);
+    expect(warnings).toEqual([HISTORY_MIXED_SNAPSHOT_WARNING]);
+    expect(sources[0].quality.truncated).toBe(false);
+    expect(sources[0].chunks_from_cache).toBe(2);
+  });
+  it("preserves the tuple types of the loaders", async () => {
+    const client = createWhoopFixtureClient({ cycles: [], sleeps: [] });
+    const cache = new MemoryCache();
+    const result = await loadConsistentHistory(loaders(client, cache, farBudget()));
+    expectTypeOf(result.sources[0]).toEqualTypeOf<HistorySource<Cycle>>();
+    expectTypeOf(result.sources[1]).toEqualTypeOf<HistorySource<Sleep>>();
+    expectTypeOf(result.warnings).toEqualTypeOf<string[]>();
+
+    const inline = await loadConsistentHistory([
+      (extra) =>
+        loadHistory<Cycle>(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, extra),
+      (extra) =>
+        loadHistory<Workout>(
+          client,
+          "/v2/activity/workout",
+          period(B + DAY_MS),
+          workoutRecordSchema,
+          extra
+        ),
+    ]);
+    expectTypeOf(inline.sources[0]).toEqualTypeOf<HistorySource<Cycle>>();
+    expectTypeOf(inline.sources[1]).toEqualTypeOf<HistorySource<Workout>>();
+    expect(inline.sources).toHaveLength(2);
+  });
+});
+
+describe("chunks joined from another call's fetch", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("re-reads with the joiner's budget when the owner's deadline stopped the shared fetch", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const cycles = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const rateLimiter = createRateLimiter({ perMinute: 60 });
+    rateLimiter.note429(8_000);
+    const client = createWhoopFixtureClient({ cycles, rateLimiter });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const load = (deadlineMs: number): ReturnType<typeof loadHistory<Cycle>> =>
+      loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+        cache,
+        budget: createHistoryBudget({ deadlineMs }),
+        now,
+      });
+
+    const a = load(NOW + 3_000);
+    await vi.advanceTimersByTimeAsync(50);
+    const b = load(Date.now() + 20_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const [sourceA, sourceB] = await Promise.all([a, b]);
+
+    expect(sourceA.quality.status).toBe("fetch_failed");
+    expect(sourceA.error).toBeInstanceOf(WhoopRateBudgetError);
+    expect(sourceB.quality.status).not.toBe("fetch_failed");
+    expect(sourceB.quality.truncated).toBe(false);
+    expect(sourceB.complete_since).toBe(iso(B + DAY_MS));
+    expect(sourceB.records).toHaveLength(cycles.length);
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it("does not re-read when the joiner's own deadline has passed too", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const cycles = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const rateLimiter = createRateLimiter({ perMinute: 60 });
+    rateLimiter.note429(8_000);
+    const client = createWhoopFixtureClient({ cycles, rateLimiter });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const load = (deadlineMs: number): ReturnType<typeof loadHistory<Cycle>> =>
+      loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+        cache,
+        budget: createHistoryBudget({ deadlineMs }),
+        now,
+      });
+
+    const a = load(NOW + 3_000);
+    const b = load(NOW + 3_000);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const [sourceA, sourceB] = await Promise.all([a, b]);
+    expect(sourceA.quality.status).toBe("fetch_failed");
+    expect(sourceB.quality.status).toBe("fetch_failed");
+    expect(client.calls).toEqual([]);
+  });
+
+  it("does not re-read a joined fetch that failed for another reason", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const cycles = consecutiveCycles(B - 2 * HOUR_MS, DAY_MS);
+    const client = createWhoopFixtureClient({
+      cycles,
+      failures: [{ path: /^\/v2\/cycle/, error: new WhoopApiError(503, "Error", null), times: 1 }],
+    });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const load = (): ReturnType<typeof loadHistory<Cycle>> =>
+      loadHistory(client, "/v2/cycle", period(B + DAY_MS), cycleRecordSchema, {
+        cache,
+        budget: farBudget(),
+        now,
+      });
+    const [sourceA, sourceB] = await Promise.all([load(), load()]);
+    expect(sourceA.quality.status).toBe("fetch_failed");
+    expect(sourceB.quality.status).toBe("fetch_failed");
+    expect(client.calls).toHaveLength(1);
+  });
+
+  it("stressUser: a joiner with 60 pages is not truncated by an owner with 1 page", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const user = stressUser();
+    vi.setSystemTime(user.now);
+    const client = createWhoopFixtureClient({ workouts: user.workouts });
+    const cache = new MemoryCache({ maxEntries: 500 });
+    const nowMs = user.now.getTime();
+    const workoutPeriod = { start: iso(nowMs - 45 * DAY_MS), end: iso(nowMs) };
+    const load = (pages: number): ReturnType<typeof loadHistory<Workout>> =>
+      loadHistory(client, "/v2/activity/workout", workoutPeriod, workoutRecordSchema, {
+        cache,
+        budget: farBudget(pages),
+        now,
+      });
+
+    // Same tick: the second call joins both chunks the first one started
+    const a = load(1);
+    const b = load(60);
+    const [sourceA, sourceB] = await Promise.all([a, b]);
+
+    expect(sourceA.quality.truncated).toBe(true);
+    expect(sourceB.quality.truncated).toBe(false);
+    expect(sourceB.complete_since).toBe(workoutPeriod.start);
+    const expected = user.workouts.filter(
+      (workout) =>
+        Date.parse(workout.end) >
+        Math.floor((nowMs - 45 * DAY_MS) / HISTORY_CHUNK_MS) * HISTORY_CHUNK_MS
+    ).length;
+    expect(sourceB.records).toHaveLength(expected);
   });
 });

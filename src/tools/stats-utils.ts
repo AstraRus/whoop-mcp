@@ -1,7 +1,7 @@
 /**
  * Pure statistical utility functions for analytical tools.
  *
- * The descriptive functions (mean, median, standardDeviation, regression,
+ * The descriptive functions (mean, median, regression,
  * anomalies) throw on empty arrays. The inferential and load helpers below
  * trendConfidence return null when a statistic is undefined (too few values,
  * zero variance) and throw RangeError for non-finite input.
@@ -93,25 +93,6 @@ export function median(values: number[]): number {
     return (sorted[mid - 1]! + sorted[mid]!) / 2;
   }
   return sorted[mid]!;
-}
-
-/**
- * Population standard deviation.
- * Returns 0 for a single value or constant array.
- * @throws Error if values is empty
- */
-export function standardDeviation(values: number[]): number {
-  assertNonEmpty(values, "standardDeviation");
-  if (isConstant(values)) {
-    return 0;
-  }
-  const avg = mean(values);
-  let sumSquaredDiffs = 0;
-  for (const v of values) {
-    const diff = v - avg;
-    sumSquaredDiffs += diff * diff;
-  }
-  return Math.sqrt(sumSquaredDiffs / values.length);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,9 +228,10 @@ export interface Anomaly {
 }
 
 /**
- * Detect values more than `threshold` standard deviations from the mean.
+ * Detect values more than `threshold` sample standard deviations (n − 1, the
+ * std_dev the tools report) from the mean.
  *
- * Returns empty array for constant values or single value (stddev=0).
+ * Returns empty array for constant values or a single value.
  *
  * @param values - Data points
  * @param threshold - Number of σ for anomaly detection (default: 2)
@@ -259,10 +241,10 @@ export function detectAnomalies(values: number[], threshold: number = 2): Anomal
   assertNonEmpty(values, "detectAnomalies");
 
   const avg = mean(values);
-  const stdDev = standardDeviation(values);
+  const stdDev = sampleStandardDeviation(values);
 
-  // No anomalies possible when stddev is 0 (constant or single value)
-  if (stdDev === 0) {
+  // No anomalies possible without spread (constant or single value)
+  if (stdDev === null || stdDev === 0) {
     return [];
   }
 

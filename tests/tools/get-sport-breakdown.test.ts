@@ -7,13 +7,17 @@
  * sport filters, the beats-per-km efficiency trend thresholds, time-of-day
  * boundaries, the absence of any intensity-model label, an after-midnight
  * session at a 30-day chunk boundary, truncation and no-data notes, source
- * failures, output size on stressUser and the MCP contract.
+ * failures, output size on stressUser and the MCP contract. Regression tests:
+ * a day sleeper's session of the open cycle counts today (with and without
+ * sleeps), split nights and daytime main sleeps placed like get_calendar, and
+ * a long window reading sleeps only around the cycles whose day depends on
+ * them with the same placement.
  */
 
 import { describe, expect, it } from "vitest";
 import { WhoopApiError } from "../../src/api/client.js";
 import { HISTORY_CHUNK_MS } from "../../src/api/history.js";
-import type { Cycle, ScoreState, Workout } from "../../src/api/types.js";
+import type { Cycle, ScoreState, Sleep, Workout } from "../../src/api/types.js";
 import { localMidnightMs } from "../../src/tools/analytics-utils.js";
 import { addDays } from "../../src/tools/day-model.js";
 import {
@@ -23,6 +27,10 @@ import {
   type SportBreakdownInput,
   type SportBreakdownOutput,
 } from "../../src/tools/get-sport-breakdown.js";
+import {
+  SLEEP_PLACEMENT_WARNING,
+  TARGETED_SLEEPS_NOTE,
+} from "../../src/tools/get-training-load.js";
 import { MAX_TOOL_TEXT_CHARS, type ToolContext } from "../../src/tools/tool-definition.js";
 import { assertNeutralText, connectServer } from "../helpers/contract.js";
 import {
@@ -30,7 +38,7 @@ import {
   type WhoopFixtureClient,
   type WhoopFixtureClientOptions,
 } from "../helpers/whoop-fixture-client.js";
-import { LIVE_SHAPED_IDS, liveShapedUser, stressUser } from "../helpers/whoop-users.js";
+import { LIVE_SHAPED_IDS, liveShapedUser, matureUser, stressUser } from "../helpers/whoop-users.js";
 
 const MINUTE_MS = 60_000;
 const OFFSET = "+02:00";
@@ -627,5 +635,184 @@ describe("windows and sources", () => {
     } finally {
       await connection.close();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Day placement like get_calendar (regression)
+// ---------------------------------------------------------------------------
+
+describe("day placement like get_calendar", () => {
+  /** A scored main sleep of `cycleId` over [startMs, endMs) */
+  function mainSleep(cycleId: number, startMs: number, endMs: number): Sleep {
+    const inBed = endMs - startMs;
+    const awake = Math.round(inBed * 0.1);
+    const light = Math.round(inBed * 0.45);
+    const deep = Math.round(inBed * 0.2);
+    return {
+      id: `00000000-0000-4000-8000-${String(cycleId).padStart(12, "0")}`,
+      cycle_id: cycleId,
+      v1_id: null,
+      user_id: 1,
+      created_at: iso(endMs + 5 * MINUTE_MS),
+      updated_at: iso(endMs + 5 * MINUTE_MS),
+      start: iso(startMs),
+      end: iso(endMs),
+      timezone_offset: OFFSET,
+      nap: false,
+      score_state: "SCORED",
+      score: {
+        stage_summary: {
+          total_in_bed_time_milli: inBed,
+          total_awake_time_milli: awake,
+          total_no_data_time_milli: 0,
+          total_light_sleep_time_milli: light,
+          total_slow_wave_sleep_time_milli: deep,
+          total_rem_sleep_time_milli: inBed - awake - light - deep,
+          sleep_cycle_count: 4,
+          disturbance_count: 8,
+        },
+        sleep_needed: {
+          baseline_milli: 28_000_000,
+          need_from_sleep_debt_milli: 0,
+          need_from_recent_strain_milli: 0,
+          need_from_recent_nap_milli: 0,
+        },
+        respiratory_rate: 15,
+        sleep_performance_percentage: 80,
+        sleep_consistency_percentage: 70,
+        sleep_efficiency_percentage: 90,
+      },
+    };
+  }
+
+  /**
+   * A day sleeper (+02:00): main sleeps 12:30-19:30 every day, so each cycle
+   * starts 12:30 and belongs to the day its sleep ended; `dayCount` days up to
+   * 09-17; running sessions on 09-15 22:00 and 09-17 21:00; now 09-17 23:30
+   * local.
+   */
+  function daySleeper(dayCount = 6): Account & { sleeps: Sleep[] } {
+    const days = Array.from({ length: dayCount }, (_, index) =>
+      addDays("2026-09-17", index - (dayCount - 1))
+    );
+    const cycles: Cycle[] = [];
+    const sleeps: Sleep[] = [];
+    days.forEach((day, index) => {
+      const startMs = localMs(day, 12 * 60 + 30);
+      const endMs = index + 1 < days.length ? localMs(days[index + 1]!, 12 * 60 + 30) : null;
+      const sleepEndMs = localMs(day, 19 * 60 + 30);
+      cycles.push({
+        id: 7000 + index,
+        user_id: 1,
+        created_at: iso(sleepEndMs + 10 * MINUTE_MS),
+        updated_at: iso((endMs ?? sleepEndMs) + 10 * MINUTE_MS),
+        start: iso(startMs),
+        end: endMs === null ? null : iso(endMs),
+        timezone_offset: OFFSET,
+        score_state: "SCORED",
+        score: { strain: 10, kilojoule: 8000, average_heart_rate: 70, max_heart_rate: 150 },
+      });
+      sleeps.push(mainSleep(7000 + index, startMs, sleepEndMs));
+    });
+    const workouts = [
+      workoutOf({ day: "2026-09-15", minute: 22 * 60, minutes: 60, sport: "running" }, "w-0915"),
+      workoutOf({ day: "2026-09-17", minute: 21 * 60, minutes: 60, sport: "running" }, "w-0917"),
+    ];
+    return { cycles, sleeps, workouts, now: new Date(localMs("2026-09-17", 23 * 60 + 30)) };
+  }
+
+  it("dates a day sleeper's sessions by the main sleep and counts today's open-cycle session", async () => {
+    const data = daySleeper();
+    const output = await getSportBreakdown(
+      { days: 7 },
+      contextFor(createWhoopFixtureClient({ ...data }), data.now)
+    );
+    sportBreakdownOutputSchema.parse(output);
+    expect(output.period.end_day).toBe("2026-09-17");
+    const running = sport(output, "running");
+    expect(running.sessions).toBe(2);
+    // get_calendar places the cycle that started 09-15 12:30 on 09-15 (its sleep ended 19:30).
+    expect(running.first_day).toBe("2026-09-15");
+    expect(running.last_day).toBe("2026-09-17");
+    expect(output.warnings).not.toContain(SLEEP_PLACEMENT_WARNING);
+    expect(output.data_quality.sources.sleeps!.status).toBe("available");
+    expect(output.data_quality.limitations.join(" ")).toContain("as get_calendar places them");
+    assertNeutralText([output.notes, output.warnings]);
+  });
+
+  it("still counts today's session on today, with a warning, when sleeps cannot be read", async () => {
+    const data = daySleeper();
+    const failing = createWhoopFixtureClient({
+      ...data,
+      failures: [
+        {
+          path: /^\/v2\/activity\/sleep/,
+          error: new WhoopApiError(503, "Service Unavailable", {}),
+        },
+      ],
+    });
+    const output = await getSportBreakdown({ days: 7 }, contextFor(failing, data.now));
+    sportBreakdownOutputSchema.parse(output);
+    const running = sport(output, "running");
+    // Without sleeps the open cycle counts toward 12 hours after its start
+    // (tomorrow), but a session that started today is never placed after today.
+    expect(running.sessions).toBe(2);
+    expect(running.last_day).toBe("2026-09-17");
+    expect(output.warnings).toContain(SLEEP_PLACEMENT_WARNING);
+    expect(output.data_quality.sources.sleeps!.status).toBe("fetch_failed");
+    assertNeutralText([output.notes, output.warnings]);
+  });
+
+  it("gives the same result when a long window reads sleeps only around the cycles whose day depends on them", async () => {
+    // 120 days of history: 365 and 200 days both cover all of it, but only the
+    // 365-day window is too long to read every sleep within the request budget.
+    const fixture = matureUser({ days: 120, splitNightDays: [10, 40, 80, 100] });
+    const runDays = async (days: number): Promise<SportBreakdownOutput> => {
+      const client = createWhoopFixtureClient({ ...fixture, now: fixture.now });
+      const output = await getSportBreakdown({ days }, contextFor(client, fixture.now));
+      sportBreakdownOutputSchema.parse(output);
+      return output;
+    };
+    const targeted = await runDays(365);
+    const full = await runDays(200);
+    expect(targeted.notes).toContain(TARGETED_SLEEPS_NOTE);
+    expect(full.notes).not.toContain(TARGETED_SLEEPS_NOTE);
+    expect(targeted.truncated).toBe(false);
+    expect(targeted.data_quality.sources.sleeps!.status).toBe("available");
+    expect(targeted.data_quality.sources.sleeps!.records_fetched).toBeLessThan(
+      full.data_quality.sources.sleeps!.records_fetched
+    );
+    expect(targeted.sports).toEqual(full.sports);
+    expect(targeted.overall).toEqual(full.overall);
+    expect(targeted.warnings).toEqual(full.warnings);
+    assertNeutralText([targeted.notes, targeted.warnings]);
+
+    // A day sleeper whose every cycle depends on its main sleep: 120 days with
+    // an evening session every 10 days, dated by the sleep in both windows.
+    const sleeper = daySleeper(120);
+    for (let index = 0; index < 110; index += 10) {
+      const day = addDays("2026-09-17", index - 119);
+      sleeper.workouts.push(
+        workoutOf({ day, minute: 22 * 60, minutes: 45, sport: "cycling" }, `c-${day}`)
+      );
+    }
+    const runSleeper = async (days: number): Promise<SportBreakdownOutput> => {
+      const client = createWhoopFixtureClient({ ...sleeper });
+      const output = await getSportBreakdown({ days }, contextFor(client, sleeper.now));
+      sportBreakdownOutputSchema.parse(output);
+      return output;
+    };
+    const sleeperTargeted = await runSleeper(365);
+    const sleeperFull = await runSleeper(200);
+    expect(sleeperTargeted.notes).toContain(TARGETED_SLEEPS_NOTE);
+    expect(sport(sleeperFull, "cycling")).toMatchObject({
+      sessions: 11,
+      active_days: 11,
+      first_day: addDays("2026-09-17", -119),
+      last_day: addDays("2026-09-17", -19),
+    });
+    expect(sleeperTargeted.sports).toEqual(sleeperFull.sports);
+    expect(sleeperTargeted.overall).toEqual(sleeperFull.overall);
   });
 });

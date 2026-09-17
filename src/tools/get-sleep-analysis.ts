@@ -23,6 +23,7 @@ import {
   createHistoryBudget,
   HISTORY_DEADLINE_MS,
   HISTORY_LIMITATIONS,
+  loadConsistentHistory,
   loadHistory,
   type HistorySource,
 } from "../api/history.js";
@@ -39,7 +40,6 @@ import {
   mostRelevantError,
 } from "./analytics-utils.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
-import { InvalidDateExpression } from "./date-utils.js";
 import { buildNights, localClock, placeDays, type Night } from "./day-model.js";
 import { SLEEP_DEBT_MAX_DAYS, SLEEP_DEBT_MIN_NIGHTS } from "./get-sleep-debt.js";
 import {
@@ -47,6 +47,7 @@ import {
   MIN_ASLEEP_MINUTES_FOR_RATES,
   needBreakdown,
   stageBreakdown,
+  TIMING_MIN_NIGHTS_PER_GROUP,
   timingStats,
   whoopConsistency,
   type NeedBreakdown,
@@ -73,7 +74,7 @@ export const SLEEP_ANALYSIS_DEFAULT_DAYS = 14;
 export const SLEEP_ANALYSIS_MAX_NIGHT_ROWS = 31;
 
 /** Weekday and weekend nights each needed for the midpoint means and social jetlag. */
-export const TIMING_MIN_NIGHTS_PER_GROUP = 2;
+export { TIMING_MIN_NIGHTS_PER_GROUP };
 
 /** Extra days read before the window, so records spanning its start are included. */
 const LOAD_MARGIN_MS = 2 * DAY_MS;
@@ -335,7 +336,12 @@ export const sleepAnalysisOutputSchema = z.object({
     .object({
       count: z.number().int(),
       days_with_naps: z.number().int(),
-      total_asleep_hours: z.number().nullable(),
+      total_asleep_hours: z
+        .number()
+        .nullable()
+        .describe(
+          "Time asleep in all naps in the window (light + slow-wave + REM); null when any nap is not scored"
+        ),
       mean_duration_min: z.number().nullable().describe("Mean time from nap start to end"),
       unscored: z.number().int(),
     })
@@ -466,20 +472,10 @@ export async function runSleepAnalysis(
   const offsetInfo = await resolveUserUtcOffsetInfo(ctx.client);
   const utcOffset = offsetInfo.offset;
 
-  let window: { startTime: number; endTime: number };
-  try {
-    window = resolveSleepWindow(args.start, args.days, days, now, utcOffset, {
-      toolName: "get_sleep_analysis",
-      maxDays: SLEEP_ANALYSIS_MAX_DAYS,
-    });
-  } catch (error: unknown) {
-    if (error instanceof RangeError)
-      throw new InvalidDateExpression(
-        `The sleep window "${args.start ?? ""}" begins at or after the current time; get_sleep_analysis needs a window that starts in the past.`
-      );
-    throw error;
-  }
-  const { startTime, endTime } = window;
+  const { startTime, endTime } = resolveSleepWindow(args.start, args.days, days, now, utcOffset, {
+    toolName: "get_sleep_analysis",
+    maxDays: SLEEP_ANALYSIS_MAX_DAYS,
+  });
 
   const budget = createHistoryBudget({ deadlineMs: ctx.startedAtMs + HISTORY_DEADLINE_MS });
   const loadPeriod = {
@@ -487,10 +483,22 @@ export async function runSleepAnalysis(
     end: new Date(Math.min(endTime + DAY_MS, nowMs)).toISOString(),
   };
   const options = { budget, now: (): Date => ctx.now(), cache: ctx.historyCache };
-  const [sleep, recovery] = await Promise.all([
-    loadHistory(ctx.client, ENDPOINT_SLEEP, loadPeriod, sleepRecordSchema, options),
-    loadHistory(ctx.client, ENDPOINT_RECOVERY, loadPeriod, recoveryRecordSchema, options),
-  ]);
+  // One snapshot: a cached sleep from before a WHOOP sync is not paired with a fresh recovery.
+  const {
+    sources: [sleep, recovery],
+    warnings: historyWarnings,
+  } = await loadConsistentHistory([
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_SLEEP, loadPeriod, sleepRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+    (extra) =>
+      loadHistory(ctx.client, ENDPOINT_RECOVERY, loadPeriod, recoveryRecordSchema, {
+        ...options,
+        ...extra,
+      }),
+  ] as const);
   if (sleep.quality.status === "fetch_failed") {
     throw mostRelevantError(
       recovery.quality.status === "fetch_failed" ? [sleep.error, recovery.error] : [sleep.error]
@@ -710,10 +718,11 @@ export async function runSleepAnalysis(
     naps = {
       count: windowNaps.length,
       days_with_naps: new Set(windowNaps.map((nap) => localDay(nap.end, nap.timezone_offset))).size,
+      // A sum over only the scored naps would understate the total: null unless all are scored.
       total_asleep_hours:
         windowNaps.length === 0
           ? 0
-          : scoredNaps.length === 0
+          : scoredNaps.length < windowNaps.length
             ? null
             : roundTo(
                 napAsleepHours.reduce((sum, value) => sum + value, 0),
@@ -751,7 +760,7 @@ export async function runSleepAnalysis(
 
   // --- Notes --------------------------------------------------------------------------
   const notes: string[] = [];
-  const warnings: string[] = [];
+  const warnings: string[] = [...historyWarnings];
   if (status === "unavailable")
     notes.push(
       "Sleep data could not be read: WHOOP returned data in an unexpected format, so no statistics were calculated. This does not mean no sleep was recorded."
@@ -820,6 +829,10 @@ export async function runSleepAnalysis(
   if (naps)
     notes.push(
       "Naps are summarized separately and never added to asleep hours; WHOOP's nap need is 0 or negative (a nap lowers the need)."
+    );
+  if (naps && naps.unscored > 0)
+    notes.push(
+      `${plural(naps.unscored, "nap")} in the window ${naps.unscored === 1 ? "is" : "are"} not scored yet or could not be scored, so total nap time asleep is not given.`
     );
   if (outputCapped)
     notes.push(

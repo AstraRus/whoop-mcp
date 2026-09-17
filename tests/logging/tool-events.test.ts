@@ -6,7 +6,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
-import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../../src/api/client.js";
+import {
+  WhoopApiError,
+  WhoopAuthError,
+  WhoopNetworkError,
+  createWhoopClient,
+} from "../../src/api/client.js";
+import { cycleRecordSchema } from "../../src/api/record-schemas.js";
 import { WhoopRateBudgetError } from "../../src/api/rate-limiter.js";
 import { TokenRefreshError } from "../../src/auth/token-refresh-error.js";
 import type { Logger } from "../../src/logging/logger.js";
@@ -94,12 +100,72 @@ describe("classifyToolError", () => {
     });
   });
 
-  it.each([
-    [new InvalidDateExpression('Unrecognized date "tomorrow-ish"')],
-    [new z.ZodError([])],
-    [new RangeError("Invalid time value")],
-  ])("%s is invalid input at info", (error) => {
-    expect(classifyToolError(error)).toMatchObject({ outcome: "invalid_input", level: "info" });
+  it("InvalidDateExpression is invalid input at info", () => {
+    expect(
+      classifyToolError(new InvalidDateExpression('Unrecognized date "tomorrow-ish"'))
+    ).toMatchObject({
+      outcome: "invalid_input",
+      level: "info",
+      errorClass: "InvalidDateExpression",
+    });
+  });
+
+  it("a RangeError (e.g. an invalid Date) is an internal error at error with file:line frames", () => {
+    let error: unknown;
+    try {
+      new Date(Number.NaN).toISOString();
+    } catch (caught: unknown) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(RangeError);
+    const classified = classifyToolError(error);
+    expect(classified).toMatchObject({
+      outcome: "internal_error",
+      level: "error",
+      errorClass: "RangeError",
+    });
+    expect(classified.stackFrames?.length).toBeGreaterThan(0);
+    for (const frame of classified.stackFrames ?? []) {
+      expect(frame).toMatch(/^[A-Za-z0-9_.-]+:\d+$/);
+    }
+    expect(classified.contractIssues).toBeUndefined();
+  });
+
+  it("a WHOOP record that fails to parse is an internal error with frames and path:code issues only", () => {
+    const record = {
+      id: "0f0f0f0f-aaaa-4bbb-8ccc-123456789abc",
+      start: "canary-invalid-Qzx-date",
+      score: { strain: "123.456789" },
+    };
+    const parsed = cycleRecordSchema.safeParse(record);
+    expect(parsed.success).toBe(false);
+    const error = parsed.error!;
+    const classified = classifyToolError(error);
+    expect(classified).toMatchObject({
+      outcome: "internal_error",
+      level: "error",
+      errorClass: "ZodError",
+    });
+    expect(classified.stackFrames?.length).toBeGreaterThan(0);
+    for (const frame of classified.stackFrames ?? []) {
+      expect(frame).toMatch(/^[A-Za-z0-9_.-]+:\d+$/);
+    }
+    expect(classified.contractIssues?.length).toBeGreaterThan(0);
+    for (const issue of classified.contractIssues ?? []) {
+      expect(issue).toMatch(/^[A-Za-z0-9_.*]*:[a-z_]+$/);
+    }
+    const serialized = JSON.stringify(classified);
+    for (const value of [record.id, record.start, record.score.strain]) {
+      expect(serialized).not.toContain(value);
+    }
+  });
+
+  it("an empty ZodError is still an internal error", () => {
+    expect(classifyToolError(new z.ZodError([]))).toMatchObject({
+      outcome: "internal_error",
+      level: "error",
+      contractIssues: [],
+    });
   });
 
   it.each([
@@ -457,6 +523,78 @@ describe("tool call logging through the server", () => {
     },
     60_000
   );
+
+  it("logs no ids, dates or query strings from WHOOP requests of a real client over a mocked fetch", async () => {
+    const logger = captureLogger();
+    const fixtureClient = createWhoopFixtureClient({ ...fixture, now: fixture.now });
+    const BASE_URL = "https://whoop.canary.test";
+    let served = 0;
+    const fetchMock = vi.fn(async (url: string): Promise<Response> => {
+      served += 1;
+      // One 429 and one TimeoutError along the way; everything else from the fixture
+      if (served === 2) {
+        return new Response("{}", {
+          status: 429,
+          statusText: "Too Many Requests",
+          headers: { "retry-after": "0" },
+        });
+      }
+      if (served === 5) {
+        throw new DOMException(`timeout for ${url}`, "TimeoutError");
+      }
+      try {
+        const data = await fixtureClient.get<unknown>(url.slice(BASE_URL.length));
+        return new Response(JSON.stringify(data), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      } catch (error: unknown) {
+        const status = error instanceof WhoopApiError ? error.statusCode : 500;
+        return new Response("{}", { status, statusText: "Error" });
+      }
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const client = createWhoopClient({ accessToken: "canary-token", baseUrl: BASE_URL, logger });
+    const connection = await connectServer(client, { logger, now: () => fixture.now });
+    try {
+      for (const tool of connection.tools) {
+        await connection.callTool(tool.name, LEGACY_ARGS[tool.name] ?? {});
+      }
+    } finally {
+      await connection.close();
+      vi.unstubAllGlobals();
+    }
+
+    const requestUrls = fetchMock.mock.calls.map(([url]) => url);
+    expect(requestUrls.some((url) => url.includes("?start="))).toBe(true);
+    expect(requestUrls.some((url) => url.includes(LIVE_SHAPED_IDS.workouts.eveningRun))).toBe(true);
+    const whoopLines = logger.lines.filter((line) => line.msg.startsWith("whoop api"));
+    expect(whoopLines.map((line) => line.msg)).toEqual(
+      expect.arrayContaining(["whoop api request", "whoop api rate limited", "whoop api timeout"])
+    );
+    for (const line of whoopLines) {
+      expect(line.fields).not.toHaveProperty("url");
+      expect(line.fields.endpoint).toMatch(/^(\/(v\d+|[a-z_]+|:id))+$/);
+    }
+    const serialized = JSON.stringify(logger.lines);
+    expect(serialized).not.toContain("?");
+    expect(serialized).not.toContain(BASE_URL);
+    expect(serialized).not.toContain("canary-token");
+    const dates = new Set<string>();
+    for (const url of requestUrls) {
+      const query = url.split("?")[1];
+      if (query === undefined) continue;
+      for (const [, value] of new URLSearchParams(query)) dates.add(value);
+    }
+    for (const value of [
+      ...sentinelStrings(),
+      ...Object.values(LIVE_SHAPED_IDS.cycles).map(String),
+      ...[...dates].filter((value) => value.length > 2),
+      ...[...dates].map((value) => encodeURIComponent(value)).filter((value) => value.length > 2),
+    ]) {
+      expect(serialized).not.toContain(value);
+    }
+  }, 60_000);
 
   it("classifies errors thrown inside legacy and registry tools by their real class", async () => {
     const logger = captureLogger();

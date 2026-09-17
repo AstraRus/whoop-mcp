@@ -18,6 +18,13 @@ export const LOW_DATA_COVERAGE_FRACTION = 0.2;
 /** Asleep time below which disturbances per hour are not reported */
 export const MIN_ASLEEP_MINUTES_FOR_RATES = 60;
 
+/**
+ * Weekday and weekend nights each needed before their midpoint means and
+ * social jetlag are released in standard mode (get_sleep_analysis and
+ * get_sleep_debt). Aggregate get_sleep_debt needs AGGREGATE_WEEK_MIN_SAMPLES.
+ */
+export const TIMING_MIN_NIGHTS_PER_GROUP = 2;
+
 const MINUTE_MS = 60_000;
 
 // ---------------------------------------------------------------------------
@@ -165,7 +172,9 @@ export interface TimingStats {
 /**
  * Bedtime and wake-time variability (circular SD of local clock minutes) and
  * social jetlag (distance between weekday and weekend sleep midpoints, by wake
- * day), as get_sleep_debt computes them. No minimum is applied here.
+ * day), as get_sleep_debt computes them. No minimum is applied here: callers
+ * gate the midpoints and social jetlag on the weekday and weekend night counts
+ * (TIMING_MIN_NIGHTS_PER_GROUP in standard mode).
  */
 export function timingStats(
   nights: readonly Pick<Sleep, "start" | "end" | "timezone_offset">[]

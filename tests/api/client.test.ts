@@ -7,7 +7,9 @@ import {
   describeWhoopError,
 } from "../../src/api/client.js";
 import type { WhoopClient } from "../../src/api/client.js";
+import { WhoopRateBudgetError, createRateLimiter } from "../../src/api/rate-limiter.js";
 import { TokenRefreshError } from "../../src/auth/token-refresh-error.js";
+import { MemoryCache } from "../../src/cache/memory-cache.js";
 
 // ---------------------------------------------------------------------------
 // Task 4a: WhoopApiError
@@ -175,6 +177,25 @@ describe("describeWhoopError", () => {
     const timeout = new Error("The operation was aborted due to timeout");
     timeout.name = "TimeoutError";
     expect(describeWhoopError(new WhoopNetworkError(timeout))).toContain("did not respond in time");
+  });
+
+  it.each([["UND_ERR_HEADERS_TIMEOUT"], ["UND_ERR_BODY_TIMEOUT"], ["UND_ERR_CONNECT_TIMEOUT"]])(
+    "describes an undici %s as a timeout, not a connection problem",
+    (code) => {
+      const cause = Object.assign(new Error("timeout"), { code });
+      const message = describeWhoopError(
+        new WhoopNetworkError(new TypeError("fetch failed", { cause }))
+      );
+      expect(message).toBe("Network error: the WHOOP API did not respond in time. Retry shortly.");
+      expect(message).not.toContain("internet connection");
+    }
+  );
+
+  it("describes an undici TypeError with another cause code as a connection problem", () => {
+    const cause = Object.assign(new Error("refused"), { code: "ECONNREFUSED" });
+    expect(
+      describeWhoopError(new WhoopNetworkError(new TypeError("fetch failed", { cause })))
+    ).toContain("Check your internet connection");
   });
 
   it("describes a network error wrapping an API or auth error by that error", () => {
@@ -1199,7 +1220,7 @@ describe("createWhoopClient", () => {
       expect(onTokenRefresh).toHaveBeenCalledTimes(2);
     });
 
-    it("logs one refresh at info level for concurrent 401s", async () => {
+    it("logs one refresh line (debug, endpoint only) for concurrent 401s", async () => {
       acceptOnly(NEW_TOKEN);
       const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const refresh = deferred<string>();
@@ -1216,10 +1237,12 @@ describe("createWhoopClient", () => {
       refresh.resolve(NEW_TOKEN);
       await pending;
 
-      const refreshedLogs = logger.info.mock.calls.filter(
+      const refreshedLogs = logger.debug.mock.calls.filter(
         ([message]) => message === "whoop token refreshed"
       );
       expect(refreshedLogs).toHaveLength(1);
+      // index.ts logs the refresh at info; the client does not repeat it
+      expect(logger.info).not.toHaveBeenCalled();
       const serialized = JSON.stringify([
         logger.debug.mock.calls,
         logger.info.mock.calls,
@@ -1416,7 +1439,7 @@ describe("createWhoopClient — logger integration", () => {
     expect(typeof extra.durationMs).toBe("number");
   });
 
-  it("logs at info level when token is refreshed after 401", async () => {
+  it("logs the refresh at debug with the endpoint and no URL after a 401", async () => {
     const onTokenRefresh = vi.fn().mockResolvedValue("new_token");
     mockFetch
       .mockResolvedValueOnce({
@@ -1440,9 +1463,179 @@ describe("createWhoopClient — logger integration", () => {
     });
     await client.get("/v2/user/profile/basic");
 
-    expect(logger.info).toHaveBeenCalledWith(
-      "whoop token refreshed",
-      expect.objectContaining({ url: expect.stringContaining("/v2/user/profile/basic") })
+    expect(logger.debug).toHaveBeenCalledWith("whoop token refreshed", {
+      endpoint: "/v2/user/profile/basic",
+    });
+    expect(logger.info).not.toHaveBeenCalled();
+    for (const [, fields] of logger.debug.mock.calls as Array<[string, Record<string, unknown>]>) {
+      expect(fields).not.toHaveProperty("url");
+    }
+  });
+
+  it("logs the error class of a timeout or network error, never its message", async () => {
+    const timeout = new DOMException(
+      `timed out at ${TEST_BASE_URL}/v2/cycle/12345`,
+      "TimeoutError"
+    );
+    const network = new TypeError(`fetch failed for ${TEST_BASE_URL}/v2/cycle/12345`);
+    mockFetch.mockRejectedValueOnce(timeout).mockRejectedValueOnce(network);
+    const client = createWhoopClient({ accessToken: TEST_TOKEN, baseUrl: TEST_BASE_URL, logger });
+
+    await expect(client.get("/v2/cycle/12345")).rejects.toBeInstanceOf(WhoopNetworkError);
+    await expect(client.get("/v2/cycle/12345")).rejects.toBeInstanceOf(WhoopNetworkError);
+
+    expect(logger.error.mock.calls).toEqual([
+      [
+        "whoop api timeout",
+        { endpoint: "/v2/cycle/:id", durationMs: expect.any(Number), errorClass: "TimeoutError" },
+      ],
+      [
+        "whoop api network error",
+        { endpoint: "/v2/cycle/:id", durationMs: expect.any(Number), errorClass: "TypeError" },
+      ],
+    ]);
+  });
+
+  it("logs an undici headers timeout as a timeout", async () => {
+    const cause = Object.assign(new Error("Headers Timeout Error"), {
+      code: "UND_ERR_HEADERS_TIMEOUT",
+    });
+    mockFetch.mockRejectedValueOnce(new TypeError("fetch failed", { cause }));
+    const client = createWhoopClient({ accessToken: TEST_TOKEN, baseUrl: TEST_BASE_URL, logger });
+
+    const error: unknown = await client.get("/v2/recovery").catch((e: unknown) => e);
+    expect(describeWhoopError(error)).toContain("did not respond in time");
+    expect(logger.error).toHaveBeenCalledWith("whoop api timeout", {
+      endpoint: "/v2/recovery",
+      durationMs: expect.any(Number),
+      errorClass: "TypeError",
+    });
+  });
+
+  it("never logs ids, dates, query strings or error messages (canary)", async () => {
+    const SLEEP_ID = "5a8c1e2f-9b7d-4c3a-8e6f-0d1b2c3a4e5f";
+    const CYCLE_ID = "918273645";
+    const START = "2026-09-14T00:00:00.000Z";
+    const END = "2026-09-16T21:30:00.000Z";
+    const sentinels = [SLEEP_ID, CYCLE_ID, START, END];
+    const encoded = sentinels.map((value) => encodeURIComponent(value));
+    const rangeQuery = `?start=${encodeURIComponent(START)}&end=${encodeURIComponent(END)}&limit=25`;
+    const NEW_TOKEN = "canary_new_token";
+
+    const json = (data: unknown, status = 200, headers: Record<string, string> = {}): Response =>
+      new Response(JSON.stringify(data), {
+        status,
+        statusText: status === 200 ? "OK" : "Error",
+        headers: { "content-type": "application/json", ...headers },
+      });
+    const byUrl = new Map<string, number>();
+    let refreshResolve: (token: string) => void = () => {};
+    const refreshPromise = new Promise<string>((resolve) => (refreshResolve = resolve));
+    mockFetch.mockImplementation((url: string, init?: RequestInit) => {
+      const seen = (byUrl.get(url) ?? 0) + 1;
+      byUrl.set(url, seen);
+      const auth = (init?.headers as Record<string, string>)["Authorization"];
+      const path = url.slice(TEST_BASE_URL.length);
+      if (path.startsWith("/v2/activity/sleep/") || path.startsWith(`/v2/cycle/${CYCLE_ID}`)) {
+        // 401 until the token is refreshed
+        return Promise.resolve(
+          auth === `Bearer ${NEW_TOKEN}` ? json({ id: SLEEP_ID }) : json({ id: SLEEP_ID }, 401)
+        );
+      }
+      if (path.startsWith("/v2/cycle?")) {
+        return Promise.resolve(
+          seen === 1 ? json({ message: START }, 429, { "retry-after": "0" }) : json({ records: [] })
+        );
+      }
+      if (path.startsWith("/v2/recovery?")) {
+        return Promise.reject(new DOMException(`timeout for ${url}`, "TimeoutError"));
+      }
+      if (path.startsWith("/v2/activity/workout?")) {
+        return Promise.reject(new TypeError(`fetch failed: ${url}`));
+      }
+      if (path.startsWith(`/v2/activity/workout/${SLEEP_ID}`)) {
+        return Promise.resolve(
+          new Response(`<html>${SLEEP_ID} ${END}</html>`, { status: 200, statusText: "OK" })
+        );
+      }
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    const client = createWhoopClient({
+      accessToken: TEST_TOKEN,
+      baseUrl: TEST_BASE_URL,
+      logger,
+      requestId: "req-canary",
+      onTokenRefresh: () => refreshPromise,
+    });
+
+    // 401 -> refresh, with a second request waiting on the same refresh
+    const refreshed = Promise.all([
+      client.get(`/v2/activity/sleep/${SLEEP_ID}`),
+      client.get(`/v2/cycle/${CYCLE_ID}/sleep${rangeQuery}`),
+    ]);
+    await vi.waitFor(() =>
+      expect(logger.debug).toHaveBeenCalledWith(
+        "whoop token refresh already in progress",
+        expect.anything()
+      )
+    );
+    refreshResolve(NEW_TOKEN);
+    await refreshed;
+    // 429 -> 200
+    await client.get(`/v2/cycle${rangeQuery}`);
+    // TimeoutError, TypeError, non-JSON body
+    await expect(client.get(`/v2/recovery${rangeQuery}`)).rejects.toBeInstanceOf(WhoopNetworkError);
+    await expect(client.get(`/v2/activity/workout${rangeQuery}`)).rejects.toBeInstanceOf(
+      WhoopNetworkError
+    );
+    await expect(client.get(`/v2/activity/workout/${SLEEP_ID}`)).rejects.toBeInstanceOf(
+      WhoopNetworkError
+    );
+
+    const calls = {
+      debug: logger.debug.mock.calls,
+      info: logger.info.mock.calls,
+      warn: logger.warn.mock.calls,
+      error: logger.error.mock.calls,
+    };
+    const messages = Object.values(calls).flatMap((levelCalls) =>
+      (levelCalls as Array<[string]>).map(([message]) => message)
+    );
+    expect(messages).toEqual(
+      expect.arrayContaining([
+        "whoop api request",
+        "whoop token refresh already in progress",
+        "whoop token refreshed",
+        "whoop api rate limited",
+        "whoop api timeout",
+        "whoop api network error",
+        "whoop api response read failed",
+      ])
+    );
+    const serialized = JSON.stringify(calls);
+    for (const value of [...sentinels, ...encoded]) {
+      expect(serialized).not.toContain(value);
+    }
+    expect(serialized).not.toContain("?");
+    expect(serialized).not.toContain(TEST_BASE_URL);
+    expect(serialized).not.toContain(NEW_TOKEN);
+    expect(serialized).not.toContain(TEST_TOKEN);
+    const endpoints = new Set(
+      Object.values(calls).flatMap((levelCalls) =>
+        (levelCalls as Array<[string, Record<string, unknown>]>).map(
+          ([, fields]) => fields.endpoint
+        )
+      )
+    );
+    expect(endpoints).toEqual(
+      new Set([
+        "/v2/activity/sleep/:id",
+        "/v2/cycle/:id/sleep",
+        "/v2/cycle",
+        "/v2/recovery",
+        "/v2/activity/workout",
+        "/v2/activity/workout/:id",
+      ])
     );
   });
 });
@@ -1558,5 +1751,156 @@ describe("createWhoopClient — cache integration", () => {
     await client.get("/v2/cycle?limit=1", { cache: true });
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Deadlines: joined cache fetches and token refreshes
+// ---------------------------------------------------------------------------
+
+describe("createWhoopClient — deadlines", () => {
+  const TEST_BASE_URL = "https://test.whoop.api";
+  const T0 = Date.parse("2026-09-16T10:00:00.000Z");
+
+  let mockFetch: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    mockFetch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  function ok(data: unknown): Response {
+    return new Response(JSON.stringify(data), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }
+
+  it("a cached GET that joined a fetch stopped by the owner's deadline reads again with its own", async () => {
+    mockFetch.mockImplementation(() => Promise.resolve(ok({ records: [1] })));
+    const rateLimiter = createRateLimiter({ perMinute: 60 });
+    rateLimiter.note429(8_000);
+    const client = createWhoopClient({
+      accessToken: "token",
+      baseUrl: TEST_BASE_URL,
+      cache: new MemoryCache(),
+      rateLimiter,
+    });
+
+    const a = client.getWithMeta!("/v2/cycle?limit=1", {
+      cache: true,
+      deadlineMs: T0 + 3_000,
+    }).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(50);
+    const b = client.getWithMeta!("/v2/cycle?limit=1", {
+      cache: true,
+      deadlineMs: Date.now() + 20_000,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(a).resolves.toBeInstanceOf(WhoopRateBudgetError);
+    await expect(b).resolves.toMatchObject({ data: { records: [1] }, cacheStatus: "miss" });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("a joiner whose own deadline has passed too is not retried", async () => {
+    mockFetch.mockImplementation(() => Promise.resolve(ok({ records: [1] })));
+    const rateLimiter = createRateLimiter({ perMinute: 60 });
+    rateLimiter.note429(8_000);
+    const client = createWhoopClient({
+      accessToken: "token",
+      baseUrl: TEST_BASE_URL,
+      cache: new MemoryCache(),
+      rateLimiter,
+    });
+
+    const a = client
+      .get("/v2/cycle?limit=1", { cache: true, deadlineMs: T0 + 3_000 })
+      .catch((error: unknown) => error);
+    const b = client
+      .get("/v2/cycle?limit=1", { cache: true, deadlineMs: T0 + 3_000 })
+      .catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(a).resolves.toBeInstanceOf(WhoopRateBudgetError);
+    await expect(b).resolves.toBeInstanceOf(WhoopRateBudgetError);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("a joiner of a fetch that failed for another reason is not retried", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(new Response("{}", { status: 503, statusText: "Unavailable" }))
+    );
+    const client = createWhoopClient({
+      accessToken: "token",
+      baseUrl: TEST_BASE_URL,
+      cache: new MemoryCache(),
+    });
+    const results = await Promise.all([
+      client.get("/v2/cycle?limit=1", { cache: true }).catch((error: unknown) => error),
+      client.get("/v2/cycle?limit=1", { cache: true }).catch((error: unknown) => error),
+    ]);
+    for (const result of results) expect(result).toBeInstanceOf(WhoopApiError);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops waiting for a hanging token refresh at the deadline without cancelling it", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(new Response("{}", { status: 401, statusText: "Unauthorized" }))
+    );
+    const onTokenRefresh = vi.fn(() => new Promise<string>(() => undefined));
+    const client = createWhoopClient({
+      accessToken: "token",
+      baseUrl: TEST_BASE_URL,
+      onTokenRefresh,
+    });
+
+    const deadlineMs = T0 + 5_000;
+    const settledAt: number[] = [];
+    const pending = ["/v2/recovery?limit=1", "/v2/cycle?limit=1", "/v2/activity/sleep?limit=1"].map(
+      (path) =>
+        client.get(path, { deadlineMs }).catch((error: unknown) => {
+          settledAt.push(Date.now());
+          return error;
+        })
+    );
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settledAt).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    const errors = await Promise.all(pending);
+
+    expect(onTokenRefresh).toHaveBeenCalledTimes(1);
+    expect(settledAt).toEqual([deadlineMs, deadlineMs, deadlineMs]);
+    for (const error of errors) {
+      expect(error).toBeInstanceOf(WhoopNetworkError);
+      expect(describeWhoopError(error)).toBe(
+        "Network error: the WHOOP API did not respond in time. Retry shortly."
+      );
+    }
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("still reports a failed refresh within the deadline as an authentication error", async () => {
+    mockFetch.mockImplementation(() =>
+      Promise.resolve(new Response("{}", { status: 401, statusText: "Unauthorized" }))
+    );
+    const client = createWhoopClient({
+      accessToken: "token",
+      baseUrl: TEST_BASE_URL,
+      onTokenRefresh: () => Promise.reject(new TokenRefreshError(400, "invalid_grant")),
+    });
+    const error = await client
+      .get("/v2/recovery?limit=1", { deadlineMs: T0 + 5_000 })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(WhoopAuthError);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

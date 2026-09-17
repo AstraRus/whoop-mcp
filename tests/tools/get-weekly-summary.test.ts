@@ -464,7 +464,9 @@ describe("getWeeklySummary — sparse and missing data", () => {
     const result = await getWeeklySummary(client, {}, NOW);
 
     expect(result.strain).toEqual({ average_daily_strain: 18, max_daily_strain: 18 });
-    expect(result.notes).toContain("Today's strain is still accumulating and is not included.");
+    expect(result.notes).toContain(
+      "Today's (2026-09-16) strain is still accumulating and is not included in daily strain."
+    );
   });
 
   it("returns nulls with notes, not zeros, for a week without data", async () => {
@@ -1082,10 +1084,11 @@ describe("get_weekly_summary on the shared fixture users", () => {
   async function callWeekly(
     data: WhoopUserFixture,
     privacyMode: "standard" | "aggregate",
-    args: Record<string, unknown> = {}
+    args: Record<string, unknown> = {},
+    now: Date = data.now
   ): Promise<{ isError: boolean; text: string; structured: Record<string, unknown> | null }> {
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(data.now);
+    vi.setSystemTime(now);
     const connection = await connectServer(createWhoopFixtureClient(data), {
       privacyMode,
       disableResources: true,
@@ -1112,6 +1115,39 @@ describe("get_weekly_summary on the shared fixture users", () => {
       "1 day WHOOP covered only in part (the strap was put on that day) is not included in daily strain."
     );
     assertNeutralText(summary);
+  });
+
+  it("names the open cycle's day, not today, when strain is still accumulating after midnight", async () => {
+    const result = await callWeekly(
+      liveShapedUser({ now: "2026-09-17T01:30:00+02:00" }),
+      "standard"
+    );
+    expect(result.isError, result.text).toBe(false);
+    const notes = result.structured!.notes as string[];
+    expect(notes).toContain(
+      "Strain for 2026-09-16 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain."
+    );
+    expect(notes).toContain(
+      "No WHOOP cycle has started yet for 2026-09-17 (today): a new cycle begins at the next sleep and appears once that sleep syncs, so this is not missing data."
+    );
+    expect(notes.join(" ")).not.toMatch(/Today's/);
+  });
+
+  it("names Sunday's open cycle when last week is summarized on Monday after midnight", async () => {
+    const result = await callWeekly(
+      matureUser({ now: "2026-09-20T22:00:00+01:00" }),
+      "standard",
+      { week_start: "last week" },
+      new Date("2026-09-21T00:30:00+01:00")
+    );
+    expect(result.isError, result.text).toBe(false);
+    expect(result.structured!.week_start).toBe("2026-09-14T00:00:00.000+01:00");
+    const notes = result.structured!.notes as string[];
+    // Monday lies outside the summarized week, so only Sunday's open cycle is named.
+    expect(notes.filter((note) => /accumulating|has started yet/.test(note))).toEqual([
+      "Strain for 2026-09-20 is still accumulating (its WHOOP cycle stays open until the next sleep syncs) and is not included in daily strain.",
+    ]);
+    expect(notes.join(" ")).not.toMatch(/Today's/);
   });
 
   it("withholds the live-shaped user's current week in aggregate mode", async () => {

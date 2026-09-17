@@ -32,9 +32,7 @@
  */
 
 import { z } from "zod";
-import { ENDPOINT_SLEEP } from "../api/endpoints.js";
-import { loadHistory, type HistorySource } from "../api/history.js";
-import { sleepRecordSchema } from "../api/record-schemas.js";
+import type { HistorySource } from "../api/history.js";
 import type { Sleep } from "../api/types.js";
 import {
   AGGREGATE_WEEK_MIN_SAMPLES,
@@ -277,16 +275,11 @@ async function loadReleasedTraining(
   const lastDay = addDays(mondays[mondays.length - 1]!, 6);
   const range = fetchRangeForDays(firstDay, lastDay, utcOffset, nowMs);
   const options = trainingHistoryOptions(ctx);
-  const [sources, sleeps] = await Promise.all([
-    loadTrainingSources(ctx, options, range.startMs, range.endMs),
-    loadHistory<Sleep>(
-      ctx.client,
-      ENDPOINT_SLEEP,
-      { start: new Date(range.startMs).toISOString(), end: new Date(range.endMs).toISOString() },
-      sleepRecordSchema,
-      options
-    ),
-  ]);
+  // Cycles, workouts and every sleep of the range, read as one snapshot.
+  const sources = await loadTrainingSources(ctx, options, range.startMs, range.endMs, {
+    fullSleeps: true,
+  });
+  const sleeps = sources.sleeps;
   throwIfAllFailed([sources.cycles, sources.workouts]);
   const cyclesAvailable = !sourceUnreadable(sources.cycles);
   // Without cycles, sessions cannot be placed on their cycle days, so none is used.
@@ -331,7 +324,7 @@ async function loadReleasedTraining(
       gate: trainingWeekGate(totals, sleepsComplete && weekFinal(monday, placement, records)),
     };
   });
-  const notes: string[] = [];
+  const notes: string[] = [...sources.warnings];
   if (cyclesAvailable && !sleepsComplete) {
     notes.push(
       "Sleep data could not be read completely, so days cannot be placed as the other aggregate tools place them and every week is withheld; repeating the request continues loading from the cache."
@@ -1101,7 +1094,6 @@ export async function getSportBreakdownAggregate(
 
   if (filter !== null) {
     const match = sportsAll.find((sport) => sportKey(sport.sport_name) === filter);
-    const pooledMatch = pooledNames.find((name) => sportKey(name) === filter);
     sports = match ? [match] : [];
     other = null;
     if (match) {
@@ -1114,13 +1106,14 @@ export async function getSportBreakdownAggregate(
         trimp_total: match.trimp_total,
       };
     } else {
+      // The same note whether the name belongs to a pooled sport or to none, so
+      // a filter never reveals which sports are pooled as other.
       overall = withheldOverall;
+      const shown = orderedSports.slice(0, MAX_AGGREGATE_SPORTS).map((sport) => sport.sport_name);
       notes.push(
-        pooledMatch !== undefined
-          ? `"${args.sport}" has fewer than ${SPORT_MIN_SESSIONS} sessions in this block, so it is withheld.`
-          : releasedNames.length > 0
-            ? `No sport "${args.sport}" with at least ${SPORT_MIN_SESSIONS} sessions in this block; sports shown: ${releasedNames.slice(0, MAX_AGGREGATE_SPORTS).join(", ")}.`
-            : `No sport "${args.sport}" with at least ${SPORT_MIN_SESSIONS} sessions in this block.`
+        shown.length > 0
+          ? `No sport "${args.sport}" with at least ${SPORT_MIN_SESSIONS} sessions in this block; sports shown: ${shown.join(", ")}.`
+          : `No sport "${args.sport}" with at least ${SPORT_MIN_SESSIONS} sessions in this block.`
       );
     }
   }

@@ -6,6 +6,7 @@ import { mkdtemp } from "node:fs/promises";
 const fsFaults = vi.hoisted(() => ({
   rename: null as null | ((from: string, to: string) => Promise<void> | undefined),
   writeFile: null as null | ((path: string) => Promise<void> | undefined),
+  readFile: null as null | ((path: string) => Promise<string> | undefined),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -16,13 +17,15 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       fsFaults.rename?.(from, to) ?? actual.rename(from, to),
     writeFile: (...args: Parameters<typeof actual.writeFile>): Promise<void> =>
       fsFaults.writeFile?.(String(args[0])) ?? actual.writeFile(...args),
+    readFile: ((...args: Parameters<typeof actual.readFile>) =>
+      fsFaults.readFile?.(String(args[0])) ?? actual.readFile(...args)) as typeof actual.readFile,
   };
 });
 
 function fsError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: simulated`), { code });
 }
-import { homedir, tmpdir } from "node:os";
+import { homedir, tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type { OAuthTokens } from "../../src/auth/token-store.js";
 import {
@@ -32,6 +35,7 @@ import {
   deleteTokens,
   resolveTokenDir,
   TOKEN_DIR_ENV,
+  TokenStoreReadError,
 } from "../../src/auth/token-store.js";
 
 /**
@@ -421,6 +425,96 @@ describe("loadTokens", () => {
 
     const loaded = await loadTokens(tempDir);
     expect(loaded).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A token file that exists but cannot be read must never look like "no tokens"
+// (which would start a new WHOOP sign-in over a valid stored one)
+// ---------------------------------------------------------------------------
+
+describe("loadTokens when the token file cannot be read", () => {
+  let tempDir: string;
+  let errSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "whoop-mcp-test-"));
+    errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(async () => {
+    fsFaults.readFile = null;
+    errSpy.mockRestore();
+    await rm(tempDir, { recursive: true });
+  });
+
+  function logged(): string {
+    return errSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+  }
+
+  it("rejects with TokenStoreReadError (EISDIR) when tokens.json is a directory", async () => {
+    const { mkdir } = await import("node:fs/promises");
+    await mkdir(join(tempDir, "tokens.json"));
+
+    const error = await loadTokens(tempDir).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(TokenStoreReadError);
+    expect((error as TokenStoreReadError).code).toBe("EISDIR");
+    expect((error as TokenStoreReadError).name).toBe("TokenStoreReadError");
+  });
+
+  it.each(["EACCES", "EPERM", "EIO", "ENOTDIR"])(
+    "rejects with TokenStoreReadError on %s, with guidance and without starting a sign-in",
+    async (code) => {
+      fsFaults.readFile = (): Promise<string> => Promise.reject(fsError(code));
+
+      const error = await loadTokens(tempDir).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(TokenStoreReadError);
+      const readError = error as TokenStoreReadError;
+      expect(readError.code).toBe(code);
+      expect(readError.message).toContain(`(${code})`);
+      expect(readError.message).toContain("no new WHOOP sign-in was started");
+      expect(readError.message).toContain("chown 1000:1000");
+      expect(readError.message).toContain("WHOOP_MCP_TOKEN_DIR");
+      expect(readError.message).toContain("docker/entrypoint.sh");
+      expect(logged()).toContain(`(${code})`);
+    }
+  );
+
+  it("still returns null for a missing file, bad JSON and a bad shape", async () => {
+    const { writeFile } = await import("node:fs/promises");
+    expect(await loadTokens(tempDir)).toBeNull();
+    await writeFile(join(tempDir, "tokens.json"), "{not json", "utf-8");
+    expect(await loadTokens(tempDir)).toBeNull();
+    await writeFile(join(tempDir, "tokens.json"), JSON.stringify({ access_token: "a" }), "utf-8");
+    expect(await loadTokens(tempDir)).toBeNull();
+  });
+
+  it("never logs or throws the home path, the OS user name or the file content", async () => {
+    const dir = join(homedir(), ".whoop-mcp-unreadable-test");
+    const user = userInfo().username;
+    // Node's own message quotes the absolute path, which contains the user name.
+    fsFaults.readFile = (path): Promise<string> =>
+      Promise.reject(
+        Object.assign(new Error(`EACCES: permission denied, open '${path}'`), { code: "EACCES" })
+      );
+
+    const error = (await loadTokens(dir).catch((e: unknown) => e)) as TokenStoreReadError;
+
+    expect(error).toBeInstanceOf(TokenStoreReadError);
+    expect(error.message).toContain(join("~", ".whoop-mcp-unreadable-test", "tokens.json"));
+    for (const text of [logged(), error.message]) {
+      expect(text).not.toContain(homedir());
+      expect(text).not.toContain(user);
+      expect(text).not.toContain("permission denied");
+    }
+
+    // A malformed file is ignored without echoing its content.
+    fsFaults.readFile = (): Promise<string> => Promise.resolve('{"refresh_token": "SECRET-R');
+    expect(await loadTokens(dir)).toBeNull();
+    expect(logged()).not.toContain("SECRET-R");
+    expect(logged()).not.toContain(homedir());
   });
 });
 

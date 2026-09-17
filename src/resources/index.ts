@@ -23,10 +23,15 @@
 
 import type { WhoopClient } from "../api/client.js";
 import { describeWhoopError, WhoopApiError } from "../api/client.js";
-import { cycleRecordSchema, workoutRecordSchema } from "../api/record-schemas.js";
+import {
+  cycleRecordSchema,
+  sleepRecordSchema,
+  workoutRecordSchema,
+} from "../api/record-schemas.js";
+import type { Sleep } from "../api/types.js";
 import { localDay } from "../tools/analytics-utils.js";
 import { parseUtcOffset } from "../tools/date-utils.js";
-import { mainDayOf, type WorkoutPlacement } from "../tools/day-model.js";
+import { isBetterSleep, mainDayOf, type WorkoutPlacement } from "../tools/day-model.js";
 import {
   HR_ZONE_CAVEAT_SPORT,
   MIN_RECORDED_FRACTION,
@@ -262,6 +267,48 @@ async function readLatestCycleForWorkout(client: WhoopClient): Promise<LatestCyc
   }
 }
 
+/** The main sleep of a cycle as read for the workout resource: found, none, or a failed read. */
+type CycleSleepRead = { status: "read"; sleep: Sleep | undefined } | { status: "failed" };
+
+/**
+ * The main sleep that started `cycleId` (the one placeDays would pick with
+ * isBetterSleep), from the latest sleep page, else from /v2/cycle/{id}/sleep
+ * (404: the cycle has no main sleep, e.g. the partial first day of wear).
+ */
+async function readCycleMainSleep(
+  client: WhoopClient,
+  page: Promise<unknown>,
+  cycleId: number
+): Promise<CycleSleepRead> {
+  let best: Sleep | undefined;
+  try {
+    for (const record of pageRecords(await page)) {
+      const parsed = sleepRecordSchema.safeParse(record);
+      if (!parsed.success || parsed.data.nap || parsed.data.cycle_id !== cycleId) continue;
+      if (best === undefined || isBetterSleep(parsed.data, best)) best = parsed.data;
+    }
+  } catch {
+    return { status: "failed" };
+  }
+  if (best !== undefined) {
+    return { status: "read", sleep: best };
+  }
+  try {
+    const raw = await client.get<unknown>(`/v2/cycle/${cycleId}/sleep`, {
+      cache: true,
+      ttlMs: CYCLE_TTL_MS,
+    });
+    const parsed = sleepRecordSchema.safeParse(raw);
+    return parsed.success && !parsed.data.nap && parsed.data.cycle_id === cycleId
+      ? { status: "read", sleep: parsed.data }
+      : { status: "failed" };
+  } catch (error: unknown) {
+    return httpStatusOf(error) === 404
+      ? { status: "read", sleep: undefined }
+      : { status: "failed" };
+  }
+}
+
 /** The newest finished workout in a page: end at or before now and after its start. */
 function newestFinishedWorkout(records: JsonRecord[], nowMs: number): JsonRecord | undefined {
   const finished = records.flatMap((record) => {
@@ -280,11 +327,15 @@ function newestFinishedWorkout(records: JsonRecord[], nowMs: number): JsonRecord
 
 /**
  * The latest finished workout as the shared workout summary. Its day is the
- * local day of the latest WHOOP cycle when that cycle contains the start;
- * otherwise the workout's local start date (day_by_fallback).
+ * local day of the latest WHOOP cycle when that cycle contains the start (the
+ * day its main sleep ended, as get_day places it); otherwise the workout's
+ * local start date (day_by_fallback). A day is never after the local today.
  */
 async function latestWorkoutView(client: WhoopClient): Promise<unknown> {
   const nowMs = Date.now();
+  const sleepPage = getPage(client, SLEEP_PATH, false);
+  // Settled here; readCycleMainSleep reports a failure only when the day needs it.
+  sleepPage.catch(() => undefined);
   const [page, cycleRead] = await Promise.all([
     client.get<unknown>(WORKOUT_LIST_PATH, { cache: true, ttlMs: CYCLE_TTL_MS }),
     readLatestCycleForWorkout(client),
@@ -308,8 +359,23 @@ async function latestWorkoutView(client: WhoopClient): Promise<unknown> {
   const contained = cycle !== undefined && cycleStartMs <= startMs && startMs < cycleEndMs;
 
   let placement: WorkoutPlacement | null = null;
+  let dayEstimated = false;
+  let dayClamped = false;
   if (contained && cycle) {
-    const day = mainDayOf(cycle, new Map());
+    const sleepRead = await readCycleMainSleep(client, sleepPage, cycle.id);
+    dayEstimated = sleepRead.status === "failed";
+    const mainSleepByCycle = new Map<number, Sleep>();
+    if (sleepRead.status === "read" && sleepRead.sleep !== undefined) {
+      mainSleepByCycle.set(cycle.id, sleepRead.sleep);
+    }
+    // A finished workout never counts toward a day after today (the cycle-start
+    // estimate of an open cycle begun in the afternoon would be tomorrow).
+    const today = localDay(new Date(nowMs).toISOString(), workout.timezone_offset);
+    let day = mainDayOf(cycle, mainSleepByCycle);
+    if (day > today) {
+      day = today;
+      dayClamped = true;
+    }
     placement = {
       day,
       cycle,
@@ -327,6 +393,17 @@ async function latestWorkoutView(client: WhoopClient): Promise<unknown> {
   if (summary.recorded_fraction !== null && summary.recorded_fraction < MIN_RECORDED_FRACTION) {
     notes.push(
       `Heart-rate data covers only ${Math.round(summary.recorded_fraction * 100)}% of this workout, so its strain, heart-rate zones and calories reflect the recorded part only.`
+    );
+  }
+  if (dayEstimated) {
+    notes.push(
+      dayClamped
+        ? "The day is estimated because sleep data could not be read: the cycle start would place it after today, so it is shown on today."
+        : "The day is estimated from the cycle start because sleep data could not be read."
+    );
+  } else if (dayClamped) {
+    notes.push(
+      "The current WHOOP cycle has no main sleep record, and its start would place this workout after today, so day is today."
     );
   }
   if (cycleRead.status === "failed") {

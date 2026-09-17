@@ -9,7 +9,8 @@
  * other-pool and differenceSafe rules, released block totals never isolating
  * fewer than 3 sessions together with the released weekly totals (planned
  * blocks and matureUser seeds), a leak scan on the live-shaped account, sport
- * filters, non-final blocks, source counts limited to final released weeks,
+ * filters (a pooled sport's filter answers like a sport that does not exist),
+ * non-final blocks, source counts limited to final released weeks,
  * day placement by main sleep shared with get_weekly_summary (weekly totals
  * never differ between aggregate tools; unreadable sleeps withhold every week),
  * output size on stressUser and both tools in the aggregate tools/list with
@@ -1020,6 +1021,34 @@ describe("get_sport_breakdown aggregate", () => {
     expect(
       unknown.notes.some((note) => note.startsWith('No sport "rowing" with at least 3 sessions'))
     ).toBe(true);
+  });
+
+  it("answers a filter for a pooled sport exactly like one for a sport that does not exist", async () => {
+    let pooledBlocks = 0;
+    for (const seed of [1, 2]) {
+      const fixture = matureUser({ days: 120, seed });
+      const names = [...new Set(fixture.workouts.map((workout) => workout.sport_name))];
+      for (const block_offset of [1, 2, 3]) {
+        const all = await breakdownAggregate(fixture, { block_offset });
+        if (all.other !== null && (all.other.sports ?? 0) > 0) pooledBlocks++;
+        const shown = new Set(all.sports.map((sport) => sport.sport_name));
+        // The queried name is echoed; everything else must not depend on it.
+        const normalized = async (query: string): Promise<string> =>
+          JSON.stringify(await breakdownAggregate(fixture, { block_offset, sport: query }))
+            .split(query)
+            .join("<SPORT>");
+        const baseline = await normalized("NO_SUCH_SPORT");
+        for (const name of names.filter((candidate) => !shown.has(candidate))) {
+          expect(
+            await normalized(name.toUpperCase()),
+            `seed ${seed} block ${block_offset} ${name}`
+          ).toBe(baseline);
+        }
+        expect(baseline).not.toContain("so it is withheld");
+      }
+    }
+    // At least one block pools a sport, so the comparison covers pooled names.
+    expect(pooledBlocks).toBeGreaterThan(0);
   });
 
   it("withholds a block that is not final and moves back with block_offset", async () => {

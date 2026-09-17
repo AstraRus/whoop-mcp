@@ -910,8 +910,9 @@ describe("createWhoopServer (error handling)", () => {
   });
 
   it("keeps RangeError and unknown error details out of the message", async () => {
+    // A RangeError comes from processing WHOOP data, not from the caller's input.
     expect(await errorText(new RangeError("Invalid time value SECRET"))).toBe(
-      "Invalid input or data. Check the requested parameters and date range."
+      "The server could not process the WHOOP data for this request."
     );
     expect(await errorText(new Error("Insufficient data SECRET"))).toBe(
       "An unexpected error occurred. Check configuration and retry."

@@ -137,8 +137,47 @@ export class WhoopAuthError extends Error {
 /** Maximum depth followed through `cause` chains when classifying an error */
 const MAX_CAUSE_DEPTH = 5;
 
+/** undici error codes of a fetch that timed out (surfaced as the cause of a TypeError). */
+const UNDICI_TIMEOUT_CODES: ReadonlySet<string> = new Set([
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+]);
+
+/**
+ * A request that did not complete in time: an abort or timeout (including a
+ * DOMException TimeoutError), or undici's "fetch failed" TypeError caused by a
+ * headers, body or connect timeout.
+ */
 function isTimeoutError(error: unknown): boolean {
-  return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+  if (typeof error !== "object" || error === null) return false;
+  const name = (error as { name?: unknown }).name;
+  if (name === "TimeoutError" || name === "AbortError") return true;
+  if (error instanceof TypeError) {
+    const cause: unknown = error.cause;
+    const code =
+      typeof cause === "object" && cause !== null ? (cause as { code?: unknown }).code : undefined;
+    return typeof code === "string" && UNDICI_TIMEOUT_CODES.has(code);
+  }
+  return false;
+}
+
+/**
+ * The endpoint of a request path for logs: no query string, and every path
+ * segment that is not a version or a lower-case word (ids, dates) replaced by
+ * ':id'.
+ */
+function logEndpoint(path: string): string {
+  return path
+    .split("?")[0]!
+    .split("/")
+    .map((s) => (s === "" || /^v\d+$/.test(s) || /^[a-z_]+$/.test(s) ? s : ":id"))
+    .join("/");
+}
+
+/** The name of a thrown value for logs (never its message, which can quote a URL or body). */
+function errorClassOf(error: unknown): string {
+  return error instanceof Error ? error.name : typeof error;
 }
 
 /**
@@ -338,7 +377,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
     return requestId !== undefined ? { requestId, ...extra } : extra;
   }
 
-  async function doFetch(url: string, accessToken: string): Promise<Response> {
+  async function doFetch(url: string, endpoint: string, accessToken: string): Promise<Response> {
     const startedAt = Date.now();
     try {
       const res = await fetch(url, {
@@ -351,7 +390,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
       });
       logger?.debug(
         "whoop api request",
-        logExtras({ url, status: res.status, durationMs: Date.now() - startedAt })
+        logExtras({ endpoint, status: res.status, durationMs: Date.now() - startedAt })
       );
       return res;
     } catch (error: unknown) {
@@ -359,20 +398,13 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
       if (error instanceof WhoopApiError) {
         throw error;
       }
-      // AbortError from AbortSignal.timeout → request timed out
-      const isTimeout =
-        error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
-      if (isTimeout) {
-        logger?.error("whoop api timeout", logExtras({ url, durationMs, error: error.message }));
+      // TimeoutError from AbortSignal.timeout, or an undici timeout: the request timed out.
+      // Only the error class is logged: messages can quote the URL.
+      const errorClass = errorClassOf(error);
+      if (isTimeoutError(error)) {
+        logger?.error("whoop api timeout", logExtras({ endpoint, durationMs, errorClass }));
       } else {
-        logger?.error(
-          "whoop api network error",
-          logExtras({
-            url,
-            durationMs,
-            error: error instanceof Error ? error.message : String(error),
-          })
-        );
+        logger?.error("whoop api network error", logExtras({ endpoint, durationMs, errorClass }));
       }
       throw new WhoopNetworkError(error);
     }
@@ -385,6 +417,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
    */
   async function sendAttempt(
     url: string,
+    endpoint: string,
     token: string,
     deadlineMs: number | undefined
   ): Promise<Response> {
@@ -392,11 +425,11 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
       throw new WhoopRateBudgetError();
     }
     if (rateLimiter === undefined) {
-      return doFetch(url, token);
+      return doFetch(url, endpoint, token);
     }
     const release = await rateLimiter.acquire(deadlineMs);
     try {
-      const response = await doFetch(url, token);
+      const response = await doFetch(url, endpoint, token);
       rateLimiter.noteHeaders(
         numericHeader(response, "x-ratelimit-remaining"),
         numericHeader(response, "x-ratelimit-reset")
@@ -415,14 +448,14 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
    * the body, so a reset, a timeout mid-body or a non-JSON body (e.g. a proxy
    * page) is reported as a WhoopNetworkError like a failed fetch.
    */
-  async function readJson<T>(response: Response, url: string): Promise<T> {
+  async function readJson<T>(response: Response, endpoint: string): Promise<T> {
     try {
       return (await response.json()) as T;
     } catch (error: unknown) {
       // Log the error name only: a SyntaxError message can quote the body.
       logger?.error(
         "whoop api response read failed",
-        logExtras({ url, error: error instanceof Error ? error.name : typeof error })
+        logExtras({ endpoint, errorClass: errorClassOf(error) })
       );
       throw new WhoopNetworkError(error);
     }
@@ -451,12 +484,30 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
       if (getOptions.refresh === true) {
         cache.delete(key);
       }
-      const { value, storedAt, hit } = await cache.getOrFetchWithMeta<T>(
-        key,
-        getOptions.ttlMs ?? DEFAULT_TTL_MS,
-        () => doGet<T>(path, deadlineMs)
-      );
-      return { data: value, fetchedAt: storedAt, cacheStatus: hit ? "hit" : "miss" };
+      // The fetcher runs synchronously when this call starts the fetch, so a
+      // rejection without it having run came from a fetch another call started.
+      let ownFetch = false;
+      try {
+        const { value, storedAt, hit } = await cache.getOrFetchWithMeta<T>(
+          key,
+          getOptions.ttlMs ?? DEFAULT_TTL_MS,
+          () => {
+            ownFetch = true;
+            return doGet<T>(path, deadlineMs);
+          }
+        );
+        return { data: value, fetchedAt: storedAt, cacheStatus: hit ? "hit" : "miss" };
+      } catch (error: unknown) {
+        // A joined fetch runs within the deadline of the call that started it:
+        // when that deadline stopped it and this call still has time, read once
+        // more with this call's own deadline.
+        const canStillRead = deadlineMs === undefined || Date.now() < deadlineMs;
+        if (ownFetch || !(error instanceof WhoopRateBudgetError) || !canStillRead) {
+          throw error;
+        }
+        const data = await doGet<T>(path, deadlineMs);
+        return { data, fetchedAt: Date.now(), cacheStatus: "miss" };
+      }
     }
     const data = await doGet<T>(path, deadlineMs);
     return { data, fetchedAt: Date.now(), cacheStatus: "miss" };
@@ -478,15 +529,19 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
    * refresh. The shared promise is cleared once it settles, so after a failed
    * refresh (which rejects every waiter) the next 401 may try again.
    */
-  function refreshAccessTokenOnce(refresh: () => Promise<string>, url: string): Promise<string> {
+  function refreshAccessTokenOnce(
+    refresh: () => Promise<string>,
+    endpoint: string
+  ): Promise<string> {
     if (refreshInFlight !== null) {
-      logger?.debug("whoop token refresh already in progress", logExtras({ url }));
+      logger?.debug("whoop token refresh already in progress", logExtras({ endpoint }));
       return refreshInFlight;
     }
     const flight = (async (): Promise<string> => {
       const newToken = await refresh();
       accessToken = newToken;
-      logger?.info("whoop token refreshed", logExtras({ url }));
+      // The token owner (index.ts) logs the refresh at info; this line ties it to an endpoint.
+      logger?.debug("whoop token refreshed", logExtras({ endpoint }));
       return newToken;
     })();
     refreshInFlight = flight;
@@ -500,8 +555,49 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
     return flight;
   }
 
+  /**
+   * Wait for the shared token refresh, but no longer than this request's
+   * deadline. The refresh itself is not cancelled (other requests and the
+   * stored tokens depend on it); only this request stops waiting, with a
+   * WhoopNetworkError whose cause is a TimeoutError. A failed refresh is a
+   * WhoopAuthError.
+   */
+  async function awaitRefresh(
+    refresh: () => Promise<string>,
+    endpoint: string,
+    deadlineMs: number | undefined
+  ): Promise<string> {
+    const refreshing = refreshAccessTokenOnce(refresh, endpoint).catch(
+      (refreshError: unknown): never => {
+        throw new WhoopAuthError(refreshError);
+      }
+    );
+    if (deadlineMs === undefined) {
+      return refreshing;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(
+        () => {
+          reject(
+            new WhoopNetworkError(
+              new DOMException("The token refresh did not finish in time", "TimeoutError")
+            )
+          );
+        },
+        Math.max(0, deadlineMs - Date.now())
+      );
+    });
+    try {
+      return await Promise.race([refreshing, timedOut]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   async function doGet<T>(path: string, deadlineMs?: number): Promise<T> {
     const url = `${baseUrl}${path}`;
+    const endpoint = logEndpoint(path);
     let lastError: WhoopApiError | undefined;
     let lastResponse: Response | undefined;
 
@@ -519,10 +615,10 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
 
       // Always send the latest token: another request may have refreshed it.
       const sentToken = accessToken;
-      const response = await sendAttempt(url, sentToken, deadlineMs);
+      const response = await sendAttempt(url, endpoint, sentToken, deadlineMs);
 
       if (response.ok) {
-        return await readJson<T>(response, url);
+        return await readJson<T>(response, endpoint);
       }
 
       const body = await parseErrorBody(response);
@@ -533,7 +629,7 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
         const retryAfterMs = parseRetryAfter(response);
         logger?.warn(
           "whoop api rate limited",
-          logExtras({ url, attempt, retryAfterMs: retryAfterMs ?? undefined })
+          logExtras({ endpoint, attempt, retryAfterMs: retryAfterMs ?? undefined })
         );
         lastError = apiError;
         lastResponse = response;
@@ -547,17 +643,13 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
           // Another request already refreshed the token while this one was in flight.
           newToken = accessToken;
         } else {
-          try {
-            newToken = await refreshAccessTokenOnce(options.onTokenRefresh, url);
-          } catch (refreshError: unknown) {
-            throw new WhoopAuthError(refreshError);
-          }
+          newToken = await awaitRefresh(options.onTokenRefresh, endpoint, deadlineMs);
         }
 
         // Retry with the new token
-        const retryResponse = await sendAttempt(url, newToken, deadlineMs);
+        const retryResponse = await sendAttempt(url, endpoint, newToken, deadlineMs);
         if (retryResponse.ok) {
-          return await readJson<T>(retryResponse, url);
+          return await readJson<T>(retryResponse, endpoint);
         }
 
         // Retry also failed — throw the original error

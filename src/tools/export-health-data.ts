@@ -874,8 +874,13 @@ export async function exportHealthData(
     );
   }
   if (datasets.has("daily")) {
+    const firstWornDay = included.some((bundle) => bundle.daily?.day_strain_partial === true);
     notes.push(
-      "energy_kj, avg_hr_bpm and max_hr_bpm cover the whole WHOOP cycle (sleep onset to next sleep onset), not a calendar day; asleep_h is light + slow-wave + REM of the main sleep, without naps."
+      "energy_kj, avg_hr_bpm and max_hr_bpm cover the whole WHOOP cycle (sleep onset to next sleep onset" +
+        (firstWornDay
+          ? "; on the first day of wear, day_strain_partial true, from local midnight to the next sleep onset"
+          : "") +
+        "), not a calendar day; asleep_h is light + slow-wave + REM of the main sleep, without naps."
     );
   }
   notes.push(
@@ -1048,6 +1053,7 @@ export async function exportHealthData(
         : `${label} history before ${firstReliable} could not be read completely in this call (request budget, time limit or a failed page), so rows before ${firstReliable} may lack ${label.toLowerCase()} records. Repeating the request continues from the cache.`
     );
   }
+  warnings.push(...sources.warnings);
   for (const displaced of history.placement.displaced) {
     if (firstIncludedDay === null || displaced.day < firstIncludedDay || displaced.day > lastDay) {
       continue;
@@ -1125,7 +1131,7 @@ export async function exportHealthData(
       limitations: [
         ...DAY_PLACEMENT_LIMITATIONS,
         `Exports cover at most ${EXPORT_MAX_DAYS} days and ${EXPORT_MAX_CHARS} characters of datasets per call; the oldest days are left out first.`,
-        "CSV text cells starting with =, +, -, @, tab or carriage return get a leading apostrophe so spreadsheet programs do not evaluate them.",
+        "CSV text cells starting with =, +, -, @, tab or carriage return get a leading apostrophe (UTC offsets such as +02:00 excepted) so spreadsheet programs do not evaluate them.",
       ],
     }),
     disclaimer: DISCLAIMER,

@@ -323,9 +323,9 @@ describe("export_health_data on the live-shaped account", () => {
       Array.from({ length: 30 }, (_, index) => addDays("2026-08-18", index))
     );
 
-    // An empty day has blank cells after date and utc_offset (the offset is formula-guarded).
+    // An empty day has blank cells after date and utc_offset (a bare UTC offset is not formula-guarded).
     const empty = rows.find((row) => row.date === "2026-09-13")!;
-    expect(empty.utc_offset).toBe("'+02:00");
+    expect(empty.utc_offset).toBe("+02:00");
     expect(
       DAILY_COLUMNS.slice(2).every((column) => empty[column] === ""),
       JSON.stringify(empty)
@@ -397,7 +397,7 @@ describe("export_health_data on the live-shaped account", () => {
     expect(workouts[7]!.recorded_pct).toBe("100");
 
     expect(result.notes).toContain(
-      "energy_kj, avg_hr_bpm and max_hr_bpm cover the whole WHOOP cycle (sleep onset to next sleep onset), not a calendar day; asleep_h is light + slow-wave + REM of the main sleep, without naps."
+      "energy_kj, avg_hr_bpm and max_hr_bpm cover the whole WHOOP cycle (sleep onset to next sleep onset; on the first day of wear, day_strain_partial true, from local midnight to the next sleep onset), not a calendar day; asleep_h is light + slow-wave + REM of the main sleep, without naps."
     );
     expect(result.notes).toContain(
       "WHOOP is still calibrating: recovery for 2026-09-15, 2026-09-16 is provisional (recovery_calibrating: true)."
