@@ -194,8 +194,10 @@ describe("getBaselines", () => {
       required_sample_size: 14,
       status: "insufficient_data",
     });
-    expect(result.metric_status.hrv.reason).toContain("Not enough data yet (13 of 14");
-    expect(result.metric_status.sleep_hours.reason).toContain("13 of 14");
+    expect(result.metric_status.hrv.reason).toContain(
+      "Not enough data yet (13 earlier scored days so far, 14 needed"
+    );
+    expect(result.metric_status.sleep_hours.reason).toContain("13 earlier ones so far, 14 needed");
   });
   it("excludes calibration and missing cycle context without affecting sleep", async () => {
     const records = Array.from({ length: 20 }, (_, index) => recoveryFixture(index));
@@ -354,7 +356,7 @@ describe("getBaselines with a new, calibrating user (live shape)", () => {
       sample_size: 1,
     });
     expect(result.metric_status.sleep_hours.reason).toContain(
-      "Not enough data yet (2 scored main sleeps in this window; 1 of 14"
+      "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed"
     );
     expect(result.metric_status.respiratory_rate.reason).toContain(
       "WHOOP reported no respiratory rate for 1 of 2 scored main sleeps."
@@ -756,7 +758,7 @@ describe("getBaselines — SpO2, skin temperature and sleep detail", () => {
       sample_size: 13,
     });
     expect(result.metric_status.sleep_efficiency.reason).toBe(
-      "Not enough data yet (15 scored main sleeps in this window; 13 of 14 earlier ones needed, the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
+      "Not enough data yet (15 scored main sleeps in this window; 13 earlier ones so far, 14 needed; the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
     );
     expect(result.notes).toContain(
       `Sleep efficiency, disturbances per hour, REM share and deep sleep share: ${result.metric_status.sleep_efficiency.reason}`

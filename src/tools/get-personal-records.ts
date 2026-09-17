@@ -96,7 +96,7 @@ export const DEFAULT_RECENT_DAYS = 7;
 /** Longest `recent_days` */
 export const MAX_RECENT_DAYS = 60;
 
-/** Sessions of a sport below which every session is a best (status few_sessions) */
+/** Sessions of a sport below which bests are not compared with earlier ones (status few_sessions) */
 export const MIN_RECORD_SESSIONS = 3;
 
 /** Cache lifetime of the probe for workouts before the period */
@@ -265,7 +265,8 @@ const METRICS: readonly MetricDefinition[] = [
 const METHOD_VERSION = "personal-records-1";
 
 /** The note every sport with too few sessions gets (spec wording) */
-export const FEW_SESSIONS_NOTE = "with fewer than 3 sessions every session is a best";
+export const FEW_SESSIONS_NOTE =
+  "fewer than 3 sessions are too few to compare a best with an earlier one";
 
 // ---------------------------------------------------------------------------
 // Schemas

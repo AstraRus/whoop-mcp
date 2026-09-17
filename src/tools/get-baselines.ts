@@ -496,7 +496,7 @@ export async function getBaselines(
         return {
           ...base,
           status: "calibrating",
-          reason: `WHOOP is still calibrating, so ${calibratingCount} of ${plural(scoredRecoveries, "scored recovery", "scored recoveries")} so far ${calibratingCount === 1 ? "is" : "are"} not used. Not enough data yet (${count} of ${required} earlier non-calibrating days needed; the most recent day and today are not counted).`,
+          reason: `WHOOP is still calibrating, so ${calibratingCount} of ${plural(scoredRecoveries, "scored recovery", "scored recoveries")} so far ${calibratingCount === 1 ? "is" : "are"} not used. Not enough data yet (${count} earlier non-calibrating days so far, ${required} needed; the most recent day and today are not counted).`,
         };
       const skipped = calibratingCount
         ? ` ${plural(calibratingCount, "earlier calibrating recovery", "earlier calibrating recoveries")} not used.`
@@ -504,7 +504,7 @@ export async function getBaselines(
       return {
         ...base,
         status: "insufficient_data",
-        reason: `Not enough data yet (${count} of ${required} earlier scored days needed; the most recent day and today are not counted).${skipped}`,
+        reason: `Not enough data yet (${count} earlier scored days so far, ${required} needed; the most recent day and today are not counted).${skipped}`,
       };
     }
     if (unreadable(sleep.quality))
@@ -545,7 +545,7 @@ export async function getBaselines(
     return {
       ...base,
       status: "insufficient_data",
-      reason: `Not enough data yet (${plural(nights.length, "scored main sleep")} in this window; ${count} of ${required} earlier ones needed, the most recent night and today are not counted).${details.join("")}`,
+      reason: `Not enough data yet (${plural(nights.length, "scored main sleep")} in this window; ${count} earlier ${count === 1 ? "one" : "ones"} so far, ${required} needed; the most recent night and today are not counted).${details.join("")}`,
     };
   };
   for (const metric of BASELINE_METRICS) {

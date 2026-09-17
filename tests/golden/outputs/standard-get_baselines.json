@@ -34,82 +34,82 @@
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "ms",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 earlier non-calibrating days so far, 14 needed; the most recent day and today are not counted)."
             },
             "rhr": {
               "status": "calibrating",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "bpm",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 earlier non-calibrating days so far, 14 needed; the most recent day and today are not counted)."
             },
             "respiratory_rate": {
               "status": "insufficient_data",
               "sample_size": 1,
               "required_sample_size": 14,
               "unit": "breaths/min",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
             },
             "sleep_hours": {
               "status": "insufficient_data",
               "sample_size": 1,
               "required_sample_size": 14,
               "unit": "hours",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
             },
             "recovery_score": {
               "status": "calibrating",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 earlier non-calibrating days so far, 14 needed; the most recent day and today are not counted)."
             },
             "spo2": {
               "status": "calibrating",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 earlier non-calibrating days so far, 14 needed; the most recent day and today are not counted)."
             },
             "skin_temp": {
               "status": "calibrating",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "°C",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 earlier non-calibrating days so far, 14 needed; the most recent day and today are not counted)."
             },
             "sleep_efficiency": {
               "status": "insufficient_data",
               "sample_size": 1,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
             },
             "disturbances_per_hour": {
               "status": "insufficient_data",
               "sample_size": 1,
               "required_sample_size": 14,
               "unit": "per hour asleep",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
             },
             "rem_share": {
               "status": "insufficient_data",
               "sample_size": 1,
               "required_sample_size": 14,
               "unit": "% of time asleep",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
             },
             "deep_share": {
               "status": "insufficient_data",
               "sample_size": 1,
               "required_sample_size": 14,
               "unit": "% of time asleep",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
             }
           },
           "notes": [
-            "HRV, resting heart rate, recovery score, SpO2 and skin temperature: WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted).",
-            "Sleep hours, respiratory rate, sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+            "HRV, resting heart rate, recovery score, SpO2 and skin temperature: WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 earlier non-calibrating days so far, 14 needed; the most recent day and today are not counted).",
+            "Sleep hours, respiratory rate, sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (2 scored main sleeps in this window; 1 earlier one so far, 14 needed; the most recent night and today are not counted)."
           ],
           "data_quality": {
             "evaluated_at": "2026-09-16T21:30:00.000Z",
@@ -970,32 +970,32 @@
               "sample_size": 13,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 of 14 earlier ones needed, the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
+              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 earlier ones so far, 14 needed; the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
             },
             "disturbances_per_hour": {
               "status": "insufficient_data",
               "sample_size": 13,
               "required_sample_size": 14,
               "unit": "per hour asleep",
-              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 of 14 earlier ones needed, the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
+              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 earlier ones so far, 14 needed; the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
             },
             "rem_share": {
               "status": "insufficient_data",
               "sample_size": 13,
               "required_sample_size": 14,
               "unit": "% of time asleep",
-              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 of 14 earlier ones needed, the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
+              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 earlier ones so far, 14 needed; the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
             },
             "deep_share": {
               "status": "insufficient_data",
               "sample_size": 13,
               "required_sample_size": 14,
               "unit": "% of time asleep",
-              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 of 14 earlier ones needed, the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
+              "reason": "Not enough data yet (15 scored main sleeps in this window; 13 earlier ones so far, 14 needed; the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used."
             }
           },
           "notes": [
-            "Sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (15 scored main sleeps in this window; 13 of 14 earlier ones needed, the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used.",
+            "Sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (15 scored main sleeps in this window; 13 earlier ones so far, 14 needed; the most recent night and today are not counted). 1 night with low data coverage (no strap data for more than 20% of time in bed) is not used.",
             "1 recovery is still being scored by WHOOP and not counted yet.",
             "1 sleep is still being scored by WHOOP and not counted yet."
           ],
@@ -1089,82 +1089,82 @@
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "ms",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 earlier scored days so far, 14 needed; the most recent day and today are not counted)."
             },
             "rhr": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "bpm",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 earlier scored days so far, 14 needed; the most recent day and today are not counted)."
             },
             "respiratory_rate": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "breaths/min",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
             },
             "sleep_hours": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "hours",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
             },
             "recovery_score": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 earlier scored days so far, 14 needed; the most recent day and today are not counted)."
             },
             "spo2": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 earlier scored days so far, 14 needed; the most recent day and today are not counted)."
             },
             "skin_temp": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "°C",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 earlier scored days so far, 14 needed; the most recent day and today are not counted)."
             },
             "sleep_efficiency": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
             },
             "disturbances_per_hour": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "per hour asleep",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
             },
             "rem_share": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "% of time asleep",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
             },
             "deep_share": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "% of time asleep",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
             }
           },
           "notes": [
-            "HRV, resting heart rate, recovery score, SpO2 and skin temperature: Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted).",
-            "Sleep hours, respiratory rate, sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+            "HRV, resting heart rate, recovery score, SpO2 and skin temperature: Not enough data yet (0 earlier scored days so far, 14 needed; the most recent day and today are not counted).",
+            "Sleep hours, respiratory rate, sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (0 scored main sleeps in this window; 0 earlier ones so far, 14 needed; the most recent night and today are not counted)."
           ],
           "data_quality": {
             "evaluated_at": "2026-09-16T21:30:00.000Z",
