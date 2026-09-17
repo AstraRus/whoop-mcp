@@ -25,19 +25,34 @@
  *   keeps the averages that exist but gets change_pct null and direction
  *   "insufficient_data", with a note that says why.
  * - A ±5% change counts as "unchanged".
+ * - training compares workout load per worn local day (a day with a WHOOP
+ *   cycle placed on it): workouts are placed with assignWorkouts on the day of
+ *   the cycle containing their start. Records are fetched over the period's
+ *   days plus fetchRangeForDays' two days either side, so after-midnight
+ *   workouts of the last day are included. A workout or cycle load failure
+ *   nulls only the training block, with a warning.
+ * - In aggregate privacy mode each period is snapped inward to whole released
+ *   local weeks and uses the samples every aggregate tool shares (see
+ *   get-trend.ts); training is not reported.
  */
 
 import type { z } from "zod";
 import type { WhoopClient } from "../api/client.js";
 import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../api/client.js";
 import { ABSOLUTE_MAX_RECORDS, fetchAllPages } from "../api/pagination.js";
-import { ENDPOINT_CYCLE, ENDPOINT_RECOVERY, ENDPOINT_SLEEP } from "../api/endpoints.js";
+import {
+  ENDPOINT_CYCLE,
+  ENDPOINT_RECOVERY,
+  ENDPOINT_SLEEP,
+  ENDPOINT_WORKOUT,
+} from "../api/endpoints.js";
 import {
   cycleRecordSchema,
   recoveryRecordSchema,
   sleepRecordSchema,
+  workoutRecordSchema,
 } from "../api/record-schemas.js";
-import type { Cycle, Recovery, Sleep } from "../api/types.js";
+import type { Cycle, Recovery, Sleep, Workout } from "../api/types.js";
 import { InvalidDateExpression, parseUtcOffset, resolveDateExpression } from "./date-utils.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import {
@@ -45,10 +60,30 @@ import {
   cycleDay,
   DAY_MS,
   localDay,
+  localMidnightMs,
   mainSleeps,
+  mostRelevantError,
   sourceQuality,
 } from "./analytics-utils.js";
-import { mean } from "./stats-utils.js";
+import { lastReleasedWeeks, roundStep, type LocalWeek } from "./aggregate-window.js";
+import { addDays, assignWorkouts, fetchRangeForDays, mondayOf, placeDays } from "./day-model.js";
+import {
+  AGGREGATE_METRIC_STEP,
+  aggregateMetric,
+  loadAggregateData,
+  releasedWeeksNote,
+  withheldWeekNotes,
+  type AggregateData,
+  type AggregateMetricResult,
+  type AnalyticsToolOptions,
+} from "./get-trend.js";
+import { mean, roundTo } from "./stats-utils.js";
+import {
+  edwardsTrimp,
+  MIN_RECORDED_FRACTION,
+  recordedFraction,
+  zoneMinutes,
+} from "./workout-utils.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -85,6 +120,33 @@ export interface PeriodSummary {
   last_day: string | null;
 }
 
+/** Training load of one period */
+export interface TrainingPeriodSummary {
+  /** Scored workouts placed on worn local days of the period */
+  sessions: number;
+  /** Counted local days with a WHOOP cycle placed on them */
+  worn_days: number;
+  /** Sessions per 7 worn days; null unless both periods have MIN_TRAINING_WORN_DAYS worn days */
+  sessions_per_week: number | null;
+  /** Workout minutes (start to end) per worn day, 0 on a worn day without workouts */
+  workout_minutes_per_worn_day: number | null;
+  /** Edwards TRIMP per worn day, leaving out days with a low-recorded or unscored workout */
+  trimp_per_worn_day: number | null;
+}
+
+/** Training load compared between the periods */
+export interface TrainingComparison {
+  period_a: TrainingPeriodSummary;
+  period_b: TrainingPeriodSummary;
+  change_pct: {
+    sessions_per_week: number | null;
+    workout_minutes_per_worn_day: number | null;
+    trimp_per_worn_day: number | null;
+  };
+  /** From trimp_per_worn_day, ±5% counting as unchanged */
+  direction: StrainDirection;
+}
+
 /** Output shape for compare_periods */
 export interface PeriodComparison {
   period_a: PeriodSummary;
@@ -116,6 +178,8 @@ export interface PeriodComparison {
     change_pct: number | null;
     direction: StrainDirection;
   };
+  /** Null when workouts or cycles could not be loaded (see warnings); omitted in aggregate mode */
+  training: TrainingComparison | null;
   /** True when a source hit the record cap, so the oldest records of a period are missing */
   truncated: boolean;
   /** Plain-language explanations for nulls: sparse data, calibration, cycles in progress */
@@ -136,6 +200,9 @@ const UNCHANGED_THRESHOLD = 5;
 
 /** Minimum samples per period before a change and direction are reported */
 export const MIN_SAMPLES_PER_PERIOD = 3;
+
+/** Worn days each period needs before training means are reported */
+export const MIN_TRAINING_WORN_DAYS = 7;
 
 /** Extra time fetched on both sides of a period so edge records can be attributed */
 const FETCH_MARGIN_MS = DAY_MS;
@@ -161,6 +228,8 @@ interface ResolvedPeriod {
   dayEndMs: number;
   /** True when a past bound was moved to a local midnight (not just today's round-up) */
   snapped: boolean;
+  /** fetchRangeForDays over the counted days; null when the period counts no day */
+  dayRange: { startMs: number; endMs: number } | null;
   summary: PeriodSummary;
 }
 
@@ -242,6 +311,8 @@ function resolvePeriod(
   // An end later today only rounds up to keep today; that is not worth a note
   const endRoundedUpForToday =
     endMs >= nowMs && dayEndMs === snapToLocalMidnight(nowMs, nowMs, utcOffset);
+  const firstDay = coversDays ? dayAt(dayStartMs, utcOffset) : null;
+  const lastDay = coversDays ? dayAt(dayEndMs - DAY_MS, utcOffset) : null;
   return {
     key,
     label,
@@ -250,12 +321,16 @@ function resolvePeriod(
     dayStartMs,
     dayEndMs,
     snapped: dayStartMs !== startMs || (dayEndMs !== endMs && !endRoundedUpForToday),
+    dayRange:
+      firstDay !== null && lastDay !== null
+        ? fetchRangeForDays(firstDay, lastDay, utcOffset, nowMs)
+        : null,
     summary: {
       start: formatInstant(startMs, utcOffset),
       end: formatInstant(inclusiveEndMs, utcOffset),
       days: round(days, 2),
-      first_day: coversDays ? dayAt(dayStartMs, utcOffset) : null,
-      last_day: coversDays ? dayAt(dayEndMs - DAY_MS, utcOffset) : null,
+      first_day: firstDay,
+      last_day: lastDay,
     },
   };
 }
@@ -276,13 +351,21 @@ interface PeriodLoad {
   recovery: SourceLoad<Recovery>;
   sleep: SourceLoad<Sleep>;
   cycle: SourceLoad<Cycle>;
+  workout: SourceLoad<Workout>;
 }
 
-/** The fetched window: the period and its counted days, plus a margin on both sides */
+/**
+ * The fetched window: the period and its counted days with a margin on both
+ * sides, widened to fetchRangeForDays over the counted days (two days either
+ * side) so workouts after midnight of the last day and the cycles that place
+ * them are read.
+ */
 function fetchWindow(period: ResolvedPeriod): { start: string; end: string } {
+  const start = Math.min(period.startMs, period.dayStartMs) - FETCH_MARGIN_MS;
+  const end = Math.max(period.endMs, period.dayEndMs) + FETCH_MARGIN_MS;
   return {
-    start: new Date(Math.min(period.startMs, period.dayStartMs) - FETCH_MARGIN_MS).toISOString(),
-    end: new Date(Math.max(period.endMs, period.dayEndMs) + FETCH_MARGIN_MS).toISOString(),
+    start: new Date(Math.min(start, period.dayRange?.startMs ?? start)).toISOString(),
+    end: new Date(Math.max(end, period.dayRange?.endMs ?? end)).toISOString(),
   };
 }
 
@@ -317,7 +400,22 @@ async function loadSource<T>(
   }
 }
 
-/** Fetch recovery, sleep and cycle data for one period (serialized) */
+/**
+ * Fetch workouts for the training block. Every failure (including
+ * authorization, e.g. a token without the workout scope) only nulls training.
+ */
+async function loadWorkouts(
+  client: WhoopClient,
+  period: ResolvedPeriod
+): Promise<SourceLoad<Workout>> {
+  try {
+    return await loadSource<Workout>(client, ENDPOINT_WORKOUT, period, workoutRecordSchema);
+  } catch (error: unknown) {
+    return { records: [], truncated: false, invalid: 0, failed: true, error };
+  }
+}
+
+/** Fetch recovery, sleep, cycle and workout data for one period (serialized) */
 async function loadPeriod(client: WhoopClient, period: ResolvedPeriod): Promise<PeriodLoad> {
   const recovery = await loadSource<Recovery>(
     client,
@@ -327,7 +425,8 @@ async function loadPeriod(client: WhoopClient, period: ResolvedPeriod): Promise<
   );
   const sleep = await loadSource<Sleep>(client, ENDPOINT_SLEEP, period, sleepRecordSchema);
   const cycle = await loadSource<Cycle>(client, ENDPOINT_CYCLE, period, cycleRecordSchema);
-  return { recovery, sleep, cycle };
+  const workout = await loadWorkouts(client, period);
+  return { recovery, sleep, cycle, workout };
 }
 
 // ---------------------------------------------------------------------------
@@ -553,11 +652,14 @@ function insufficientNote(
 export async function comparePeriods(
   client: WhoopClient,
   params: ComparePeriodsParams,
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: AnalyticsToolOptions = {}
 ): Promise<PeriodComparison> {
   const { offset: utcOffset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
   const periodA = resolvePeriod("a", params.period_a_start, params.period_a_end, now, utcOffset);
   const periodB = resolvePeriod("b", params.period_b_start, params.period_b_end, now, utcOffset);
+  if (options.privacyMode === "aggregate")
+    return aggregateComparePeriods(client, periodA, periodB, now, utcOffset, offsetFallback);
 
   if (periodA.startMs < periodB.endMs && periodB.startMs < periodA.endMs) {
     throw new InvalidDateExpression(
@@ -573,6 +675,7 @@ export async function comparePeriods(
   const sources = [loadA, loadB].flatMap((load) => [load.recovery, load.sleep, load.cycle]);
   const firstFailure = sources.find((source) => source.failed);
   if (firstFailure && sources.every((source) => source.failed)) throw firstFailure.error;
+  const training = compareTraining(periodA, loadA, periodB, loadB, now, utcOffset);
 
   const samplesA = collectSamples(periodA, loadA, utcOffset);
   const samplesB = collectSamples(periodB, loadB, utcOffset);
@@ -582,7 +685,11 @@ export async function comparePeriods(
   const strain = compareSamples(samplesA.strain, samplesB.strain, 1);
 
   const calibrating = samplesA.calibrating + samplesB.calibrating > 0;
-  const warnings = [...loadWarnings(periodA, loadA), ...loadWarnings(periodB, loadB)];
+  const warnings = [
+    ...loadWarnings(periodA, loadA),
+    ...loadWarnings(periodB, loadB),
+    ...training.warnings,
+  ];
   const notes: string[] = [];
   const emptyPeriods = [periodA, periodB].filter((period) => period.summary.first_day === null);
 
@@ -650,6 +757,7 @@ export async function comparePeriods(
       );
     }
   }
+  notes.push(...training.notes);
 
   return {
     period_a: periodA.summary,
@@ -680,7 +788,455 @@ export async function comparePeriods(
       change_pct: strain.changePct,
       direction: strainDirection(strain.change),
     },
-    truncated: sources.some((source) => source.truncated),
+    training: training.value,
+    truncated: [...sources, loadA.workout, loadB.workout].some((source) => source.truncated),
+    notes: withOffsetNote(notes, offsetFallback),
+    warnings,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Training
+// ---------------------------------------------------------------------------
+
+interface TrainingTotals {
+  sessions: number;
+  wornDays: number;
+  minutes: number;
+  /** TRIMP of each worn day whose workouts were all scored and recorded to at least 90% */
+  knownTrimpDays: number[];
+  /** Worn days left out of the TRIMP mean */
+  unknownTrimpDays: number;
+  /** Workouts on counted days without a placed cycle (not counted) */
+  unwornWorkouts: number;
+  /** Workouts on worn days that WHOOP has not scored (not counted) */
+  unscoredWorkouts: number;
+  /** Counted workouts placed on their local start day without a containing cycle */
+  fallbackWorkouts: number;
+}
+
+/** Workout load on the worn local days of one period */
+function trainingTotals(
+  period: ResolvedPeriod,
+  load: PeriodLoad,
+  now: Date,
+  utcOffset: string
+): TrainingTotals {
+  const totals: TrainingTotals = {
+    sessions: 0,
+    wornDays: 0,
+    minutes: 0,
+    knownTrimpDays: [],
+    unknownTrimpDays: 0,
+    unwornWorkouts: 0,
+    unscoredWorkouts: 0,
+    fallbackWorkouts: 0,
+  };
+  const { first_day: first, last_day: last } = period.summary;
+  if (first === null || last === null) return totals;
+  const placement = placeDays({
+    cycles: load.cycle.records,
+    sleeps: load.sleep.records,
+    recoveries: load.recovery.records,
+    sleepsAvailable: !load.sleep.failed,
+    today: localDay(now.toISOString(), utcOffset),
+    utcOffset,
+  });
+  const placed = assignWorkouts(load.workout.records, placement, load.cycle.records);
+  const byDay = new Map<string, Workout[]>();
+  for (const workout of load.workout.records) {
+    const day = placed.get(workout.id)?.day;
+    if (day === undefined || !containsDay(period, day)) continue;
+    const list = byDay.get(day) ?? [];
+    list.push(workout);
+    byDay.set(day, list);
+  }
+  for (let day = first; day <= last; day = addDays(day, 1)) {
+    const workouts = byDay.get(day) ?? [];
+    if (!placement.cycleByDay.has(day)) {
+      totals.unwornWorkouts += workouts.length;
+      continue;
+    }
+    totals.wornDays += 1;
+    let trimp = 0;
+    let trimpKnown = true;
+    for (const workout of workouts) {
+      if (workout.score_state !== "SCORED" || !workout.score) {
+        totals.unscoredWorkouts += 1;
+        trimpKnown = false;
+        continue;
+      }
+      totals.sessions += 1;
+      if (placed.get(workout.id)?.fallback) totals.fallbackWorkouts += 1;
+      totals.minutes += Math.max(0, Date.parse(workout.end) - Date.parse(workout.start)) / 60_000;
+      if (recordedFraction(workout.score.percent_recorded) < MIN_RECORDED_FRACTION)
+        trimpKnown = false;
+      trimp += edwardsTrimp(zoneMinutes(workout.score.zone_durations));
+    }
+    if (trimpKnown) totals.knownTrimpDays.push(trimp);
+    else totals.unknownTrimpDays += 1;
+  }
+  return totals;
+}
+
+function percentChange(a: number | null, b: number | null): number | null {
+  if (a === null || b === null || a === 0) return null;
+  return roundTo(((b - a) / Math.abs(a)) * 100, 1);
+}
+
+/**
+ * The training block: sessions, worn days and per-worn-day means per period.
+ * Means need MIN_TRAINING_WORN_DAYS worn days in both periods; direction comes
+ * from trimp_per_worn_day (±5% unchanged). Null, with a warning, when the
+ * workout or cycle stream of either period could not be loaded.
+ */
+function compareTraining(
+  periodA: ResolvedPeriod,
+  loadA: PeriodLoad,
+  periodB: ResolvedPeriod,
+  loadB: PeriodLoad,
+  now: Date,
+  utcOffset: string
+): { value: TrainingComparison | null; notes: string[]; warnings: string[] } {
+  const warnings: string[] = [];
+  for (const [period, load] of [
+    [periodA, loadA],
+    [periodB, loadB],
+  ] as const) {
+    if (load.workout.failed)
+      warnings.push(
+        `Workout data for ${period.label} could not be loaded (${describeFailure(load.workout.error)}), so training is not compared.`
+      );
+    else if (load.cycle.failed)
+      warnings.push(
+        `Training is not compared: cycle data for ${period.label} could not be loaded, so worn days are unknown.`
+      );
+    if (load.workout.invalid > 0)
+      warnings.push(
+        `${plural(load.workout.invalid, "record", "records")} of workout data for ${period.label} did not match the expected WHOOP format and ${load.workout.invalid === 1 ? "was" : "were"} skipped.`
+      );
+    if (load.workout.truncated)
+      warnings.push(
+        `Workout data for ${period.label} reached the ${ABSOLUTE_MAX_RECORDS}-record limit, so the oldest workouts of that period are not included.`
+      );
+  }
+  if ([loadA, loadB].some((load) => load.workout.failed || load.cycle.failed))
+    return { value: null, notes: [], warnings };
+
+  const totalsA = trainingTotals(periodA, loadA, now, utcOffset);
+  const totalsB = trainingTotals(periodB, loadB, now, utcOffset);
+  const sufficient =
+    totalsA.wornDays >= MIN_TRAINING_WORN_DAYS && totalsB.wornDays >= MIN_TRAINING_WORN_DAYS;
+  const summary = (totals: TrainingTotals): TrainingPeriodSummary => ({
+    sessions: totals.sessions,
+    worn_days: totals.wornDays,
+    sessions_per_week: sufficient ? roundTo((totals.sessions / totals.wornDays) * 7, 2) : null,
+    workout_minutes_per_worn_day: sufficient ? roundTo(totals.minutes / totals.wornDays, 1) : null,
+    trimp_per_worn_day:
+      sufficient && totals.knownTrimpDays.length ? roundTo(mean(totals.knownTrimpDays), 1) : null,
+  });
+  const a = summary(totalsA);
+  const b = summary(totalsB);
+
+  // Direction from the unrounded TRIMP means.
+  const trimpA = sufficient && totalsA.knownTrimpDays.length ? mean(totalsA.knownTrimpDays) : null;
+  const trimpB = sufficient && totalsB.knownTrimpDays.length ? mean(totalsB.knownTrimpDays) : null;
+  let change: Change;
+  if (trimpA === null || trimpB === null) change = "insufficient";
+  else if (trimpA === 0) change = trimpB === 0 ? "flat" : "up";
+  else {
+    const pct = ((trimpB - trimpA) / Math.abs(trimpA)) * 100;
+    change = Math.abs(pct) <= UNCHANGED_THRESHOLD ? "flat" : pct > 0 ? "up" : "down";
+  }
+
+  const notes: string[] = [];
+  const emptyPeriods = [periodA, periodB].filter((period) => period.summary.first_day === null);
+  if (emptyPeriods.length)
+    notes.push(insufficientNote("training", ["worn day", "worn days"], 0, 0, false, emptyPeriods));
+  else if (!sufficient)
+    notes.push(
+      `Not enough data yet to compare training: period A has ${plural(totalsA.wornDays, "worn day", "worn days")} and period B has ${totalsB.wornDays}; at least ${MIN_TRAINING_WORN_DAYS} per period are needed.`
+    );
+  for (const [period, totals] of [
+    [periodA, totalsA],
+    [periodB, totalsB],
+  ] as const) {
+    if (totals.unknownTrimpDays)
+      notes.push(
+        `${capitalize(plural(totals.unknownTrimpDays, "worn day", "worn days"))} in ${period.label} had a workout recorded below ${MIN_RECORDED_FRACTION * 100}% or not scored, so ${totals.unknownTrimpDays === 1 ? "it is" : "they are"} left out of trimp_per_worn_day.`
+      );
+    if (totals.unscoredWorkouts)
+      notes.push(
+        `${capitalize(plural(totals.unscoredWorkouts, "workout", "workouts"))} in ${period.label} without a WHOOP score ${totals.unscoredWorkouts === 1 ? "is" : "are"} not counted.`
+      );
+    if (totals.unwornWorkouts)
+      notes.push(
+        `${capitalize(plural(totals.unwornWorkouts, "workout", "workouts"))} in ${period.label} fell on days without a WHOOP cycle and ${totals.unwornWorkouts === 1 ? "is" : "are"} not counted.`
+      );
+    if (totals.fallbackWorkouts)
+      notes.push(
+        totals.fallbackWorkouts === 1
+          ? `1 workout in ${period.label} had no containing WHOOP cycle and was placed on its local start day.`
+          : `${totals.fallbackWorkouts} workouts in ${period.label} had no containing WHOOP cycle and were placed on their local start day.`
+      );
+  }
+  return {
+    value: {
+      period_a: a,
+      period_b: b,
+      change_pct: {
+        sessions_per_week: percentChange(a.sessions_per_week, b.sessions_per_week),
+        workout_minutes_per_worn_day: percentChange(
+          a.workout_minutes_per_worn_day,
+          b.workout_minutes_per_worn_day
+        ),
+        trimp_per_worn_day:
+          trimpA === null || trimpB === null || trimpA === 0
+            ? null
+            : roundTo(((trimpB - trimpA) / Math.abs(trimpA)) * 100, 1),
+      },
+      direction: strainDirection(change),
+    },
+    notes,
+    warnings,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate privacy mode
+// ---------------------------------------------------------------------------
+
+/**
+ * The whole released local weeks inside a period's counted days, oldest
+ * first: every Monday-to-Sunday week between first_day and last_day that ends
+ * no later than the latest released week.
+ */
+function releasedWeeksWithin(
+  period: ResolvedPeriod,
+  latestReleasedSunday: string,
+  utcOffset: string
+): LocalWeek[] {
+  const { first_day: first, last_day: last } = period.summary;
+  if (first === null || last === null) return [];
+  const weeks: LocalWeek[] = [];
+  let monday = mondayOf(first) === first ? first : addDays(mondayOf(first), 7);
+  while (addDays(monday, 6) <= last && addDays(monday, 6) <= latestReleasedSunday) {
+    weeks.push({
+      monday,
+      sunday: addDays(monday, 6),
+      startMs: localMidnightMs(monday, utcOffset),
+      endMs: localMidnightMs(addDays(monday, 7), utcOffset),
+    });
+    monday = addDays(monday, 7);
+  }
+  return weeks;
+}
+
+/** A period labelled with its snapped weeks (or no day when it has none) */
+function snappedSummary(
+  period: ResolvedPeriod,
+  weeks: readonly LocalWeek[],
+  utcOffset: string
+): PeriodSummary {
+  if (!weeks.length) return { ...period.summary, days: 0, first_day: null, last_day: null };
+  const first = weeks[0]!;
+  const last = weeks[weeks.length - 1]!;
+  return {
+    start: formatInstant(first.startMs, utcOffset),
+    end: formatInstant(last.endMs - 1, utcOffset),
+    days: weeks.length * 7,
+    first_day: first.monday,
+    last_day: last.sunday,
+  };
+}
+
+interface AggregatePeriod {
+  period: ResolvedPeriod;
+  weeks: LocalWeek[];
+  data: AggregateData | null;
+  recovery: AggregateMetricResult | null;
+  sleep: AggregateMetricResult | null;
+  strain: AggregateMetricResult | null;
+}
+
+/** Average rounded to the metric's aggregate step, the change in whole percent */
+function compareAggregate(
+  a: AggregateMetricResult | null,
+  b: AggregateMetricResult | null,
+  step: number
+): ComparedSamples {
+  const valuesA = a?.released.map((sample) => sample.value) ?? [];
+  const valuesB = b?.released.map((sample) => sample.value) ?? [];
+  const compared = compareSamples(valuesA, valuesB, 10);
+  const avgA = valuesA.length ? mean(valuesA) : null;
+  const avgB = valuesB.length ? mean(valuesB) : null;
+  const changePct =
+    compared.change === "insufficient" || avgA === null || avgB === null || avgA === 0
+      ? null
+      : roundStep(((avgB - avgA) / Math.abs(avgA)) * 100, 1);
+  return {
+    avgA: avgA === null ? null : roundStep(avgA, step),
+    avgB: avgB === null ? null : roundStep(avgB, step),
+    changePct,
+    change: compared.change,
+  };
+}
+
+/**
+ * Aggregate privacy mode: each period is snapped inward to the whole released
+ * local weeks between its first and last counted day, and each metric uses
+ * only final weeks with at least AGGREGATE_WEEK_MIN_SAMPLES samples (the same
+ * samples every aggregate tool uses). Periods overlap only when they share a
+ * snapped week. Training is not reported.
+ */
+async function aggregateComparePeriods(
+  client: WhoopClient,
+  periodA: ResolvedPeriod,
+  periodB: ResolvedPeriod,
+  now: Date,
+  utcOffset: string,
+  offsetFallback: boolean
+): Promise<PeriodComparison> {
+  const latestReleasedSunday = lastReleasedWeeks(now, utcOffset, 1)[0]!.sunday;
+  const weeksA = releasedWeeksWithin(periodA, latestReleasedSunday, utcOffset);
+  const weeksB = releasedWeeksWithin(periodB, latestReleasedSunday, utcOffset);
+  const mondaysA = new Set(weeksA.map((week) => week.monday));
+  const shared = weeksB.filter((week) => mondaysA.has(week.monday));
+  if (shared.length) {
+    throw new InvalidDateExpression(
+      `Periods overlap: in aggregate privacy mode each period is snapped to whole released weeks, and period A and period B share ${shared.length === 1 ? "the week" : "the weeks"} starting ${shared.map((week) => week.monday).join(", ")}. Provide two periods that do not share a Monday-to-Sunday week.`
+    );
+  }
+
+  const loadPeriodWeeks = async (
+    period: ResolvedPeriod,
+    weeks: LocalWeek[]
+  ): Promise<AggregatePeriod> => {
+    if (!weeks.length)
+      return { period, weeks, data: null, recovery: null, sleep: null, strain: null };
+    const data = await loadAggregateData(client, weeks, utcOffset, now);
+    return {
+      period,
+      weeks,
+      data,
+      recovery: aggregateMetric(data, "recovery", {
+        subject: "Recovery",
+        unitPlural: "scored recoveries",
+      }),
+      sleep: aggregateMetric(data, "sleep_duration", {
+        subject: "Sleep",
+        unitPlural: "scored nights",
+      }),
+      strain: aggregateMetric(data, "strain", {
+        subject: "Strain",
+        unitPlural: "completed cycles",
+      }),
+    };
+  };
+  const a = await loadPeriodWeeks(periodA, weeksA);
+  const b = await loadPeriodWeeks(periodB, weeksB);
+
+  const loaded = [a.data, b.data].filter((data): data is AggregateData => data !== null);
+  const sources = loaded.flatMap((data) => [data.recovery, data.sleep, data.cycle]);
+  if (sources.length && sources.every((source) => source.quality.status === "fetch_failed"))
+    throw mostRelevantError(sources.map((source) => source.error));
+
+  const recovery = compareAggregate(a.recovery, b.recovery, AGGREGATE_METRIC_STEP.recovery);
+  const sleep = compareAggregate(a.sleep, b.sleep, AGGREGATE_METRIC_STEP.sleep_duration);
+  const strain = compareAggregate(a.strain, b.strain, AGGREGATE_METRIC_STEP.strain);
+
+  const notes: string[] = [];
+  const warnings: string[] = [];
+  for (const side of [a, b]) {
+    const label = capitalize(side.period.label);
+    if (!side.weeks.length) {
+      notes.push(
+        `${label} contains no whole released week (Monday to Sunday, released two days after it ends), so it has no values in aggregate privacy mode.`
+      );
+      continue;
+    }
+    notes.push(releasedWeeksNote(side.weeks, ` for ${side.period.label}`));
+    for (const note of withheldWeekNotes(side.data!)) notes.push(`${label}: ${note}`);
+    for (const [name, source] of [
+      ["Recovery", side.data!.recovery],
+      ["Sleep", side.data!.sleep],
+      ["Cycle (strain)", side.data!.cycle],
+    ] as const) {
+      if (source.quality.status === "fetch_failed" || source.quality.status === "invalid")
+        warnings.push(`${name} data for ${side.period.label} could not be loaded.`);
+      else if (source.quality.truncated)
+        warnings.push(`${name} data for ${side.period.label} could not be read completely.`);
+    }
+    for (const result of [side.recovery, side.sleep, side.strain])
+      for (const note of result!.notes) notes.push(`${label}: ${note}`);
+  }
+  const counts = (result: AggregateMetricResult | null): number => result?.released.length ?? 0;
+  const empty = [a, b].filter((side) => !side.weeks.length).map((side) => side.period.label);
+  const insufficient = (
+    metric: string,
+    unit: [string, string],
+    aCount: number,
+    bCount: number
+  ): string =>
+    empty.length
+      ? `Cannot compare ${metric}: ${empty.join(" and ")} ${empty.length === 1 ? "has" : "have"} no whole released week.`
+      : insufficientNote(metric, unit, aCount, bCount, false, []);
+  if (recovery.change === "insufficient")
+    notes.push(
+      insufficient(
+        "recovery",
+        ["scored recovery", "scored recoveries"],
+        counts(a.recovery),
+        counts(b.recovery)
+      )
+    );
+  if (sleep.change === "insufficient")
+    notes.push(
+      insufficient("sleep", ["scored night", "scored nights"], counts(a.sleep), counts(b.sleep))
+    );
+  if (strain.change === "insufficient")
+    notes.push(
+      insufficient(
+        "strain",
+        ["completed cycle", "completed cycles"],
+        counts(a.strain),
+        counts(b.strain)
+      )
+    );
+
+  return {
+    period_a: snappedSummary(periodA, weeksA, utcOffset),
+    period_b: snappedSummary(periodB, weeksB, utcOffset),
+    recovery: {
+      period_a_avg: recovery.avgA,
+      period_b_avg: recovery.avgB,
+      period_a_n: counts(a.recovery),
+      period_b_n: counts(b.recovery),
+      change_pct: recovery.changePct,
+      direction: healthDirection(recovery.change),
+      period_a_calibrating_n: a.recovery?.exclusions.calibrating ?? 0,
+      period_b_calibrating_n: b.recovery?.exclusions.calibrating ?? 0,
+    },
+    sleep: {
+      period_a_avg_hours: sleep.avgA,
+      period_b_avg_hours: sleep.avgB,
+      period_a_n: counts(a.sleep),
+      period_b_n: counts(b.sleep),
+      change_pct: sleep.changePct,
+      direction: healthDirection(sleep.change),
+    },
+    strain: {
+      period_a_avg: strain.avgA,
+      period_b_avg: strain.avgB,
+      period_a_n: counts(a.strain),
+      period_b_n: counts(b.strain),
+      change_pct: strain.changePct,
+      direction: strainDirection(strain.change),
+    },
+    training: null,
+    truncated: loaded.some((data) =>
+      [data.recovery, data.sleep, data.cycle].some((source) => source.quality.truncated)
+    ),
     notes: withOffsetNote(notes, offsetFallback),
     warnings,
   };

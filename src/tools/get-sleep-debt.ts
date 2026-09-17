@@ -3,8 +3,24 @@ import type { WhoopClient } from "../api/client.js";
 import { ENDPOINT_SLEEP } from "../api/endpoints.js";
 import { sleepRecordSchema } from "../api/record-schemas.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
+import {
+  AGGREGATE_WEEK_MIN_SAMPLES,
+  aggregateEvaluatedAt,
+  lastReleasedWeeks,
+  roundStep,
+  snapWeeks,
+} from "./aggregate-window.js";
+import {
+  aggregateMetric,
+  aggregateQualitySources,
+  loadAggregateData,
+  releasedWeeksNote,
+  withheldWeekNotes,
+  type AnalyticsToolOptions,
+} from "./get-trend.js";
 import { mean } from "./stats-utils.js";
 import { resolveSleepWindow } from "./sleep-window.js";
+import { resolveDateExpression } from "./date-utils.js";
 import { timingStats } from "./sleep-metrics.js";
 import {
   asleepHours,
@@ -26,6 +42,9 @@ export const SLEEP_DEBT_MIN_NIGHTS = 3;
 
 /** Longest sleep window, in days; a range expression may add the partial current day. */
 export const SLEEP_DEBT_MAX_DAYS = 90;
+
+/** Week counts an aggregate get_sleep_debt window snaps to */
+export const SLEEP_DEBT_AGGREGATE_WEEKS = [2, 4, 8, 12] as const;
 
 export const sleepDebtInputSchema = z.object({
   days: z
@@ -80,19 +99,51 @@ export const sleepDebtOutputSchema = z.object({
 });
 export type SleepDebtReport = z.infer<typeof sleepDebtOutputSchema>;
 
+/** get_sleep_debt in aggregate privacy mode (before projection): no nights, standing debt or summary */
+export interface AggregateSleepDebtReport extends Omit<
+  SleepDebtReport,
+  "nights" | "standing_debt_hours" | "standing_debt_date" | "summary" | "data_quality"
+> {
+  data_quality: {
+    evaluated_at: string;
+    requested_period: { start: string; end: string };
+    sources: Record<string, unknown>;
+    method_version: string;
+  };
+}
+
 function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : pluralForm}`;
 }
 
+/**
+ * Observed nightly sleep deficits, standing debt and bed/wake consistency. In
+ * aggregate privacy mode (`options.privacyMode`) the window is whole released
+ * local weeks instead (see aggregateSleepDebt).
+ */
+export async function getSleepDebt(
+  client: WhoopClient,
+  params?: z.infer<typeof sleepDebtInputSchema>,
+  now?: Date
+): Promise<SleepDebtReport>;
+export async function getSleepDebt(
+  client: WhoopClient,
+  params: z.infer<typeof sleepDebtInputSchema> | undefined,
+  now: Date | undefined,
+  options: AnalyticsToolOptions
+): Promise<SleepDebtReport | AggregateSleepDebtReport>;
 export async function getSleepDebt(
   client: WhoopClient,
   params: z.infer<typeof sleepDebtInputSchema> = {},
-  now: Date = new Date()
-): Promise<SleepDebtReport> {
+  now: Date = new Date(),
+  options: AnalyticsToolOptions = {}
+): Promise<SleepDebtReport | AggregateSleepDebtReport> {
   const { days: requestedDays, start } = sleepDebtInputSchema.parse(params);
   const days = requestedDays ?? 14;
   // The user's current offset resolves local days in `start` and labels the reported period.
   const { offset: utcOffset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
+  if (options.privacyMode === "aggregate")
+    return aggregateSleepDebt(client, days, start, now, utcOffset, offsetFallback);
   const { startTime, endTime } = resolveSleepWindow(start, requestedDays, days, now, utcOffset, {
     toolName: "get_sleep_debt",
     maxDays: SLEEP_DEBT_MAX_DAYS,
@@ -220,6 +271,88 @@ export async function getSleepDebt(
         "One recorded offset cannot reconstruct within-sleep DST changes.",
         "Deficit totals do not predict recovery or prescribe repayment.",
       ],
+    },
+  };
+}
+
+/**
+ * Aggregate privacy mode: deficits over whole released local weeks (`days`
+ * snapped to 2, 4, 8 or 12 weeks ending at the latest released week; `start`
+ * is ignored). Nights are the scored main sleeps placed on days of final weeks
+ * holding at least AGGREGATE_WEEK_MIN_SAMPLES of them, the same nights every
+ * aggregate tool uses. Values are rounded; per-night data, standing debt and
+ * the summary are not returned.
+ */
+async function aggregateSleepDebt(
+  client: WhoopClient,
+  days: number,
+  start: string | undefined,
+  now: Date,
+  offset: string,
+  offsetFallback: boolean
+): Promise<AggregateSleepDebtReport> {
+  // start is not used, but it must still be a valid date expression.
+  if (start !== undefined) resolveDateExpression(start, now, offset);
+  const weeks = lastReleasedWeeks(now, offset, snapWeeks(days, SLEEP_DEBT_AGGREGATE_WEEKS));
+  // Nights need cycles and sleeps only; recoveries do not change where a sleep is placed.
+  const data = await loadAggregateData(client, weeks, offset, now, { recoveries: false });
+  if (data.sleep.quality.status === "fetch_failed") throw mostRelevantError([data.sleep.error]);
+  const result = aggregateMetric(data, "sleep_deficit", { unitPlural: "scored nights" });
+  const nights = result.released;
+  // Nights are placed with their cycles: without both read completely no week is used.
+  const unreadable = !data.placementComplete;
+  const sufficient = nights.length >= SLEEP_DEBT_MIN_NIGHTS;
+  const status = unreadable ? "unavailable" : sufficient ? "available" : "insufficient_data";
+  const timing = timingStats(nights.map((night) => night.sleep!));
+  const minutes = (value: number | null): number | null =>
+    sufficient && value !== null ? roundStep(value, 1) : null;
+
+  const notes: string[] = [releasedWeeksNote(weeks)];
+  if (start !== undefined)
+    notes.push(
+      "Aggregate privacy mode ignores start: the window always ends at the latest released week."
+    );
+  if (unreadable)
+    notes.push(
+      "Sleep or cycle data for these weeks could not be read completely, so no sleep debt was calculated. This does not mean no sleep was recorded; repeating the request later may succeed."
+    );
+  else notes.push(...withheldWeekNotes(data));
+  if (status === "insufficient_data")
+    notes.push(
+      `Not enough data yet: ${nights.length} of ${SLEEP_DEBT_MIN_NIGHTS} required scored main sleeps in released weeks with at least ${AGGREGATE_WEEK_MIN_SAMPLES} each, so deficit totals and bedtime/wake consistency are not calculated.`
+    );
+  notes.push(...result.notes);
+  const truncated = [data.sleep, data.cycle].some((source) => source.quality.truncated);
+  if (truncated)
+    notes.push(
+      "WHOOP returned more records than could be fetched for these weeks, so they are withheld."
+    );
+  const total = nights.reduce((sum, night) => sum + night.value, 0);
+  const period = {
+    start: formatLocalTimestamp(weeks[0]!.startMs, offset),
+    end: formatLocalTimestamp(weeks[weeks.length - 1]!.endMs - 1, offset),
+  };
+  return {
+    period,
+    nights_analyzed: nights.length,
+    status,
+    nights_required: SLEEP_DEBT_MIN_NIGHTS,
+    total_debt_hours: sufficient ? roundStep(total, 0.1) : null,
+    avg_nightly_debt_hours: sufficient ? roundStep(total / nights.length, 0.1) : null,
+    consistency: {
+      bedtime_std_dev_minutes: minutes(timing.bedtime_sd_minutes),
+      waketime_std_dev_minutes: minutes(timing.waketime_sd_minutes),
+      social_jetlag_minutes: minutes(timing.social_jetlag_minutes),
+    },
+    output_capped: false,
+    truncated,
+    notes: withOffsetNote(notes, offsetFallback),
+    disclaimer: DISCLAIMER,
+    data_quality: {
+      evaluated_at: aggregateEvaluatedAt(now, offset),
+      requested_period: period,
+      sources: aggregateQualitySources(data, [result], ["sleep", "cycle"]),
+      method_version: "sleep-debt-2-released-weeks",
     },
   };
 }

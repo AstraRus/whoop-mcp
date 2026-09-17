@@ -1,6 +1,6 @@
 {
   "name": "get_weekly_summary",
-  "description": "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Each record counts in exactly one week by its local day; today's in-progress strain is excluded. Values that cannot be computed yet are null (never 0) and notes say why; workout count/strain/calories are also null for a week with no WHOOP data at all (strap not worn yet, or a week that has not started), while a worn week without workouts gives 0. The recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average.",
+  "description": "Summarize one released Monday-to-Sunday week in the user's local time (aggregate privacy mode): average recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Windows snap to whole released weeks: a week is released two days after it ends (Wednesday, local time), so the current week, last week before Wednesday and later weeks return only nulls with a note. A week with a record still open or being scored is withheld. Each average needs at least 3 samples in the week (workout totals at least 3 workouts); calibrating recoveries are not used; values are rounded. Days, workouts and cycles are placed as get_calendar places them. sample_sizes gives the counts behind each average.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -141,7 +141,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Sum of per-workout strain. Strain is non-linear (0-21), so this sum is not comparable to day strain."
           },
           "total_calories_kj": {
             "anyOf": [

@@ -12,84 +12,130 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-09-15",
-            "end": "2026-09-15"
+            "start": "2026-07-20",
+            "end": "2026-09-13"
           },
           "metrics": {
             "hrv": null,
             "rhr": null,
             "respiratory_rate": null,
             "sleep_hours": null,
-            "recovery_score": null
+            "recovery_score": null,
+            "spo2": null,
+            "skin_temp": null,
+            "sleep_efficiency": null,
+            "disturbances_per_hour": null,
+            "rem_share": null,
+            "deep_share": null
           },
           "metric_status": {
             "hrv": {
-              "status": "calibrating",
+              "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "ms",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "rhr": {
-              "status": "calibrating",
+              "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "bpm",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "respiratory_rate": {
               "status": "insufficient_data",
-              "sample_size": 1,
+              "sample_size": 0,
               "required_sample_size": 14,
               "unit": "breaths/min",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "sleep_hours": {
               "status": "insufficient_data",
-              "sample_size": 1,
+              "sample_size": 0,
               "required_sample_size": 14,
               "unit": "hours",
-              "reason": "Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "recovery_score": {
-              "status": "calibrating",
+              "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "spo2": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "skin_temp": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "°C",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "sleep_efficiency": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "disturbances_per_hour": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "per hour asleep",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "rem_share": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "deep_share": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             }
           },
           "notes": [
-            "HRV, resting heart rate and recovery score: WHOOP is still calibrating, so 2 of 2 scored recoveries so far are not used. Not enough data yet (0 of 14 earlier non-calibrating days needed; the most recent day and today are not counted).",
-            "Sleep hours and respiratory rate: Not enough data yet (2 scored main sleeps in this window; 1 of 14 earlier ones needed, the most recent night and today are not counted)."
+            "Aggregate privacy mode uses whole released weeks: 8 weeks ending 2026-09-13.",
+            "HRV, resting heart rate, recovery score, SpO2, skin temperature, sleep hours, respiratory rate, sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
           ],
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-08-16",
-              "end": "2026-09-16"
+              "start": "2026-07-20",
+              "end": "2026-09-13"
             },
-            "method_version": "baselines-2",
+            "method_version": "baselines-3-released-weeks",
             "sources": {
               "recovery": {
-                "status": "calibrating",
-                "records_fetched": 2,
+                "status": "missing",
+                "records_fetched": 0,
                 "records_used": 0,
-                "exclusions": {
-                  "calibrating": 2
-                },
+                "exclusions": {},
                 "truncated": false
               },
               "sleep": {
-                "status": "available",
-                "records_fetched": 2,
-                "records_used": 2,
+                "status": "missing",
+                "records_fetched": 0,
+                "records_used": 0,
                 "exclusions": {},
                 "truncated": false
               },
               "cycle": {
-                "status": "calibrating",
-                "records_fetched": 3,
+                "status": "missing",
+                "records_fetched": 0,
                 "records_used": 0,
                 "exclusions": {},
                 "truncated": false
@@ -111,144 +157,232 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-08-16",
-            "end": "2026-09-14"
+            "start": "2026-07-20",
+            "end": "2026-09-13"
           },
           "metrics": {
             "hrv": {
-              "sample_size": 30,
-              "mean": 91.77476666666666,
-              "median": 93.397,
-              "std_dev": 8.533459660588367,
-              "p10": 78.37270000000001,
-              "p25": 85.55625,
-              "p50": 93.397,
-              "p75": 97.653,
-              "p90": 101.2394,
+              "sample_size": 56,
+              "mean": 90,
+              "median": 88,
+              "std_dev": 8,
+              "p25": 84,
+              "p50": 88,
+              "p75": 97,
               "constant_baseline": false
             },
             "rhr": {
-              "sample_size": 30,
-              "mean": 54.43333333333333,
-              "median": 54,
-              "std_dev": 2.1241991955139756,
-              "p10": 52,
+              "sample_size": 56,
+              "mean": 55,
+              "median": 55,
+              "std_dev": 2,
               "p25": 53,
-              "p50": 54,
-              "p75": 55,
-              "p90": 58,
+              "p50": 55,
+              "p75": 57,
               "constant_baseline": false
             },
             "respiratory_rate": {
-              "sample_size": 30,
-              "mean": 15.086979166666667,
-              "median": 15.15625,
-              "std_dev": 0.6835192915798394,
-              "p10": 14.165625,
-              "p25": 14.4921875,
-              "p50": 15.15625,
-              "p75": 15.6953125,
-              "p90": 15.9421875,
+              "sample_size": 56,
+              "mean": 15.1,
+              "median": 15.2,
+              "std_dev": 0.7,
+              "p25": 14.5,
+              "p50": 15.2,
+              "p75": 15.7,
               "constant_baseline": false
             },
             "sleep_hours": {
-              "sample_size": 30,
-              "mean": 6.445477898148146,
-              "median": 6.539095416666667,
-              "std_dev": 1.0179087044023216,
-              "p10": 4.93168675,
-              "p25": 6.101200555555556,
-              "p50": 6.539095416666667,
-              "p75": 7.034647430555555,
-              "p90": 7.737429611111112,
+              "sample_size": 56,
+              "mean": 6.2,
+              "median": 6.4,
+              "std_dev": 1.1,
+              "p25": 5.5,
+              "p50": 6.4,
+              "p75": 6.8,
               "constant_baseline": false
             },
             "recovery_score": {
-              "sample_size": 30,
-              "mean": 79.6,
-              "median": 85,
-              "std_dev": 16.214396894940823,
-              "p10": 58.9,
-              "p25": 68.25,
-              "p50": 85,
-              "p75": 92.5,
-              "p90": 99,
+              "sample_size": 56,
+              "mean": 77,
+              "median": 80,
+              "std_dev": 16,
+              "p25": 65,
+              "p50": 80,
+              "p75": 90,
+              "constant_baseline": false
+            },
+            "spo2": {
+              "sample_size": 56,
+              "mean": 97,
+              "median": 97,
+              "std_dev": 1,
+              "p25": 96,
+              "p50": 97,
+              "p75": 98,
+              "constant_baseline": false
+            },
+            "skin_temp": {
+              "sample_size": 56,
+              "mean": 34,
+              "median": 34,
+              "std_dev": 0.3,
+              "p25": 33.8,
+              "p50": 34,
+              "p75": 34.3,
+              "constant_baseline": false
+            },
+            "sleep_efficiency": {
+              "sample_size": 51,
+              "mean": 92,
+              "median": 92,
+              "std_dev": 2,
+              "p25": 90,
+              "p50": 92,
+              "p75": 94,
+              "constant_baseline": false
+            },
+            "disturbances_per_hour": {
+              "sample_size": 51,
+              "mean": 1.7,
+              "median": 1.5,
+              "std_dev": 0.8,
+              "p25": 1.1,
+              "p50": 1.5,
+              "p75": 2.2,
+              "constant_baseline": false
+            },
+            "rem_share": {
+              "sample_size": 51,
+              "mean": 28,
+              "median": 28,
+              "std_dev": 3,
+              "p25": 26,
+              "p50": 28,
+              "p75": 29,
+              "constant_baseline": false
+            },
+            "deep_share": {
+              "sample_size": 51,
+              "mean": 20,
+              "median": 20,
+              "std_dev": 2,
+              "p25": 19,
+              "p50": 20,
+              "p75": 22,
               "constant_baseline": false
             }
           },
           "metric_status": {
             "hrv": {
               "status": "available",
-              "sample_size": 30,
+              "sample_size": 56,
               "required_sample_size": 14,
               "unit": "ms",
               "reason": null
             },
             "rhr": {
               "status": "available",
-              "sample_size": 30,
+              "sample_size": 56,
               "required_sample_size": 14,
               "unit": "bpm",
               "reason": null
             },
             "respiratory_rate": {
               "status": "available",
-              "sample_size": 30,
+              "sample_size": 56,
               "required_sample_size": 14,
               "unit": "breaths/min",
               "reason": null
             },
             "sleep_hours": {
               "status": "available",
-              "sample_size": 30,
+              "sample_size": 56,
               "required_sample_size": 14,
               "unit": "hours",
               "reason": null
             },
             "recovery_score": {
               "status": "available",
-              "sample_size": 30,
+              "sample_size": 56,
               "required_sample_size": 14,
               "unit": "%",
+              "reason": null
+            },
+            "spo2": {
+              "status": "available",
+              "sample_size": 56,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            },
+            "skin_temp": {
+              "status": "available",
+              "sample_size": 56,
+              "required_sample_size": 14,
+              "unit": "°C",
+              "reason": null
+            },
+            "sleep_efficiency": {
+              "status": "available",
+              "sample_size": 51,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            },
+            "disturbances_per_hour": {
+              "status": "available",
+              "sample_size": 51,
+              "required_sample_size": 14,
+              "unit": "per hour asleep",
+              "reason": null
+            },
+            "rem_share": {
+              "status": "available",
+              "sample_size": 51,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": null
+            },
+            "deep_share": {
+              "status": "available",
+              "sample_size": 51,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
               "reason": null
             }
           },
           "notes": [
-            "1 recovery is still being scored by WHOOP and not counted yet.",
-            "1 sleep is still being scored by WHOOP and not counted yet."
+            "Aggregate privacy mode uses whole released weeks: 8 weeks ending 2026-09-13.",
+            "5 nights with low data coverage (no strap data for more than 20% of time in bed) are not used for sleep efficiency, disturbances per hour, REM share or deep sleep share."
           ],
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-08-16",
-              "end": "2026-09-16"
+              "start": "2026-07-20",
+              "end": "2026-09-13"
             },
-            "method_version": "baselines-2",
+            "method_version": "baselines-3-released-weeks",
             "sources": {
               "recovery": {
                 "status": "available",
-                "records_fetched": 33,
-                "records_used": 31,
-                "exclusions": {
-                  "pending": 1,
-                  "outside_window": 1
-                },
+                "records_fetched": 56,
+                "records_used": 56,
+                "exclusions": {},
                 "truncated": false
               },
               "sleep": {
                 "status": "available",
-                "records_fetched": 38,
-                "records_used": 31,
+                "records_fetched": 65,
+                "records_used": 56,
                 "exclusions": {
-                  "nap": 6,
-                  "pending": 1
+                  "nap": 9
                 },
                 "truncated": false
               },
               "cycle": {
                 "status": "available",
-                "records_fetched": 33,
-                "records_used": 31,
+                "records_fetched": 56,
+                "records_used": 56,
                 "exclusions": {},
                 "truncated": false
               }
@@ -271,145 +405,238 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-07-17",
-            "end": "2026-09-14"
+            "start": "2026-06-15",
+            "end": "2026-09-13"
           },
           "metrics": {
             "hrv": {
-              "sample_size": 60,
-              "mean": 89.34376666666667,
-              "median": 87.8135,
-              "std_dev": 8.311494816150034,
-              "p10": 78.3331,
-              "p25": 83.78450000000001,
-              "p50": 87.8135,
-              "p75": 96.635,
-              "p90": 100.28790000000001,
+              "sample_size": 89,
+              "mean": 84,
+              "median": 83,
+              "std_dev": 11,
+              "p25": 76,
+              "p50": 83,
+              "p75": 92,
               "constant_baseline": false
             },
             "rhr": {
-              "sample_size": 60,
-              "mean": 54.86666666666667,
+              "sample_size": 89,
+              "mean": 55,
               "median": 55,
-              "std_dev": 2.028683207293725,
-              "p10": 52.9,
+              "std_dev": 2,
               "p25": 53,
               "p50": 55,
               "p75": 57,
-              "p90": 58,
               "constant_baseline": false
             },
             "respiratory_rate": {
-              "sample_size": 60,
-              "mean": 15.127083333333333,
-              "median": 15.2109375,
-              "std_dev": 0.6559303950570686,
-              "p10": 14.140625,
-              "p25": 14.6640625,
-              "p50": 15.2109375,
-              "p75": 15.6015625,
-              "p90": 15.9859375,
+              "sample_size": 89,
+              "mean": 15,
+              "median": 15.1,
+              "std_dev": 0.7,
+              "p25": 14.5,
+              "p50": 15.1,
+              "p75": 15.6,
               "constant_baseline": false
             },
             "sleep_hours": {
-              "sample_size": 60,
-              "mean": 6.246269990740741,
-              "median": 6.415500833333333,
-              "std_dev": 1.1034005676445802,
-              "p10": 4.695971972222222,
-              "p25": 5.5528772222222225,
-              "p50": 6.415500833333333,
-              "p75": 6.878770972222222,
-              "p90": 7.650601305555556,
+              "sample_size": 89,
+              "mean": 6.2,
+              "median": 6.3,
+              "std_dev": 1.1,
+              "p25": 5.5,
+              "p50": 6.3,
+              "p75": 6.9,
               "constant_baseline": false
             },
             "recovery_score": {
-              "sample_size": 60,
-              "mean": 77.25,
-              "median": 79.5,
-              "std_dev": 15.89824413784952,
-              "p10": 53,
-              "p25": 65,
-              "p50": 79.5,
-              "p75": 90,
-              "p90": 98.1,
+              "sample_size": 89,
+              "mean": 72,
+              "median": 73,
+              "std_dev": 17,
+              "p25": 60,
+              "p50": 73,
+              "p75": 86,
+              "constant_baseline": false
+            },
+            "spo2": {
+              "sample_size": 89,
+              "mean": 97,
+              "median": 97,
+              "std_dev": 1,
+              "p25": 96,
+              "p50": 97,
+              "p75": 98,
+              "constant_baseline": false
+            },
+            "skin_temp": {
+              "sample_size": 89,
+              "mean": 34,
+              "median": 34,
+              "std_dev": 0.4,
+              "p25": 33.7,
+              "p50": 34,
+              "p75": 34.3,
+              "constant_baseline": false
+            },
+            "sleep_efficiency": {
+              "sample_size": 82,
+              "mean": 92,
+              "median": 92,
+              "std_dev": 2,
+              "p25": 90,
+              "p50": 92,
+              "p75": 94,
+              "constant_baseline": false
+            },
+            "disturbances_per_hour": {
+              "sample_size": 82,
+              "mean": 1.7,
+              "median": 1.6,
+              "std_dev": 0.8,
+              "p25": 1.1,
+              "p50": 1.6,
+              "p75": 2.2,
+              "constant_baseline": false
+            },
+            "rem_share": {
+              "sample_size": 82,
+              "mean": 27,
+              "median": 28,
+              "std_dev": 3,
+              "p25": 25,
+              "p50": 28,
+              "p75": 29,
+              "constant_baseline": false
+            },
+            "deep_share": {
+              "sample_size": 82,
+              "mean": 20,
+              "median": 20,
+              "std_dev": 2,
+              "p25": 19,
+              "p50": 20,
+              "p75": 22,
               "constant_baseline": false
             }
           },
           "metric_status": {
             "hrv": {
               "status": "available",
-              "sample_size": 60,
+              "sample_size": 89,
               "required_sample_size": 14,
               "unit": "ms",
               "reason": null
             },
             "rhr": {
               "status": "available",
-              "sample_size": 60,
+              "sample_size": 89,
               "required_sample_size": 14,
               "unit": "bpm",
               "reason": null
             },
             "respiratory_rate": {
               "status": "available",
-              "sample_size": 60,
+              "sample_size": 89,
               "required_sample_size": 14,
               "unit": "breaths/min",
               "reason": null
             },
             "sleep_hours": {
               "status": "available",
-              "sample_size": 60,
+              "sample_size": 89,
               "required_sample_size": 14,
               "unit": "hours",
               "reason": null
             },
             "recovery_score": {
               "status": "available",
-              "sample_size": 60,
+              "sample_size": 89,
               "required_sample_size": 14,
               "unit": "%",
+              "reason": null
+            },
+            "spo2": {
+              "status": "available",
+              "sample_size": 89,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            },
+            "skin_temp": {
+              "status": "available",
+              "sample_size": 89,
+              "required_sample_size": 14,
+              "unit": "°C",
+              "reason": null
+            },
+            "sleep_efficiency": {
+              "status": "available",
+              "sample_size": 82,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            },
+            "disturbances_per_hour": {
+              "status": "available",
+              "sample_size": 82,
+              "required_sample_size": 14,
+              "unit": "per hour asleep",
+              "reason": null
+            },
+            "rem_share": {
+              "status": "available",
+              "sample_size": 82,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": null
+            },
+            "deep_share": {
+              "status": "available",
+              "sample_size": 82,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
               "reason": null
             }
           },
           "notes": [
-            "1 recovery is still being scored by WHOOP and not counted yet.",
-            "1 sleep is still being scored by WHOOP and not counted yet."
+            "Aggregate privacy mode uses whole released weeks: 13 weeks ending 2026-09-13.",
+            "7 nights with low data coverage (no strap data for more than 20% of time in bed) are not used for sleep efficiency, disturbances per hour, REM share or deep sleep share."
           ],
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-07-17",
-              "end": "2026-09-16"
+              "start": "2026-06-15",
+              "end": "2026-09-13"
             },
-            "method_version": "baselines-2",
+            "method_version": "baselines-3-released-weeks",
             "sources": {
               "recovery": {
                 "status": "available",
-                "records_fetched": 63,
-                "records_used": 61,
+                "records_fetched": 90,
+                "records_used": 89,
                 "exclusions": {
-                  "pending": 1,
-                  "outside_window": 1
+                  "displaced": 1
                 },
                 "truncated": false
               },
               "sleep": {
                 "status": "available",
-                "records_fetched": 73,
-                "records_used": 61,
+                "records_fetched": 105,
+                "records_used": 89,
                 "exclusions": {
-                  "nap": 11,
-                  "pending": 1
+                  "displaced": 1,
+                  "nap": 15
                 },
                 "truncated": false
               },
               "cycle": {
                 "status": "available",
-                "records_fetched": 63,
-                "records_used": 61,
-                "exclusions": {},
+                "records_fetched": 90,
+                "records_used": 89,
+                "exclusions": {
+                  "displaced": 1
+                },
                 "truncated": false
               }
             }
@@ -431,70 +658,84 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-09-01",
-            "end": "2026-09-14"
+            "start": "2026-08-31",
+            "end": "2026-09-13"
           },
           "metrics": {
             "hrv": {
               "sample_size": 14,
-              "mean": 96.7087857142857,
-              "median": 97.38900000000001,
-              "std_dev": 6.0000418234086546,
-              "p10": 87.3099,
-              "p25": 94.3905,
-              "p50": 97.38900000000001,
-              "p75": 100.86675,
-              "p90": 102.1778,
+              "mean": 97,
+              "median": 99,
+              "std_dev": 6,
+              "p25": 95,
+              "p50": 99,
+              "p75": 101,
               "constant_baseline": false
             },
             "rhr": {
               "sample_size": 14,
-              "mean": 53.785714285714285,
+              "mean": 54,
               "median": 54,
-              "std_dev": 1.4725377234348787,
-              "p10": 52,
-              "p25": 52.25,
+              "std_dev": 2,
+              "p25": 52,
               "p50": 54,
               "p75": 55,
-              "p90": 55,
               "constant_baseline": false
             },
             "respiratory_rate": {
               "sample_size": 14,
-              "mean": 15.209821428571429,
-              "median": 15.2421875,
-              "std_dev": 0.6719194930687874,
-              "p10": 14.2578125,
-              "p25": 14.79296875,
-              "p50": 15.2421875,
-              "p75": 15.8203125,
-              "p90": 15.9703125,
+              "mean": 15.2,
+              "median": 15.2,
+              "std_dev": 0.7,
+              "p25": 14.8,
+              "p50": 15.2,
+              "p75": 15.8,
               "constant_baseline": false
             },
             "sleep_hours": {
               "sample_size": 14,
-              "mean": 6.460179166666668,
-              "median": 6.486205972222223,
-              "std_dev": 1.0380160373613485,
-              "p10": 5.141327333333333,
-              "p25": 5.933135208333333,
-              "p50": 6.486205972222223,
-              "p75": 6.752957430555556,
-              "p90": 7.970737416666666,
+              "mean": 6.4,
+              "median": 6.5,
+              "std_dev": 0.9,
+              "p25": 5.9,
+              "p50": 6.5,
+              "p75": 6.8,
               "constant_baseline": false
             },
             "recovery_score": {
               "sample_size": 14,
-              "mean": 85.07142857142857,
-              "median": 88.5,
-              "std_dev": 11.943104918824117,
-              "p10": 68.3,
-              "p25": 78.25,
-              "p50": 88.5,
-              "p75": 93,
-              "p90": 98.7,
+              "mean": 86,
+              "median": 91,
+              "std_dev": 12,
+              "p25": 79,
+              "p50": 91,
+              "p75": 97,
               "constant_baseline": false
-            }
+            },
+            "spo2": {
+              "sample_size": 14,
+              "mean": 97,
+              "median": 97,
+              "std_dev": 1,
+              "p25": 96,
+              "p50": 97,
+              "p75": 98,
+              "constant_baseline": false
+            },
+            "skin_temp": {
+              "sample_size": 14,
+              "mean": 34.1,
+              "median": 34,
+              "std_dev": 0.4,
+              "p25": 33.7,
+              "p50": 34,
+              "p75": 34.4,
+              "constant_baseline": false
+            },
+            "sleep_efficiency": null,
+            "disturbances_per_hour": null,
+            "rem_share": null,
+            "deep_share": null
           },
           "metric_status": {
             "hrv": {
@@ -531,44 +772,83 @@
               "required_sample_size": 14,
               "unit": "%",
               "reason": null
+            },
+            "spo2": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": null
+            },
+            "skin_temp": {
+              "status": "available",
+              "sample_size": 14,
+              "required_sample_size": 14,
+              "unit": "°C",
+              "reason": null
+            },
+            "sleep_efficiency": {
+              "status": "insufficient_data",
+              "sample_size": 13,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "Not enough data yet (13 of 14 samples in released weeks with at least 3 each)."
+            },
+            "disturbances_per_hour": {
+              "status": "insufficient_data",
+              "sample_size": 13,
+              "required_sample_size": 14,
+              "unit": "per hour asleep",
+              "reason": "Not enough data yet (13 of 14 samples in released weeks with at least 3 each)."
+            },
+            "rem_share": {
+              "status": "insufficient_data",
+              "sample_size": 13,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": "Not enough data yet (13 of 14 samples in released weeks with at least 3 each)."
+            },
+            "deep_share": {
+              "status": "insufficient_data",
+              "sample_size": 13,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": "Not enough data yet (13 of 14 samples in released weeks with at least 3 each)."
             }
           },
           "notes": [
-            "1 recovery is still being scored by WHOOP and not counted yet.",
-            "1 sleep is still being scored by WHOOP and not counted yet."
+            "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13.",
+            "Sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (13 of 14 samples in released weeks with at least 3 each).",
+            "1 night with low data coverage (no strap data for more than 20% of time in bed) is not used for sleep efficiency, disturbances per hour, REM share or deep sleep share."
           ],
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-09-01",
-              "end": "2026-09-16"
+              "start": "2026-08-31",
+              "end": "2026-09-13"
             },
-            "method_version": "baselines-2",
+            "method_version": "baselines-3-released-weeks",
             "sources": {
               "recovery": {
                 "status": "available",
-                "records_fetched": 17,
-                "records_used": 15,
-                "exclusions": {
-                  "pending": 1,
-                  "outside_window": 1
-                },
+                "records_fetched": 14,
+                "records_used": 14,
+                "exclusions": {},
                 "truncated": false
               },
               "sleep": {
                 "status": "available",
-                "records_fetched": 19,
-                "records_used": 15,
+                "records_fetched": 16,
+                "records_used": 14,
                 "exclusions": {
-                  "nap": 3,
-                  "pending": 1
+                  "nap": 2
                 },
                 "truncated": false
               },
               "cycle": {
                 "status": "available",
-                "records_fetched": 17,
-                "records_used": 15,
+                "records_fetched": 14,
+                "records_used": 14,
                 "exclusions": {},
                 "truncated": false
               }
@@ -588,13 +868,22 @@
         "isError": false,
         "text_format": "pretty_json",
         "structuredContent": {
-          "period": null,
+          "period": {
+            "start": "2026-07-20",
+            "end": "2026-09-13"
+          },
           "metrics": {
             "hrv": null,
             "rhr": null,
             "respiratory_rate": null,
             "sleep_hours": null,
-            "recovery_score": null
+            "recovery_score": null,
+            "spo2": null,
+            "skin_temp": null,
+            "sleep_efficiency": null,
+            "disturbances_per_hour": null,
+            "rem_share": null,
+            "deep_share": null
           },
           "metric_status": {
             "hrv": {
@@ -602,48 +891,90 @@
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "ms",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "rhr": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "bpm",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "respiratory_rate": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "breaths/min",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "sleep_hours": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "hours",
-              "reason": "Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             },
             "recovery_score": {
               "status": "insufficient_data",
               "sample_size": 0,
               "required_sample_size": 14,
               "unit": "%",
-              "reason": "Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted)."
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "spo2": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "skin_temp": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "°C",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "sleep_efficiency": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "%",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "disturbances_per_hour": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "per hour asleep",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "rem_share": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
+            },
+            "deep_share": {
+              "status": "insufficient_data",
+              "sample_size": 0,
+              "required_sample_size": 14,
+              "unit": "% of time asleep",
+              "reason": "Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
             }
           },
           "notes": [
-            "HRV, resting heart rate and recovery score: Not enough data yet (0 of 14 earlier scored days needed; the most recent day and today are not counted).",
-            "Sleep hours and respiratory rate: Not enough data yet (0 scored main sleeps in this window; 0 of 14 earlier ones needed, the most recent night and today are not counted)."
+            "Aggregate privacy mode uses whole released weeks: 8 weeks ending 2026-09-13.",
+            "HRV, resting heart rate, recovery score, SpO2, skin temperature, sleep hours, respiratory rate, sleep efficiency, disturbances per hour, REM share and deep sleep share: Not enough data yet (0 of 14 samples in released weeks with at least 3 each)."
           ],
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-08-16",
-              "end": "2026-09-16"
+              "start": "2026-07-20",
+              "end": "2026-09-13"
             },
-            "method_version": "baselines-2",
+            "method_version": "baselines-3-released-weeks",
             "sources": {
               "recovery": {
                 "status": "missing",

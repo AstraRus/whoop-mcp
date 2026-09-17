@@ -17,19 +17,19 @@
             "average_score": 62.5,
             "min_score": 58,
             "max_score": 67,
-            "average_hrv": 78.169,
+            "average_hrv": 78.2,
             "average_rhr": 59.5,
             "trend": null
           },
           "sleep": {
-            "average_duration_hours": 6.625797222222222,
+            "average_duration_hours": 6.63,
             "average_performance_pct": 77,
             "average_efficiency_pct": 91.7
           },
           "workouts": {
             "count": 8,
-            "total_strain": 66.0205,
-            "total_calories_kj": 10807.8,
+            "total_strain": 66.02,
+            "total_calories_kj": 10808,
             "sport_breakdown": {
               "running": 2,
               "weightlifting_msk": 2,
@@ -38,13 +38,13 @@
             }
           },
           "strain": {
-            "average_daily_strain": 12.65265,
-            "max_daily_strain": 15.8836
+            "average_daily_strain": 15.88,
+            "max_daily_strain": 15.88
           },
           "sample_sizes": {
             "recovery_days": 2,
             "sleep_nights": 2,
-            "completed_cycles": 2
+            "completed_cycles": 1
           },
           "calibrating": true,
           "truncated": false,
@@ -52,7 +52,8 @@
             "This week is still in progress (data through 2026-09-16).",
             "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
             "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
-            "Today's strain is still accumulating and is not included."
+            "Today's strain is still accumulating and is not included.",
+            "1 day WHOOP covered only in part (the strap was put on that day) is not included in daily strain."
           ]
         }
       }
@@ -124,19 +125,19 @@
             "average_score": 62.5,
             "min_score": 58,
             "max_score": 67,
-            "average_hrv": 78.169,
+            "average_hrv": 78.2,
             "average_rhr": 59.5,
             "trend": null
           },
           "sleep": {
-            "average_duration_hours": 6.625797222222222,
+            "average_duration_hours": 6.63,
             "average_performance_pct": 77,
             "average_efficiency_pct": 91.7
           },
           "workouts": {
             "count": 8,
-            "total_strain": 66.0205,
-            "total_calories_kj": 10807.8,
+            "total_strain": 66.02,
+            "total_calories_kj": 10808,
             "sport_breakdown": {
               "running": 2,
               "weightlifting_msk": 2,
@@ -145,13 +146,13 @@
             }
           },
           "strain": {
-            "average_daily_strain": 12.65265,
-            "max_daily_strain": 15.8836
+            "average_daily_strain": 15.88,
+            "max_daily_strain": 15.88
           },
           "sample_sizes": {
             "recovery_days": 2,
             "sleep_nights": 2,
-            "completed_cycles": 2
+            "completed_cycles": 1
           },
           "calibrating": true,
           "truncated": false,
@@ -159,7 +160,8 @@
             "This week is still in progress (data through 2026-09-17).",
             "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
             "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
-            "Today's strain is still accumulating and is not included."
+            "Today's strain is still accumulating and is not included.",
+            "1 day WHOOP covered only in part (the strap was put on that day) is not included in daily strain."
           ]
         }
       }
@@ -179,27 +181,27 @@
             "average_score": 80.5,
             "min_score": 79,
             "max_score": 82,
-            "average_hrv": 93.52950000000001,
+            "average_hrv": 93.5,
             "average_rhr": 55.5,
             "trend": null
           },
           "sleep": {
-            "average_duration_hours": 7.565200416666666,
+            "average_duration_hours": 7.57,
             "average_performance_pct": 87,
-            "average_efficiency_pct": 91.81
+            "average_efficiency_pct": 91.8
           },
           "workouts": {
             "count": 2,
-            "total_strain": 22.7727,
-            "total_calories_kj": 762.46,
+            "total_strain": 22.77,
+            "total_calories_kj": 762,
             "sport_breakdown": {
               "running": 1,
               "weightlifting_msk": 1
             }
           },
           "strain": {
-            "average_daily_strain": 10.610700000000001,
-            "max_daily_strain": 11.5363
+            "average_daily_strain": 10.61,
+            "max_daily_strain": 11.54
           },
           "sample_sizes": {
             "recovery_days": 2,
@@ -230,22 +232,22 @@
           "week_start": "2026-09-07T00:00:00.000+01:00",
           "week_end": "2026-09-13T23:59:59.999+01:00",
           "recovery": {
-            "average_score": 78.85714285714286,
+            "average_score": 78.9,
             "min_score": 60,
             "max_score": 98,
-            "average_hrv": 93.19814285714286,
+            "average_hrv": 93.2,
             "average_rhr": 54,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 6.485541944444444,
+            "average_duration_hours": 6.49,
             "average_performance_pct": 75,
-            "average_efficiency_pct": 92.11714285714287
+            "average_efficiency_pct": 92.1
           },
           "workouts": {
             "count": 7,
-            "total_strain": 53.474000000000004,
-            "total_calories_kj": 1957.69,
+            "total_strain": 53.47,
+            "total_calories_kj": 1958,
             "sport_breakdown": {
               "walking": 4,
               "running": 2,
@@ -253,8 +255,8 @@
             }
           },
           "strain": {
-            "average_daily_strain": 9.398328571428573,
-            "max_daily_strain": 14.3545
+            "average_daily_strain": 9.4,
+            "max_daily_strain": 14.35
           },
           "sample_sizes": {
             "recovery_days": 7,
@@ -284,19 +286,19 @@
             "average_score": 74.6,
             "min_score": 61,
             "max_score": 81,
-            "average_hrv": 79.641,
+            "average_hrv": 79.6,
             "average_rhr": 55,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 6.252837777777779,
+            "average_duration_hours": 6.25,
             "average_performance_pct": 72.4,
-            "average_efficiency_pct": 91.294
+            "average_efficiency_pct": 91.3
           },
           "workouts": {
             "count": 4,
-            "total_strain": 35.1199,
-            "total_calories_kj": 1838.1699999999998,
+            "total_strain": 35.12,
+            "total_calories_kj": 1838,
             "sport_breakdown": {
               "weightlifting_msk": 2,
               "padel": 1,
@@ -304,8 +306,8 @@
             }
           },
           "strain": {
-            "average_daily_strain": 8.75534,
-            "max_daily_strain": 12.5717
+            "average_daily_strain": 8.76,
+            "max_daily_strain": 12.57
           },
           "sample_sizes": {
             "recovery_days": 5,
@@ -334,22 +336,22 @@
           "week_start": "2026-08-03T00:00:00.000+01:00",
           "week_end": "2026-08-09T23:59:59.999+01:00",
           "recovery": {
-            "average_score": 70.14285714285714,
+            "average_score": 70.1,
             "min_score": 52,
             "max_score": 98,
-            "average_hrv": 85.934,
-            "average_rhr": 55.57142857142857,
+            "average_hrv": 85.9,
+            "average_rhr": 55.6,
             "trend": "improving"
           },
           "sleep": {
-            "average_duration_hours": 5.80201873015873,
-            "average_performance_pct": 67.57142857142857,
-            "average_efficiency_pct": 88.12714285714287
+            "average_duration_hours": 5.8,
+            "average_performance_pct": 67.6,
+            "average_efficiency_pct": 88.1
           },
           "workouts": {
             "count": 7,
-            "total_strain": 63.4207,
-            "total_calories_kj": 2498.72,
+            "total_strain": 63.42,
+            "total_calories_kj": 2499,
             "sport_breakdown": {
               "weightlifting_msk": 5,
               "walking": 1,
@@ -357,8 +359,8 @@
             }
           },
           "strain": {
-            "average_daily_strain": 10.29327142857143,
-            "max_daily_strain": 11.9508
+            "average_daily_strain": 10.29,
+            "max_daily_strain": 11.95
           },
           "sample_sizes": {
             "recovery_days": 7,
@@ -387,22 +389,22 @@
           "week_start": "2026-06-22T00:00:00.000+01:00",
           "week_end": "2026-06-28T23:59:59.999+01:00",
           "recovery": {
-            "average_score": 50.625,
+            "average_score": 52,
             "min_score": 35,
             "max_score": 64,
-            "average_hrv": 71.1115,
-            "average_rhr": 56.125,
+            "average_hrv": 70.6,
+            "average_rhr": 55.7,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 5.834135079365081,
-            "average_performance_pct": 66.28571428571429,
-            "average_efficiency_pct": 92.71
+            "average_duration_hours": 5.83,
+            "average_performance_pct": 66.3,
+            "average_efficiency_pct": 92.7
           },
           "workouts": {
             "count": 7,
-            "total_strain": 61.80329999999999,
-            "total_calories_kj": 3389.51,
+            "total_strain": 61.8,
+            "total_calories_kj": 3390,
             "sport_breakdown": {
               "walking": 3,
               "running": 1,
@@ -411,13 +413,13 @@
             }
           },
           "strain": {
-            "average_daily_strain": 8.966925,
-            "max_daily_strain": 13.2305
+            "average_daily_strain": 10,
+            "max_daily_strain": 13.23
           },
           "sample_sizes": {
-            "recovery_days": 8,
+            "recovery_days": 7,
             "sleep_nights": 7,
-            "completed_cycles": 8
+            "completed_cycles": 7
           },
           "calibrating": false,
           "truncated": false,
@@ -512,17 +514,17 @@
           "week_start": "2026-09-07T00:00:00.000+01:00",
           "week_end": "2026-09-13T23:59:59.999+01:00",
           "recovery": {
-            "average_score": 78.85714285714286,
+            "average_score": 78.9,
             "min_score": 60,
             "max_score": 98,
-            "average_hrv": 93.19814285714286,
+            "average_hrv": 93.2,
             "average_rhr": 54,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 6.485541944444444,
+            "average_duration_hours": 6.49,
             "average_performance_pct": 75,
-            "average_efficiency_pct": 92.11714285714287
+            "average_efficiency_pct": 92.1
           },
           "workouts": {
             "count": null,
@@ -531,8 +533,8 @@
             "sport_breakdown": {}
           },
           "strain": {
-            "average_daily_strain": 9.398328571428573,
-            "max_daily_strain": 14.3545
+            "average_daily_strain": 9.4,
+            "max_daily_strain": 14.35
           },
           "sample_sizes": {
             "recovery_days": 7,

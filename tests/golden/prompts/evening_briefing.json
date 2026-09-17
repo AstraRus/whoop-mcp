@@ -1,0 +1,45 @@
+{
+  "name": "evening_briefing",
+  "mode": "standard",
+  "listing": {
+    "name": "evening_briefing",
+    "description": "Evening briefing: today's strain and workouts so far and a statistical estimate of tonight's sleep need, optionally for a wake time.",
+    "arguments": [
+      {
+        "name": "wake_time",
+        "description": "Planned wake time as 24-hour local \"HH:MM\", e.g. \"06:30\" (optional)",
+        "required": false
+      }
+    ]
+  },
+  "default_arguments": {
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Give me an evening briefing from my WHOOP data. Use the following tools:\n\n1. **get_today** — Today's recovery and strain so far (the current WHOOP cycle stays open until the next sleep)\n2. **get_day** with date \"today\" — Today's workouts, naps and cycle details\n3. **get_sleep_need** — A statistical estimate of tonight's sleep need from my past WHOOP sleep-need records (no wake time was given, so there is no in-bed arithmetic; ask me for a wake time if I want it)\n\nReport:\n- Today's strain so far and the workouts behind it, noting that strain keeps accumulating until the next sleep\n- The sleep need estimate with its status, range and selected model; if the status is not estimated, say why and give WHOOP's need from last night instead\n- That the estimate is not WHOOP's Sleep Planner and not a recommendation\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses.\n\nHow to read training and day data:\n- Strain is WHOOP's 0-21 score and is not linear: don't add day strain across days, and don't split it into workouts (day strain is not the sum of workout strains).\n- TRIMP and heart-rate zones undercount strength sessions, where effort shows little in heart rate. Pace is the elapsed average pace of the whole session, pauses included, not a split.\n- Acute:chronic ratio, EWMA (ATL, CTL, TSB) and monotony describe the load pattern only; don't present them as injury risk, readiness or advice.\n- Relationships between behaviours and recovery are observational and need the stated minimum number of pairs; report one only when the tool marks it consistent, and never as a cause.\n- A workout after local midnight but before the next sleep belongs to the previous WHOOP day: use the day a tool reports, not the calendar date of the start.\n- The sleep need estimate is a statistical estimate from past WHOOP sleep-need records, not WHOOP's Sleep Planner.\n- If a tool reports truncated history, say which data may be missing; repeating the same call continues loading from the cache."
+        }
+      }
+    ]
+  },
+  "omitted_arguments": {
+    "error": "MCP error -32602: MCP error -32602: Invalid arguments for prompt evening_briefing: Invalid input: expected object, received undefined"
+  },
+  "sample_arguments": {
+    "arguments": {
+      "wake_time": "06:30"
+    },
+    "result": {
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "Give me an evening briefing from my WHOOP data. Use the following tools:\n\n1. **get_today** — Today's recovery and strain so far (the current WHOOP cycle stays open until the next sleep)\n2. **get_day** with date \"today\" — Today's workouts, naps and cycle details\n3. **get_sleep_need** with wake_time \"06:30\" — A statistical estimate of tonight's sleep need from my past WHOOP sleep-need records, plus the in-bed arithmetic for waking at 06:30\n\nReport:\n- Today's strain so far and the workouts behind it, noting that strain keeps accumulating until the next sleep\n- The sleep need estimate with its status, range and selected model; if the status is not estimated, say why and give WHOOP's need from last night instead\n- The hours in bed the estimate corresponds to and the latest in-bed start that arithmetic gives for 06:30, labelled as arithmetic that ignores the time it takes to fall asleep\n- That the estimate is not WHOOP's Sleep Planner and not a recommendation\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses.\n\nHow to read training and day data:\n- Strain is WHOOP's 0-21 score and is not linear: don't add day strain across days, and don't split it into workouts (day strain is not the sum of workout strains).\n- TRIMP and heart-rate zones undercount strength sessions, where effort shows little in heart rate. Pace is the elapsed average pace of the whole session, pauses included, not a split.\n- Acute:chronic ratio, EWMA (ATL, CTL, TSB) and monotony describe the load pattern only; don't present them as injury risk, readiness or advice.\n- Relationships between behaviours and recovery are observational and need the stated minimum number of pairs; report one only when the tool marks it consistent, and never as a cause.\n- A workout after local midnight but before the next sleep belongs to the previous WHOOP day: use the day a tool reports, not the calendar date of the start.\n- The sleep need estimate is a statistical estimate from past WHOOP sleep-need records, not WHOOP's Sleep Planner.\n- If a tool reports truncated history, say which data may be missing; repeating the same call continues loading from the cache."
+          }
+        }
+      ]
+    }
+  }
+}

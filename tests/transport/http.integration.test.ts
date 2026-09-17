@@ -41,7 +41,7 @@ describe("HTTP transport — MCP integration", () => {
     // client transport (which also uses fetch) reaches our HTTP server.
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
         const url =
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
         if (url.startsWith("https://api.prod.whoop.com")) {

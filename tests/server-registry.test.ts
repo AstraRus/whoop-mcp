@@ -315,10 +315,16 @@ describe("registry tools in createWhoopServer", () => {
       expect(textOf(over)).toBe(
         `The result is too large for the MCP client (${MAX_TOOL_TEXT_CHARS + 1} characters); request fewer days, a lower limit or fewer datasets.`
       );
-      expect(logger.warn).toHaveBeenCalledWith("tool output too large", {
-        tool: "sized_tool",
-        chars: MAX_TOOL_TEXT_CHARS + 1,
-      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        "tool call failed",
+        expect.objectContaining({
+          tool: "sized_tool",
+          outcome: "output_too_large",
+          errorClass: "OutputTooLarge",
+          chars: MAX_TOOL_TEXT_CHARS + 1,
+        })
+      );
+      expect(logger.warn).not.toHaveBeenCalledWith("tool output too large", expect.anything());
     } finally {
       await close();
     }
@@ -341,7 +347,7 @@ describe("registry tools in createWhoopServer", () => {
     }
   });
 
-  it("registers no prompts in aggregate mode and all prompts in standard mode", async () => {
+  it("registers only aggregate_overview in aggregate mode and all prompts in standard mode", async () => {
     const standard = await connect();
     try {
       expect((await standard.client.listPrompts()).prompts.length).toBeGreaterThan(0);
@@ -350,7 +356,9 @@ describe("registry tools in createWhoopServer", () => {
     }
     const aggregate = await connect({ privacyMode: "aggregate" });
     try {
-      await expect(aggregate.client.listPrompts()).rejects.toThrow("Method not found");
+      expect((await aggregate.client.listPrompts()).prompts.map((prompt) => prompt.name)).toEqual([
+        "aggregate_overview",
+      ]);
     } finally {
       await aggregate.close();
     }

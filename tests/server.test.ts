@@ -153,9 +153,9 @@ const CYCLE_FIXTURE: CycleCollection = {
 // Individual record fixtures
 // ---------------------------------------------------------------------------
 
-const SLEEP_BY_ID_FIXTURE: Sleep = SLEEP_FIXTURE.records[0];
-const WORKOUT_BY_ID_FIXTURE: Workout = WORKOUT_FIXTURE.records[0];
-const CYCLE_BY_ID_FIXTURE: Cycle = CYCLE_FIXTURE.records[0];
+const SLEEP_BY_ID_FIXTURE: Sleep = SLEEP_FIXTURE.records[0]!;
+const WORKOUT_BY_ID_FIXTURE: Workout = WORKOUT_FIXTURE.records[0]!;
+const CYCLE_BY_ID_FIXTURE: Cycle = CYCLE_FIXTURE.records[0]!;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -183,7 +183,7 @@ function createMockClient(): WhoopClient {
   return {
     get: async <T>(path: string): Promise<T> => {
       // Strip query string to match base endpoint
-      const basePath = path.split("?")[0];
+      const basePath = path.split("?")[0] ?? path;
 
       // Check exact match first (collection endpoints)
       const fixture = ENDPOINT_FIXTURES[basePath];
@@ -364,7 +364,7 @@ describe("createWhoopServer", () => {
       });
       // Schema accepts; handler may still error on data but not with a schema-validation message
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).not.toMatch(/Expected ISO 8601/);
+      expect(content[0]!.text).not.toMatch(/Expected ISO 8601/);
     });
 
     it("accepts valid full ISO 8601 datetime compare_periods inputs", async () => {
@@ -373,7 +373,7 @@ describe("createWhoopServer", () => {
         arguments: validInput,
       });
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).not.toMatch(/Expected ISO 8601/);
+      expect(content[0]!.text).not.toMatch(/Expected ISO 8601/);
     });
 
     it("rejects malformed compare_periods date input at schema level", async () => {
@@ -383,8 +383,8 @@ describe("createWhoopServer", () => {
       });
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toMatch(/Expected ISO 8601/);
-      expect(content[0].text).toMatch(/period_a_start/);
+      expect(content[0]!.text).toMatch(/Expected ISO 8601/);
+      expect(content[0]!.text).toMatch(/period_a_start/);
     });
 
     it("rejects relative date expressions at schema level (compare_periods requires explicit ISO)", async () => {
@@ -394,8 +394,8 @@ describe("createWhoopServer", () => {
       });
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toMatch(/Expected ISO 8601/);
-      expect(content[0].text).toMatch(/period_b_end/);
+      expect(content[0]!.text).toMatch(/Expected ISO 8601/);
+      expect(content[0]!.text).toMatch(/period_b_end/);
     });
   });
 
@@ -414,7 +414,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(PROFILE_FIXTURE);
     });
 
@@ -428,7 +428,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(BODY_MEASUREMENT_FIXTURE);
     });
 
@@ -442,7 +442,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(RECOVERY_FIXTURE);
     });
 
@@ -456,7 +456,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(SLEEP_FIXTURE);
     });
 
@@ -470,7 +470,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(WORKOUT_FIXTURE);
     });
 
@@ -484,7 +484,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(CYCLE_FIXTURE);
     });
 
@@ -496,7 +496,7 @@ describe("createWhoopServer", () => {
 
       expect(result.isError).toBeFalsy();
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(SLEEP_BY_ID_FIXTURE);
     });
 
@@ -508,7 +508,7 @@ describe("createWhoopServer", () => {
 
       expect(result.isError).toBeFalsy();
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(WORKOUT_BY_ID_FIXTURE);
     });
 
@@ -520,26 +520,75 @@ describe("createWhoopServer", () => {
 
       expect(result.isError).toBeFalsy();
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as unknown;
+      const parsed = JSON.parse(content[0]!.text) as unknown;
       expect(parsed).toEqual(CYCLE_BY_ID_FIXTURE);
     });
 
     it("get_today returns a snapshot with recovery, sleep, and strain", async () => {
-      const result = await client.callTool({
-        name: "get_today",
-        arguments: {},
+      // Pinned to 16:00 local (-04:00) on the fixture day, with the fixture cycle still open.
+      const { vi } = await import("vitest");
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-04-10T20:00:00Z"));
+      const openCycleClient: WhoopClient = {
+        get: async <T>(path: string, options?: Parameters<WhoopClient["get"]>[1]): Promise<T> =>
+          path.startsWith("/v2/cycle?")
+            ? ({ records: [{ ...CYCLE_FIXTURE.records[0]!, end: null }] } as T)
+            : createMockClient().get<T>(path, options),
+      };
+      const { server: todayServer } = createWhoopServer(openCycleClient, {
+        disableResources: true,
       });
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const todayClient = new Client({ name: "get-today-test", version: "1.0.0" });
+      await Promise.all([
+        todayClient.connect(clientTransport),
+        todayServer.connect(serverTransport),
+      ]);
+      try {
+        const result = await todayClient.callTool({ name: "get_today", arguments: {} });
 
-      expect(result.isError).toBeFalsy();
-      expect(result.content).toHaveLength(1);
-
-      const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as Record<string, unknown>;
-      expect(parsed).toHaveProperty("timestamp");
-      expect(parsed).toHaveProperty("recovery");
-      expect(parsed).toHaveProperty("sleep");
-      expect(parsed).toHaveProperty("strain");
-      expect(parsed).toHaveProperty("summary");
+        expect(result.isError).toBeFalsy();
+        expect(result.content).toHaveLength(1);
+        const content = result.content as Array<{ type: string; text: string }>;
+        const parsed = JSON.parse(content[0]!.text) as {
+          timestamp: string;
+          recovery: { score: number; zone: string; user_calibrating: boolean } | null;
+          sleep: { asleep_hours: number; time_in_bed_hours: number } | null;
+          strain: { day_strain: number; last_workout: { sport_name: string } | null } | null;
+          summary: string;
+          data_quality: { sources: Record<string, { status: string }> };
+        };
+        expect(result.structuredContent).toEqual(parsed);
+        expect(parsed.timestamp).toBe("2026-04-10T20:00:00.000Z");
+        expect(parsed.recovery).toMatchObject({
+          score: 85,
+          zone: "green",
+          user_calibrating: false,
+        });
+        expect(parsed.sleep).toMatchObject({ asleep_hours: 6.5, time_in_bed_hours: 7 });
+        expect(parsed.strain).toMatchObject({
+          day_strain: 12.5,
+          last_workout: { sport_name: "Running" },
+        });
+        expect(parsed.summary).toBe("Recovery 85% (green), 6.5h sleep, strain 12.5");
+        expect(
+          Object.fromEntries(
+            Object.entries(parsed.data_quality.sources).map(([name, quality]) => [
+              name,
+              quality.status,
+            ])
+          )
+        ).toEqual({
+          recovery: "available",
+          sleep: "available",
+          cycle: "available",
+          workout: "available",
+        });
+      } finally {
+        await todayClient.close();
+        await todayServer.close();
+        vi.useRealTimers();
+      }
     });
 
     it("get_calendar returns a grid with period, days, and averages", async () => {
@@ -552,7 +601,7 @@ describe("createWhoopServer", () => {
       expect(result.content).toHaveLength(1);
 
       const content = result.content as Array<{ type: string; text: string }>;
-      const parsed = JSON.parse(content[0].text) as Record<string, unknown>;
+      const parsed = JSON.parse(content[0]!.text) as Record<string, unknown>;
       expect(parsed).toHaveProperty("period");
       expect(parsed).toHaveProperty("days");
       expect(parsed).toHaveProperty("averages");
@@ -571,7 +620,7 @@ describe("createWhoopServer", () => {
       expect(tool).toBeDefined();
       const props = tool!.inputSchema.properties as Record<string, { type: string }>;
       expect(props).toHaveProperty("id");
-      expect(props.id.type).toBe("string");
+      expect(props.id!.type).toBe("string");
     });
   });
 
@@ -583,7 +632,7 @@ describe("createWhoopServer", () => {
       expect(tool).toBeDefined();
       const props = tool!.inputSchema.properties as Record<string, { type: string }>;
       expect(props).toHaveProperty("id");
-      expect(props.id.type).toBe("string");
+      expect(props.id!.type).toBe("string");
     });
   });
 
@@ -595,7 +644,7 @@ describe("createWhoopServer", () => {
       expect(tool).toBeDefined();
       const props = tool!.inputSchema.properties as Record<string, { type: string }>;
       expect(props).toHaveProperty("id");
-      expect(props.id.type).toBe("integer");
+      expect(props.id!.type).toBe("integer");
     });
   });
 });
@@ -639,10 +688,10 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toContain("403");
-      expect(content[0].text).not.toContain("No access");
-      expect(content[0].text).toContain("denied access");
-      expect(content[0].text).toContain("setup --verify");
+      expect(content[0]!.text).toContain("403");
+      expect(content[0]!.text).not.toContain("No access");
+      expect(content[0]!.text).toContain("denied access");
+      expect(content[0]!.text).toContain("setup --verify");
     } finally {
       await cleanup();
     }
@@ -669,7 +718,7 @@ describe("createWhoopServer (error handling)", () => {
       expect(result.structuredContent).toBeUndefined();
       const content = result.content as Array<{ type: string; text: string }>;
       expect(content).toHaveLength(1);
-      return content[0].text;
+      return content[0]!.text;
     } finally {
       await mcpClient.close();
       await server.close();
@@ -724,7 +773,7 @@ describe("createWhoopServer (error handling)", () => {
       });
 
       expect(result.isError).toBe(true);
-      const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+      const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
       expect(text).toContain('Unrecognized date expression: "next tuesday"');
       expect(text).toContain("Supported:");
       expect(text).not.toContain("unexpected error");
@@ -803,7 +852,7 @@ describe("createWhoopServer (error handling)", () => {
       });
 
       expect(result.isError).toBe(true);
-      const text = (result.content as Array<{ type: string; text: string }>)[0].text;
+      const text = (result.content as Array<{ type: string; text: string }>)[0]!.text;
       expect(text).toContain('period_a_end "2026-09-10"');
       expect(text).toContain('period_a_start "2026-09-12"');
       expect(text).not.toContain("…");
@@ -878,7 +927,7 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toContain("Network error");
+      expect(content[0]!.text).toContain("Network error");
     } finally {
       await cleanup();
     }
@@ -893,7 +942,7 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toContain("authentication failed");
+      expect(content[0]!.text).toContain("authentication failed");
     } finally {
       await cleanup();
     }
@@ -908,8 +957,8 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toContain("unexpected error");
-      expect(content[0].text).not.toContain("Something went wrong");
+      expect(content[0]!.text).toContain("unexpected error");
+      expect(content[0]!.text).not.toContain("Something went wrong");
     } finally {
       await cleanup();
     }
@@ -927,7 +976,7 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toContain("500");
+      expect(content[0]!.text).toContain("500");
     } finally {
       await cleanup();
     }
@@ -942,9 +991,9 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toContain("503");
-      expect(content[0].text).toContain("Retry later");
-      expect(content[0].text).not.toContain("plain text error body");
+      expect(content[0]!.text).toContain("503");
+      expect(content[0]!.text).toContain("Retry later");
+      expect(content[0]!.text).not.toContain("plain text error body");
     } finally {
       await cleanup();
     }
@@ -967,7 +1016,7 @@ describe("createWhoopServer (error handling)", () => {
 
       expect(result.isError).toBe(true);
       const content = result.content as Array<{ type: string; text: string }>;
-      expect(content[0].text).toBe("An unexpected error occurred. Check configuration and retry.");
+      expect(content[0]!.text).toBe("An unexpected error occurred. Check configuration and retry.");
     } finally {
       await mcpClient.close();
       await server.close();
@@ -1019,8 +1068,34 @@ describe("createWhoopServer (resources)", () => {
     const result = await client.listResources();
     for (const resource of result.resources) {
       expect(resource.description).toBeTruthy();
-      expect(resource.mimeType).toBe("application/json");
+      expect(resource.mimeType).toBe(
+        resource.uri === "whoop://server/guide" ? "text/markdown" : "application/json"
+      );
     }
+  });
+
+  it("lists and reads workout/latest as a workout summary placed on its cycle's day", async () => {
+    const result = await client.listResources();
+    expect(result.resources.map((r) => r.uri)).toContain("whoop://v2/user/workout/latest");
+
+    const read = await client.readResource({ uri: "whoop://v2/user/workout/latest" });
+    const content = read.contents[0]!;
+    expect(content.mimeType).toBe("application/json");
+    const parsed = JSON.parse((content as { text: string }).text) as Record<string, unknown>;
+    expect(parsed).toMatchObject({
+      id: "workout-1",
+      sport_name: "Running",
+      sport_id: null,
+      day: "2026-04-10",
+      start_local: "2026-04-10T13:00:00.000-04:00",
+      duration_minutes: 60,
+      strain: 14.2,
+      recorded_fraction: 1,
+      // The fixture's zone durations cover 50 of its 60 minutes.
+      recorded_minutes: 50,
+      flags: ["zone_sum_mismatch"],
+    });
+    expect(parsed).not.toHaveProperty("notes");
   });
 
   it("reads recovery/latest and returns JSON content", async () => {

@@ -19,7 +19,7 @@
 import { authenticate, refreshAccessToken, toOAuthTokens } from "./auth/oauth.js";
 import type { OAuthConfig } from "./auth/oauth.js";
 import { loadTokens, saveTokens, type OAuthTokens } from "./auth/token-store.js";
-import { createWhoopClient } from "./api/client.js";
+import { createWhoopClient, WhoopNetworkError } from "./api/client.js";
 import { TokenRefreshError } from "./auth/token-refresh-error.js";
 import { MemoryCache } from "./cache/memory-cache.js";
 import { createWhoopServer } from "./server.js";
@@ -69,15 +69,6 @@ function parseTransport(): TransportMode {
   throw new Error(
     `Invalid MCP_TRANSPORT: "${process.env.MCP_TRANSPORT}". ` + `Must be one of: stdio, http, both.`
   );
-}
-
-function parsePort(): number {
-  const raw = process.env.MCP_PORT ?? "3000";
-  const n = Number.parseInt(raw, 10);
-  if (!Number.isFinite(n) || n < 0 || n > 65535) {
-    throw new Error(`Invalid MCP_PORT: "${raw}". Must be an integer 0-65535.`);
-  }
-  return n;
 }
 
 function parseLogLevel(): LogLevel {
@@ -148,6 +139,12 @@ export function newestTokens(
   return inMemory.expires_at > stored.expires_at ? inMemory : stored;
 }
 
+/**
+ * Delays before retrying startup authentication after WHOOP could not refresh
+ * the stored tokens (about a minute in total); see main().
+ */
+export const STARTUP_REFRESH_RETRY_DELAYS_MS: readonly number[] = [5_000, 15_000, 45_000];
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -166,6 +163,24 @@ export async function main(): Promise<void> {
     level: parseLogLevel(),
     format: parseLogFormat(),
   });
+  // Log unhandled promise rejections (error class only, never the message)
+  // instead of letting a stray rejection crash the server. Installed once per
+  // process even when main() runs again (tests).
+  const rejectionLoggerKey = Symbol.for("whoop-mcp.unhandledRejectionLogger");
+  const processSlots = process as unknown as Record<symbol, unknown>;
+  if (processSlots[rejectionLoggerKey] === undefined) {
+    processSlots[rejectionLoggerKey] = true;
+    process.on("unhandledRejection", (reason: unknown) => {
+      logger.error("unhandled promise rejection", {
+        errorClass:
+          reason instanceof Error && /^\w{1,64}$/.test(reason.name)
+            ? reason.name
+            : reason === null
+              ? "null"
+              : typeof reason,
+      });
+    });
+  }
   // Every WHOOP request of this process shares one limiter.
   const rateLimiter = createRateLimiter({
     perMinute: parseRateLimitPerMinute(process.env.WHOOP_RATE_LIMIT_PER_MINUTE),
@@ -185,14 +200,71 @@ export async function main(): Promise<void> {
    * so these must survive a failed save to disk.
    */
   let latestTokens: OAuthTokens | null = null;
-  const accessToken = await authenticate(oauthConfig, {
-    onTokens: (tokens) => {
-      latestTokens = tokens;
-      runtime.setAccessTokenExpiry(tokens.expires_at);
-    },
-  });
-  console.error("Authentication successful.");
-  logger.info("whoop authentication complete");
+  const onTokens = (tokens: OAuthTokens): void => {
+    latestTokens = tokens;
+    runtime.setAccessTokenExpiry(tokens.expires_at);
+  };
+  /**
+   * authenticate(), retried after STARTUP_REFRESH_RETRY_DELAYS_MS when WHOOP
+   * cannot refresh the stored tokens right now (unreachable, 429/5xx) or
+   * rejects the client credentials (invalid_client). Exiting instead would
+   * restart-loop a hosted server during a WHOOP outage until its restart
+   * policy gives up. If the last attempt fails too, the server starts in
+   * degraded mode with the stored (expired) access token: tool calls get a 401,
+   * the client refreshes on demand, and describeWhoopError explains a failure.
+   * A rejected refresh token (invalid_grant) still runs the sign-in flow.
+   */
+  const authenticateAtStartup = async (): Promise<string> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const token = await authenticate(oauthConfig, { onTokens });
+        console.error("Authentication successful.");
+        logger.info("whoop authentication complete");
+        return token;
+      } catch (error: unknown) {
+        if (
+          !(error instanceof WhoopNetworkError) &&
+          !(error instanceof TokenRefreshError && !error.rejected)
+        ) {
+          throw error;
+        }
+        // Without stored tokens the failure came from a new sign-in: retrying
+        // would start another one, and there is nothing to serve with.
+        const stored = await loadTokens();
+        if (!stored) {
+          throw error;
+        }
+        // Status or error class only: never the message (it quotes WHOOP's response).
+        const failure =
+          error instanceof TokenRefreshError
+            ? { status: error.statusCode }
+            : { errorClass: error.name };
+        const delayMs = STARTUP_REFRESH_RETRY_DELAYS_MS[attempt];
+        if (delayMs !== undefined) {
+          logger.warn("whoop token refresh failed at startup; retrying", {
+            ...failure,
+            attempt: attempt + 1,
+            delayMs,
+          });
+          await new Promise<void>((wake) => setTimeout(wake, delayMs));
+          continue;
+        }
+        const outcome =
+          error instanceof TokenRefreshError && error.clientRejected
+            ? "client_rejected"
+            : "transient_failure";
+        latestTokens = stored;
+        runtime.setAccessTokenExpiry(stored.expires_at);
+        runtime.recordRefresh(outcome);
+        logger.error("whoop token refresh unavailable at startup; serving with stored tokens", {
+          ...failure,
+          outcome,
+        });
+        return stored.access_token;
+      }
+    }
+  };
+  const accessToken = await authenticateAtStartup();
 
   // 4. Create the WHOOP API client with automatic token refresh.
   // A single process-wide cache is shared by the client (opt-in per request),
@@ -239,10 +311,23 @@ export async function main(): Promise<void> {
       refreshed = await refreshAccessToken(tokens.refresh_token, oauthConfig);
     } catch (error: unknown) {
       // Only a refusal of the refresh token itself means signing in again; a
-      // network error or a transient 429/5xx leaves every token usable (and
-      // the in-memory ones may be the only copy of a rotated refresh token).
+      // network error, a transient 429/5xx or rejected client credentials
+      // (invalid_client) leave every token usable (and the in-memory ones may
+      // be the only copy of a rotated refresh token).
       const rejected = error instanceof TokenRefreshError && error.rejected;
-      runtime.recordRefresh(rejected ? "rejected" : "transient_failure");
+      const clientRejected = error instanceof TokenRefreshError && error.clientRejected;
+      const outcome = rejected
+        ? "rejected"
+        : clientRejected
+          ? "client_rejected"
+          : "transient_failure";
+      runtime.recordRefresh(outcome);
+      logger.warn(
+        "whoop token refresh failed",
+        error instanceof TokenRefreshError
+          ? { status: error.statusCode, outcome }
+          : { errorClass: error instanceof Error ? error.name : typeof error, outcome }
+      );
       if (rejected) {
         await markStoredTokensRejected(tokens);
       }
@@ -289,7 +374,10 @@ export async function main(): Promise<void> {
 
   if (transportMode === "http" || transportMode === "both") {
     const authToken = getRequiredEnv("MCP_AUTH_TOKEN");
-    const port = parsePort();
+    const { resolvePort, resolveMaxConnections } = await import("./transport/port-config.js");
+    // MCP_PORT, else the host's PORT (e.g. Railway), else 3000.
+    const port = resolvePort(process.env);
+    const maxConnections = resolveMaxConnections(process.env);
     const host = process.env.MCP_HOST ?? "0.0.0.0";
     const allowedOrigins = parseAllowedOrigins();
     const trustProxy = process.env.MCP_TRUST_PROXY === "1";
@@ -316,11 +404,24 @@ export async function main(): Promise<void> {
     const connectorPassword = process.env.MCP_CONNECTOR_PASSWORD;
     const publicUrl = process.env.PUBLIC_URL;
     const allowedRedirectUris = process.env.ALLOWED_REDIRECT_URIS;
+    // Connector access tokens on /mcp (set when the connector is mounted).
+    let oauthBearer:
+      | {
+          authenticateBearer: (
+            token: string
+          ) => Promise<import("@modelcontextprotocol/sdk/server/auth/types.js").AuthInfo | null>;
+          canonicalResource: string;
+          resourceMetadataUrl: string;
+        }
+      | undefined;
 
     if (connectorPassword && publicUrl && allowedRedirectUris) {
       const { createOAuthApp } = await import("./transport/oauth-connector.js");
       const { deriveJwtSecret, parseAllowedRedirectUris } =
         await import("./transport/oauth-helpers.js");
+      // The JWT key also derives registered (DCR) client ids and secrets:
+      // rotating MCP_AUTH_TOKEN without a fixed MCP_JWT_SECRET revokes every
+      // connector session and registration.
       const jwtSecretEnv = process.env.MCP_JWT_SECRET;
       const jwtSecret = jwtSecretEnv
         ? Buffer.from(jwtSecretEnv, "utf-8")
@@ -330,7 +431,6 @@ export async function main(): Promise<void> {
         publicUrl,
         allowedRedirectUris: parseAllowedRedirectUris(allowedRedirectUris),
         jwtSecret,
-        scopes: ["mcp"],
         client: {
           clientId: process.env.MCP_OAUTH_CLIENT_ID ?? "whoop-mcp-connector",
           clientName: "WHOOP MCP Connector",
@@ -343,28 +443,74 @@ export async function main(): Promise<void> {
         res: import("node:http").ServerResponse
       ) => void;
       oauthCloseFn = oauthApp.close;
+      const { provider, resourceUrls } = oauthApp;
+      oauthBearer = {
+        authenticateBearer: async (token) => {
+          try {
+            return await provider.verifyAccessToken(token);
+          } catch {
+            return null;
+          }
+        },
+        canonicalResource: resourceUrls.canonicalResource,
+        resourceMetadataUrl: resourceUrls.resourceMetadataUrl,
+      };
+      runtime.setFlags({ oauthConnector: true });
       logger.info("oauth connector mounted", { publicUrl });
     }
+
+    // WHOOP webhooks (opt-in): verified with the app's client secret, and the
+    // previous one while it is being rotated.
+    const webhooksEnabled = process.env.WHOOP_WEBHOOKS === "1" && clientSecret.length > 0;
+    runtime.setFlags({ webhooksEnabled });
 
     const httpResult = await createHttpServer({
       authToken,
       port,
       host,
+      maxConnections,
       allowedOrigins,
       trustProxy,
       healthCheck,
       oauthHandler,
+      ...oauthBearer,
+      runtimeStatus: runtime,
+      logger,
+      ...(webhooksEnabled
+        ? {
+            webhooks: {
+              secrets: [clientSecret, process.env.WHOOP_CLIENT_SECRET_PREVIOUS ?? ""],
+              cache,
+              runtime,
+              logger,
+            },
+          }
+        : {}),
       // A fresh server per request — a single shared server/transport can only
       // ever be initialized once, which locks out every reconnecting client.
-      createMcpServer: () => createWhoopServer(client, serverOptions).server,
+      createMcpServer: (ctx?: import("./transport/http.js").McpRequestContext) =>
+        createWhoopServer(client, {
+          ...serverOptions,
+          ...(ctx !== undefined
+            ? {
+                requestContext: {
+                  requestId: ctx.requestId,
+                  auth: ctx.auth.kind,
+                  clientId: ctx.auth.clientId,
+                },
+              }
+            : {}),
+        }).server,
     });
     httpResults.push(httpResult);
 
     logger.info("http transport listening", {
       port,
       host,
+      maxConnections,
       allowedOriginsCount: allowedOrigins.length,
       oauthMounted: oauthHandler !== undefined,
+      webhooksEnabled,
     });
   }
 
@@ -419,10 +565,29 @@ function isMainModule(): boolean {
   }
 }
 
+/**
+ * `whoop-ai-mcp revoke [--yes] [--keep-tokens]`: run the human-only revoke CLI
+ * (never an MCP tool) and return its exit code, or 1 when it cannot run.
+ * Lazy-loaded like the other subcommands.
+ */
+export async function runRevokeSubcommand(args: readonly string[]): Promise<number> {
+  try {
+    const { runRevoke } = await import("./cli/revoke.js");
+    return await runRevoke(args);
+  } catch (error: unknown) {
+    console.error(`Revoke failed: ${error instanceof Error ? error.name : "unknown error"}`);
+    return 1;
+  }
+}
+
 if (isMainModule()) {
   const subcommand = process.argv[2];
 
-  if (subcommand === "doctor") {
+  if (subcommand === "revoke") {
+    void runRevokeSubcommand(process.argv.slice(3)).then((code) => {
+      process.exitCode = code;
+    });
+  } else if (subcommand === "doctor") {
     void import("./cli/doctor.js")
       .then(async ({ runDoctor }) => {
         process.exitCode = await runDoctor(process.argv.slice(3));

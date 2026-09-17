@@ -192,7 +192,7 @@
       "result": {
         "isError": true,
         "text_format": "text",
-        "text": "WHOOP rejected the authorization (HTTP 401). To sign in again, delete tokens.json from the server's token folder (~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server).",
+        "text": "WHOOP rejected the authorization (HTTP 401). To sign in again, delete tokens.json from the server's token folder (WHOOP_MCP_TOKEN_DIR when set, else ~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server).",
         "structuredContent": null
       }
     }

@@ -23,6 +23,7 @@ import {
   WHOOP_TOKEN_URL,
 } from "../../src/api/endpoints.js";
 import { WhoopNetworkError } from "../../src/api/client.js";
+import { parseOAuthErrorCode, TokenRefreshError } from "../../src/auth/token-refresh-error.js";
 
 // ---------------------------------------------------------------------------
 // Shared test fixtures
@@ -388,6 +389,82 @@ describe("refreshAccessToken", () => {
     expect(error).toBeInstanceOf(WhoopNetworkError);
     expect((error as WhoopNetworkError).cause).toBe(cause);
   });
+
+  it.each([
+    // [status, body error, expected oauthError, rejected, clientRejected]
+    [400, "invalid_grant", "invalid_grant", true, false],
+    [401, "invalid_grant", "invalid_grant", true, false],
+    [401, "invalid_client", "invalid_client", false, true],
+    [400, "invalid_client", "invalid_client", false, true],
+    [400, undefined, undefined, true, false],
+    [503, undefined, undefined, false, false],
+    [429, "slow_down", "slow_down", false, false],
+  ] as const)(
+    "classifies HTTP %i with error %s from the token response",
+    async (status, code, oauthError, rejected, clientRejected) => {
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status,
+        json: () => Promise.resolve(code === undefined ? {} : { error: code }),
+      });
+
+      const error = await refreshAccessToken("r", TEST_CONFIG).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect(error).toMatchObject({ statusCode: status, oauthError, rejected, clientRejected });
+    }
+  );
+
+  it.each([
+    ["free text", "Invalid Client: secret-ish detail"],
+    ["an over-long code", "a".repeat(65)],
+    ["a non-string", 42],
+    ["an array body", undefined],
+  ])("ignores %s in the error field", async (label, value) => {
+    const body = label === "an array body" ? ["invalid_client"] : { error: value };
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve(body),
+    });
+
+    const error = (await refreshAccessToken("r", TEST_CONFIG).catch((e: unknown) => e)) as
+      | TokenRefreshError
+      | undefined;
+
+    expect(error).toBeInstanceOf(TokenRefreshError);
+    expect(error?.oauthError).toBeUndefined();
+    // Without a recognizable invalid_client a 401 still rejects the refresh token
+    expect(error?.rejected).toBe(true);
+    expect(error?.clientRejected).toBe(false);
+    expect(error?.message).not.toContain("secret-ish");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TokenRefreshError
+// ---------------------------------------------------------------------------
+
+describe("TokenRefreshError", () => {
+  it("accepts only OAuth-shaped error codes", () => {
+    expect(parseOAuthErrorCode("invalid_client")).toBe("invalid_client");
+    expect(parseOAuthErrorCode("a".repeat(64))).toBe("a".repeat(64));
+    for (const invalid of ["", "Invalid_client", "invalid-client", "a".repeat(65), " x", null, 1]) {
+      expect(parseOAuthErrorCode(invalid)).toBeUndefined();
+    }
+    expect(new TokenRefreshError(401, "d", "Not A Code").oauthError).toBeUndefined();
+  });
+
+  it("treats invalid_client as rejected client credentials, not a rejected refresh token", () => {
+    const clientError = new TokenRefreshError(401, "d", "invalid_client");
+    expect(clientError.clientRejected).toBe(true);
+    expect(clientError.rejected).toBe(false);
+    // Existing callers constructing (status, description) keep their meaning
+    expect(new TokenRefreshError(400, "invalid_grant").rejected).toBe(true);
+    expect(new TokenRefreshError(401, "d").rejected).toBe(true);
+    expect(new TokenRefreshError(500, "d").rejected).toBe(false);
+    expect(new TokenRefreshError(500, "d").clientRejected).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -625,6 +702,8 @@ vi.mock("../../src/auth/token-store.js", () => ({
   loadTokens: vi.fn(),
   saveTokens: vi.fn(),
   isTokenExpired: vi.fn(),
+  // Not reset between tests: the token folder authenticate() resolves once
+  resolveTokenDir: (explicit?: string): string => explicit ?? "/mock-home/.whoop-mcp",
 }));
 
 vi.mock("../../src/auth/callback-server.js", () => ({
@@ -890,6 +969,92 @@ describe("authenticate", () => {
 
     await expect(authenticate(TEST_CONFIG)).rejects.toBeInstanceOf(WhoopNetworkError);
     expect(mockStartCallbackServer).not.toHaveBeenCalled();
+  });
+
+  describe("when the refresh fails but the stored sign-in is still valid", () => {
+    const expired = (): OAuthTokens => ({ ...VALID_TOKENS, expires_at: Date.now() - 1000 });
+
+    it.each([503, 500, 429])(
+      "rejects with TokenRefreshError on HTTP %i without starting the OAuth flow",
+      async (status) => {
+        mockLoadTokens.mockResolvedValueOnce(expired());
+        mockIsTokenExpired.mockReturnValueOnce(true);
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status,
+          json: () => Promise.resolve({ error_description: "try later" }),
+        });
+
+        const error = await authenticate(TEST_CONFIG).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(TokenRefreshError);
+        expect((error as TokenRefreshError).statusCode).toBe(status);
+        expect(mockFetch).toHaveBeenCalledOnce();
+        expect(mockStartCallbackServer).not.toHaveBeenCalled();
+        expect(mockSaveTokens).not.toHaveBeenCalled();
+        expect(mockSpawn).not.toHaveBeenCalled();
+      }
+    );
+
+    it("rejects on 401 invalid_client without starting the OAuth flow", async () => {
+      mockLoadTokens.mockResolvedValueOnce(expired());
+      mockIsTokenExpired.mockReturnValueOnce(true);
+      mockFetch.mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        json: () =>
+          Promise.resolve({ error: "invalid_client", error_description: "Client auth failed" }),
+      });
+
+      const error = await authenticate(TEST_CONFIG).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(TokenRefreshError);
+      expect((error as TokenRefreshError).clientRejected).toBe(true);
+      expect(mockFetch).toHaveBeenCalledOnce();
+      expect(mockStartCallbackServer).not.toHaveBeenCalled();
+      expect(mockSaveTokens).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs the OAuth flow on 400 invalid_grant and logs only the status and error code", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    mockLoadTokens.mockResolvedValueOnce({ ...VALID_TOKENS, expires_at: Date.now() - 1000 });
+    mockIsTokenExpired.mockReturnValueOnce(true);
+    mockSaveTokens.mockResolvedValueOnce(undefined);
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 400,
+      json: () =>
+        Promise.resolve({ error: "invalid_grant", error_description: "grant BODY-DETAIL-42" }),
+    });
+    mockStartCallbackServer.mockReturnValueOnce({
+      port: 3000,
+      result: Promise.resolve({ code: "auth-code", state: "s" }),
+    });
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(MOCK_TOKEN_RESPONSE) });
+
+    await expect(authenticate(TEST_CONFIG)).resolves.toBe("access-token-123");
+
+    expect(mockStartCallbackServer).toHaveBeenCalledOnce();
+    const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain("Token refresh failed (HTTP 400 invalid_grant)");
+    expect(logged).not.toContain("BODY-DETAIL-42");
+  });
+
+  it("reads and writes the token folder it resolved once", async () => {
+    mockLoadTokens.mockResolvedValueOnce({ ...VALID_TOKENS, expires_at: Date.now() - 1000 });
+    mockIsTokenExpired.mockReturnValueOnce(true);
+    mockSaveTokens.mockResolvedValueOnce(undefined);
+    mockFetch.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(MOCK_TOKEN_RESPONSE) });
+
+    await authenticate({ ...TEST_CONFIG, tokenDir: "/explicit/dir" });
+    expect(mockLoadTokens).toHaveBeenCalledWith("/explicit/dir");
+    expect(mockSaveTokens).toHaveBeenCalledWith(expect.anything(), "/explicit/dir");
+
+    mockLoadTokens.mockResolvedValueOnce(VALID_TOKENS);
+    mockIsTokenExpired.mockReturnValueOnce(false);
+    await authenticate(TEST_CONFIG);
+    expect(mockLoadTokens).toHaveBeenLastCalledWith("/mock-home/.whoop-mcp");
   });
 
   it("passes the cached tokens to onTokens", async () => {

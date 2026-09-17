@@ -1,13 +1,15 @@
 /**
  * MCP Resources — ambient health context backed by the shared API client cache.
  *
- * Exposes 4 resources:
+ * Exposes 5 resources:
  * - whoop://v2/user/recovery/latest — most recent recovery score
  * - whoop://v2/user/sleep/latest — most recent main (non-nap) sleep
  * - whoop://v2/user/cycle/latest — current or most recent cycle
+ * - whoop://v2/user/workout/latest — most recent finished workout, normalized
  * - whoop://v2/user/profile — user profile (cached 1hr)
  *
- * Records are passed through as WHOOP returns them. When a record needs
+ * Records are passed through as WHOOP returns them (the workout resource
+ * returns the shared workout summary instead). When a record needs
  * context to be read correctly (not scored yet, WHOOP still calibrating, a
  * cycle still in progress, only naps found, or a recovery/sleep that belongs to
  * an earlier cycle than the latest one) a `notes` array is added next to the
@@ -20,8 +22,17 @@
  */
 
 import type { WhoopClient } from "../api/client.js";
-import { describeWhoopError } from "../api/client.js";
+import { describeWhoopError, WhoopApiError } from "../api/client.js";
+import { cycleRecordSchema, workoutRecordSchema } from "../api/record-schemas.js";
+import { localDay } from "../tools/analytics-utils.js";
 import { parseUtcOffset } from "../tools/date-utils.js";
+import { mainDayOf, type WorkoutPlacement } from "../tools/day-model.js";
+import {
+  HR_ZONE_CAVEAT_SPORT,
+  MIN_RECORDED_FRACTION,
+  normalizeWorkout,
+  roundWorkoutSummary,
+} from "../tools/workout-utils.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Logger } from "../logging/logger.js";
 
@@ -29,13 +40,17 @@ import type { Logger } from "../logging/logger.js";
 // Constants
 // ---------------------------------------------------------------------------
 
-/** TTL for slower-changing cached lists (used by get_today for recovery, sleep and workouts) — 5 minutes */
+/**
+ * TTL for slower-changing cached lists — 5 minutes. No longer used by get_today
+ * (its four lists share CYCLE_TTL_MS so they expire together); kept for
+ * compatibility.
+ */
 export const DYNAMIC_TTL_MS = 5 * 60 * 1000;
 
 /**
- * TTL for the cycle, recovery and sleep resources — 2 minutes (strain updates
- * frequently). Recovery and sleep share it so their cache entries expire
- * together with the cycle they are compared against.
+ * TTL for the cycle, recovery, sleep and workout resources and get_today's lists —
+ * 2 minutes (strain updates frequently). They share it so their cache entries
+ * expire together with the cycle they are compared against.
  */
 export const CYCLE_TTL_MS = 2 * 60 * 1000;
 
@@ -89,6 +104,9 @@ function scoreStateNotes(record: JsonRecord, label: string): string[] {
 function withNotes(record: JsonRecord, notes: string[]): JsonRecord {
   return notes.length > 0 ? { ...record, notes } : record;
 }
+
+/** Workouts read for the latest finished one: the same request (and cache key) as get_today's. */
+export const WORKOUT_LIST_PATH = "/v2/activity/workout?limit=25";
 
 const RECOVERY_PATH = "/v2/recovery?limit=1";
 const SLEEP_PATH = `/v2/activity/sleep?limit=${SLEEP_LOOKBACK_LIMIT}`;
@@ -224,6 +242,115 @@ function latestSleepView(
   return { record: mainSleep, notes };
 }
 
+const cycleIdentitySchema = cycleRecordSchema.omit({ score: true });
+
+/** The latest cycle as read for the workout resource: the record, none, or a failed read. */
+type LatestCycleRead =
+  | { status: "read"; cycle: ReturnType<typeof cycleIdentitySchema.parse> | undefined }
+  | { status: "failed" };
+
+async function readLatestCycleForWorkout(client: WhoopClient): Promise<LatestCycleRead> {
+  try {
+    const [record] = pageRecords(await getPage(client, CYCLE_PATH, false));
+    if (record === undefined) {
+      return { status: "read", cycle: undefined };
+    }
+    const parsed = cycleIdentitySchema.safeParse(record);
+    return parsed.success ? { status: "read", cycle: parsed.data } : { status: "failed" };
+  } catch {
+    return { status: "failed" };
+  }
+}
+
+/** The newest finished workout in a page: end at or before now and after its start. */
+function newestFinishedWorkout(records: JsonRecord[], nowMs: number): JsonRecord | undefined {
+  const finished = records.flatMap((record) => {
+    const startMs = typeof record.start === "string" ? Date.parse(record.start) : Number.NaN;
+    const endMs = typeof record.end === "string" ? Date.parse(record.end) : Number.NaN;
+    return Number.isFinite(startMs) && Number.isFinite(endMs) && endMs <= nowMs && endMs > startMs
+      ? [{ record, startMs, id: String(record.id) }]
+      : [];
+  });
+  finished.sort(
+    (left, right) =>
+      right.startMs - left.startMs || (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+  );
+  return finished[0]?.record;
+}
+
+/**
+ * The latest finished workout as the shared workout summary. Its day is the
+ * local day of the latest WHOOP cycle when that cycle contains the start;
+ * otherwise the workout's local start date (day_by_fallback).
+ */
+async function latestWorkoutView(client: WhoopClient): Promise<unknown> {
+  const nowMs = Date.now();
+  const [page, cycleRead] = await Promise.all([
+    client.get<unknown>(WORKOUT_LIST_PATH, { cache: true, ttlMs: CYCLE_TTL_MS }),
+    readLatestCycleForWorkout(client),
+  ]);
+  const latest = newestFinishedWorkout(pageRecords(page), nowMs);
+  if (latest === undefined) {
+    return { message: "No workout data available yet." };
+  }
+  const parsed = workoutRecordSchema.safeParse(latest);
+  if (!parsed.success) {
+    return {
+      message:
+        "The latest workout could not be read because WHOOP returned unexpected values; older workouts are not shown in its place.",
+    };
+  }
+  const workout = parsed.data;
+  const startMs = Date.parse(workout.start);
+  const cycle = cycleRead.status === "read" ? cycleRead.cycle : undefined;
+  const cycleStartMs = cycle ? Date.parse(cycle.start) : Number.NaN;
+  const cycleEndMs = cycle?.end ? Date.parse(cycle.end) : Number.POSITIVE_INFINITY;
+  const contained = cycle !== undefined && cycleStartMs <= startMs && startMs < cycleEndMs;
+
+  let placement: WorkoutPlacement | null = null;
+  if (contained && cycle) {
+    const day = mainDayOf(cycle, new Map());
+    placement = {
+      day,
+      cycle,
+      fallback: false,
+      spans_cycle_boundary: Date.parse(workout.end) > cycleEndMs,
+      after_midnight_in_previous_cycle: localDay(workout.start, workout.timezone_offset) > day,
+    };
+  }
+  const summary = normalizeWorkout(workout, placement, contained && !cycle?.end);
+  if (summary === null) {
+    return { message: "No workout data available yet." };
+  }
+
+  const notes = scoreStateNotes(latest, "workout");
+  if (summary.recorded_fraction !== null && summary.recorded_fraction < MIN_RECORDED_FRACTION) {
+    notes.push(
+      `Heart-rate data covers only ${Math.round(summary.recorded_fraction * 100)}% of this workout, so its strain, heart-rate zones and calories reflect the recorded part only.`
+    );
+  }
+  if (cycleRead.status === "failed") {
+    notes.push(
+      "The latest WHOOP cycle could not be read, so day is the workout's local start date (day_by_fallback)."
+    );
+  } else if (cycle && startMs < cycleStartMs) {
+    const which = cycle.end ? "latest" : "current";
+    notes.push(
+      `This workout started before the ${which} WHOOP cycle (started ${localTimestamp(cycle.start, cycle.timezone_offset) ?? cycle.start}), so it is not part of that cycle's strain.`
+    );
+  } else if (cycle && !contained) {
+    notes.push(
+      "This workout started after the latest WHOOP cycle ended and the next cycle has not synced yet, so day is the workout's local start date (day_by_fallback)."
+    );
+  }
+  if (HR_ZONE_CAVEAT_SPORT.test(workout.sport_name)) {
+    notes.push(
+      "Heart-rate zones and strain measure cardiovascular load, which can understate the muscular effort of strength training."
+    );
+  }
+  return withNotes({ ...roundWorkoutSummary(summary) }, notes);
+}
+
 export const RESOURCE_DEFINITIONS: ResourceDefinition[] = [
   {
     uri: "whoop://v2/user/recovery/latest",
@@ -321,6 +448,15 @@ export const RESOURCE_DEFINITIONS: ResourceDefinition[] = [
     },
   },
   {
+    uri: "whoop://v2/user/workout/latest",
+    name: "Latest Workout",
+    description:
+      "Most recent finished workout as a summary: sport, local start and end, duration, strain, average and max heart rate, energy (kJ and kcal), recorded_fraction (share of the session with heart-rate data), zone minutes and shares, Edwards TRIMP, GPS distance, pace and speed when recorded, and flags. day is the local day of the WHOOP cycle containing its start. Notes say when it is not scored yet, heart-rate data is partial, it started before the current cycle, or heart-rate zones understate strength training.",
+    mimeType: "application/json",
+    ttlMs: CYCLE_TTL_MS,
+    fetch: latestWorkoutView,
+  },
+  {
     uri: "whoop://v2/user/profile",
     name: "User Profile",
     description: "Authenticated user's basic profile — name and email.",
@@ -338,7 +474,20 @@ export const RESOURCE_DEFINITIONS: ResourceDefinition[] = [
 
 /** Options for {@link registerResources}. */
 export interface RegisterResourcesOptions {
+  /** Read failures are logged here at warn (error class and HTTP status only). */
   logger?: Logger;
+}
+
+/** The HTTP status of the first WHOOP API error in an error's cause chain. */
+function httpStatusOf(error: unknown): number | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth <= 5 && current instanceof Error; depth++) {
+    if (current instanceof WhoopApiError) {
+      return current.statusCode;
+    }
+    current = current.cause;
+  }
+  return undefined;
 }
 
 /**
@@ -350,7 +499,7 @@ export interface RegisterResourcesOptions {
 export function registerResources(
   server: McpServer,
   client: WhoopClient,
-  _options: RegisterResourcesOptions = {}
+  options: RegisterResourcesOptions = {}
 ): void {
   for (const def of RESOURCE_DEFINITIONS) {
     server.registerResource(
@@ -373,8 +522,12 @@ export function registerResources(
           // Described by error type and HTTP status only — no bodies, tokens or health data.
           const reason = describeWhoopError(error) ?? "Retry later or verify authorization.";
           const message = `Resource unavailable. ${reason}`;
-          const errorName = error instanceof Error ? error.name : typeof error;
-          console.error(`[whoop-mcp] Resource read failed for ${def.uri} (${errorName})`);
+          const httpStatus = httpStatusOf(error);
+          options.logger?.warn("resource read failed", {
+            uri: def.uri,
+            errorClass: error instanceof Error ? error.name : typeof error,
+            ...(httpStatus !== undefined ? { httpStatus } : {}),
+          });
           return {
             contents: [
               {

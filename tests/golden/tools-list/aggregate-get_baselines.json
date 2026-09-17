@@ -1,6 +1,6 @@
 {
   "name": "get_baselines",
-  "description": "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time) and recovery. Excludes the latest observation and today from baselines, so it reads baseline_days + 2 days of history; not medical advice. `period` gives the local days the baselines cover. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data' or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
+  "description": "Personal distributions (aggregate privacy mode) for HRV, RHR, respiratory rate, sleep hours (asleep time), recovery, SpO2, skin temperature, sleep efficiency, disturbances per hour, REM share and deep sleep share: sample size, mean, median, standard deviation and p25-p75 (no latest observation, no p10/p90); not medical advice. Windows snap to whole released weeks: baseline_days is rounded up to 2, 4, 8, 13 or 26 Monday-to-Sunday local weeks ending with the latest released week (released two days after it ends); `period` gives the weeks used. Each week counts toward a metric only with at least 3 samples; calibrating recoveries and nights with low data coverage (for the newer sleep metrics) are not used; values are rounded. Each baseline needs 14 samples: until then metric_status says 'calibrating', 'insufficient_data', 'not_reported' (WHOOP reported no value, e.g. SpO2 before WHOOP 4.0) or 'unavailable', with a reason in `notes`.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -48,7 +48,13 @@
             "rhr",
             "respiratory_rate",
             "sleep_hours",
-            "recovery_score"
+            "recovery_score",
+            "spo2",
+            "skin_temp",
+            "sleep_efficiency",
+            "disturbances_per_hour",
+            "rem_share",
+            "deep_share"
           ]
         },
         "additionalProperties": {
@@ -68,9 +74,6 @@
                 "std_dev": {
                   "type": "number"
                 },
-                "p10": {
-                  "type": "number"
-                },
                 "p25": {
                   "type": "number"
                 },
@@ -78,9 +81,6 @@
                   "type": "number"
                 },
                 "p75": {
-                  "type": "number"
-                },
-                "p90": {
                   "type": "number"
                 },
                 "constant_baseline": {
@@ -92,11 +92,9 @@
                 "mean",
                 "median",
                 "std_dev",
-                "p10",
                 "p25",
                 "p50",
                 "p75",
-                "p90",
                 "constant_baseline"
               ],
               "additionalProperties": false
@@ -111,7 +109,13 @@
           "rhr",
           "respiratory_rate",
           "sleep_hours",
-          "recovery_score"
+          "recovery_score",
+          "spo2",
+          "skin_temp",
+          "sleep_efficiency",
+          "disturbances_per_hour",
+          "rem_share",
+          "deep_share"
         ]
       },
       "metric_status": {
@@ -123,7 +127,13 @@
             "rhr",
             "respiratory_rate",
             "sleep_hours",
-            "recovery_score"
+            "recovery_score",
+            "spo2",
+            "skin_temp",
+            "sleep_efficiency",
+            "disturbances_per_hour",
+            "rem_share",
+            "deep_share"
           ]
         },
         "additionalProperties": {
@@ -135,7 +145,8 @@
                 "available",
                 "insufficient_data",
                 "calibrating",
-                "unavailable"
+                "unavailable",
+                "not_reported"
               ]
             },
             "sample_size": {
@@ -176,7 +187,13 @@
           "rhr",
           "respiratory_rate",
           "sleep_hours",
-          "recovery_score"
+          "recovery_score",
+          "spo2",
+          "skin_temp",
+          "sleep_efficiency",
+          "disturbances_per_hour",
+          "rem_share",
+          "deep_share"
         ]
       },
       "notes": {

@@ -3,6 +3,9 @@ import { getSleepCollection } from "../../src/tools/get-sleep.js";
 import type { SleepCollection } from "../../src/api/types.js";
 import { ENDPOINT_SLEEP } from "../../src/api/endpoints.js";
 import { createMockClient } from "../helpers/mock-client.js";
+import { WhoopApiError, type WhoopClient } from "../../src/api/client.js";
+import { UTC_OFFSET_FALLBACK_NOTE } from "../../src/tools/collection-utils.js";
+import { connectServer } from "../helpers/contract.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -71,7 +74,7 @@ describe("getSleepCollection", () => {
       nextToken: "page2",
     });
 
-    const calledPath = (client.get as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    const calledPath = (client.get as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
     const url = new URL(calledPath, "https://placeholder.test");
 
     expect(url.pathname).toBe(ENDPOINT_SLEEP);
@@ -86,7 +89,7 @@ describe("getSleepCollection", () => {
 
     await getSleepCollection(client, { start: "2026-04-01T00:00:00.000Z" });
 
-    const calledPath = (client.get as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    const calledPath = (client.get as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
 
     expect(calledPath).not.toContain("limit");
     expect(calledPath).not.toContain("end");
@@ -108,5 +111,72 @@ describe("getSleepCollection", () => {
     );
 
     await expect(getSleepCollection(client, {})).rejects.toThrow("WHOOP API error: 403 Forbidden");
+  });
+});
+
+describe("getSleepCollection — UTC fallback note", () => {
+  /** A client whose offset lookup (/v2/cycle?limit=1) fails and whose collection returns one empty page. */
+  function lookupFailing(): WhoopClient & { paths: string[] } {
+    const paths: string[] = [];
+    return {
+      paths,
+      get: vi.fn(async (path: string) => {
+        paths.push(path);
+        if (path === "/v2/cycle?limit=1") throw new WhoopApiError(401, "Unauthorized", null);
+        return { records: [], next_token: null };
+      }),
+    } as unknown as WhoopClient & { paths: string[] };
+  }
+
+  it("adds the UTC fallback note when a local-day date is read in UTC", async () => {
+    const client = lookupFailing();
+
+    const result = await getSleepCollection(client, { start: "2026-09-14", end: "2026-09-14" });
+
+    expect(result.notes).toEqual([UTC_OFFSET_FALLBACK_NOTE]);
+    const dataPath = client.paths.find(
+      (path) => path.startsWith(`${ENDPOINT_SLEEP}?`) && path.includes("start=")
+    )!;
+    const query = new URLSearchParams(dataPath.split("?")[1]);
+    expect(query.get("start")).toBe("2026-09-14T00:00:00.000Z");
+    expect(query.get("end")).toBe("2026-09-14T23:59:59.999Z");
+  });
+
+  it("adds no note for zoned date-times, which need no time zone lookup", async () => {
+    const client = lookupFailing();
+
+    const result = await getSleepCollection(client, { start: "2026-09-14T00:00:00+02:00" });
+
+    expect(result).not.toHaveProperty("notes");
+    expect(client.paths).toHaveLength(1);
+  });
+
+  it("adds no note when the user's time zone is read from WHOOP", async () => {
+    const client = {
+      get: vi.fn(async (path: string) =>
+        path === "/v2/cycle?limit=1"
+          ? { records: [{ timezone_offset: "+02:00" }], next_token: null }
+          : { records: [], next_token: null }
+      ),
+    } as unknown as WhoopClient;
+
+    const result = await getSleepCollection(client, { start: "yesterday" });
+
+    expect(result).not.toHaveProperty("notes");
+  });
+
+  it("keeps the note in the get_sleep_collection output contract", async () => {
+    const connection = await connectServer(lookupFailing(), { disableResources: true });
+    try {
+      const result = await connection.callTool("get_sleep_collection", { start: "today" });
+      expect(result.isError, result.text).toBe(false);
+      expect(result.structured).toEqual({
+        records: [],
+        next_token: null,
+        notes: [UTC_OFFSET_FALLBACK_NOTE],
+      });
+    } finally {
+      await connection.close();
+    }
   });
 });

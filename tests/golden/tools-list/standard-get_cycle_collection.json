@@ -140,6 +140,13 @@
             "type": "null"
           }
         ]
+      },
+      "notes": {
+        "description": "Present only when a date in start or end was read in UTC because the user's time zone could not be read from WHOOP",
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
       }
     },
     "required": [

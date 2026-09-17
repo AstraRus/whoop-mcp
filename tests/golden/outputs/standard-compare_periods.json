@@ -56,8 +56,33 @@
             "change_pct": -6.6,
             "direction": "decreased"
           },
+          "training": {
+            "period_a": {
+              "sessions": 29,
+              "worn_days": 29,
+              "sessions_per_week": 7,
+              "workout_minutes_per_worn_day": 47.5,
+              "trimp_per_worn_day": 90.1
+            },
+            "period_b": {
+              "sessions": 30,
+              "worn_days": 31,
+              "sessions_per_week": 6.77,
+              "workout_minutes_per_worn_day": 40.5,
+              "trimp_per_worn_day": 80
+            },
+            "change_pct": {
+              "sessions_per_week": -3.3,
+              "workout_minutes_per_worn_day": -14.7,
+              "trimp_per_worn_day": -11.2
+            },
+            "direction": "decreased"
+          },
           "truncated": false,
-          "notes": [],
+          "notes": [
+            "2 worn days in period A had a workout recorded below 90% or not scored, so they are left out of trimp_per_worn_day.",
+            "2 worn days in period B had a workout recorded below 90% or not scored, so they are left out of trimp_per_worn_day."
+          ],
           "warnings": []
         }
       }
@@ -116,10 +141,33 @@
             "change_pct": -6.4,
             "direction": "decreased"
           },
+          "training": {
+            "period_a": {
+              "sessions": 14,
+              "worn_days": 14,
+              "sessions_per_week": 7,
+              "workout_minutes_per_worn_day": 51.6,
+              "trimp_per_worn_day": 79.5
+            },
+            "period_b": {
+              "sessions": 30,
+              "worn_days": 32,
+              "sessions_per_week": 6.56,
+              "workout_minutes_per_worn_day": 39.5,
+              "trimp_per_worn_day": 78.4
+            },
+            "change_pct": {
+              "sessions_per_week": -6.3,
+              "workout_minutes_per_worn_day": -23.4,
+              "trimp_per_worn_day": -1.4
+            },
+            "direction": "unchanged"
+          },
           "truncated": false,
           "notes": [
             "Period A does not start and end at local midnight, so it counts the local days mostly inside it: 2026-08-01 to 2026-08-14.",
-            "The current cycle in period B is still in progress, so its strain is not included yet."
+            "The current cycle in period B is still in progress, so its strain is not included yet.",
+            "2 worn days in period B had a workout recorded below 90% or not scored, so they are left out of trimp_per_worn_day."
           ],
           "warnings": []
         }
@@ -179,13 +227,36 @@
             "change_pct": null,
             "direction": "insufficient_data"
           },
+          "training": {
+            "period_a": {
+              "sessions": 0,
+              "worn_days": 0,
+              "sessions_per_week": null,
+              "workout_minutes_per_worn_day": null,
+              "trimp_per_worn_day": null
+            },
+            "period_b": {
+              "sessions": 8,
+              "worn_days": 3,
+              "sessions_per_week": null,
+              "workout_minutes_per_worn_day": null,
+              "trimp_per_worn_day": null
+            },
+            "change_pct": {
+              "sessions_per_week": null,
+              "workout_minutes_per_worn_day": null,
+              "trimp_per_worn_day": null
+            },
+            "direction": "insufficient_data"
+          },
           "truncated": false,
           "notes": [
             "Not enough data yet to compare recovery: period A has 0 scored recoveries and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
             "Not enough data yet to compare sleep: period A has 0 scored nights and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
             "Not enough data yet to compare strain: period A has 0 completed cycles and period B has 2; at least 3 per period are needed. WHOOP is still calibrating, so data is still building up.",
             "WHOOP was still calibrating for 2 of 2 recoveries in period B; they are included, but calibrating recovery scores are less reliable.",
-            "The current cycle in period B is still in progress, so its strain is not included yet."
+            "The current cycle in period B is still in progress, so its strain is not included yet.",
+            "Not enough data yet to compare training: period A has 0 worn days and period B has 3; at least 7 per period are needed."
           ],
           "warnings": []
         }
@@ -285,9 +356,32 @@
             "change_pct": -3.5,
             "direction": "unchanged"
           },
+          "training": {
+            "period_a": {
+              "sessions": 14,
+              "worn_days": 14,
+              "sessions_per_week": 7,
+              "workout_minutes_per_worn_day": 51.6,
+              "trimp_per_worn_day": 79.5
+            },
+            "period_b": {
+              "sessions": 14,
+              "worn_days": 14,
+              "sessions_per_week": 7,
+              "workout_minutes_per_worn_day": 42.8,
+              "trimp_per_worn_day": 90
+            },
+            "change_pct": {
+              "sessions_per_week": 0,
+              "workout_minutes_per_worn_day": -17.1,
+              "trimp_per_worn_day": 13.3
+            },
+            "direction": "increased"
+          },
           "truncated": false,
           "notes": [
-            "Not enough data yet to compare sleep: neither period has any scored nights."
+            "Not enough data yet to compare sleep: neither period has any scored nights.",
+            "1 worn day in period B had a workout recorded below 90% or not scored, so it is left out of trimp_per_worn_day."
           ],
           "warnings": [
             "Sleep data for period A could not be loaded (WHOOP API returned 500), so that period has no sleep samples.",
@@ -350,8 +444,33 @@
             "change_pct": -1.8,
             "direction": "unchanged"
           },
+          "training": {
+            "period_a": {
+              "sessions": 17,
+              "worn_days": 21,
+              "sessions_per_week": 5.67,
+              "workout_minutes_per_worn_day": 32.4,
+              "trimp_per_worn_day": 56.8
+            },
+            "period_b": {
+              "sessions": 13,
+              "worn_days": 21,
+              "sessions_per_week": 4.33,
+              "workout_minutes_per_worn_day": 29.2,
+              "trimp_per_worn_day": 69.5
+            },
+            "change_pct": {
+              "sessions_per_week": -23.6,
+              "workout_minutes_per_worn_day": -9.9,
+              "trimp_per_worn_day": 22.4
+            },
+            "direction": "increased"
+          },
           "truncated": false,
-          "notes": [],
+          "notes": [
+            "1 worn day in period A had a workout recorded below 90% or not scored, so it is left out of trimp_per_worn_day.",
+            "1 worn day in period B had a workout recorded below 90% or not scored, so it is left out of trimp_per_worn_day."
+          ],
           "warnings": []
         }
       }
@@ -410,8 +529,33 @@
             "change_pct": -1.8,
             "direction": "unchanged"
           },
+          "training": {
+            "period_a": {
+              "sessions": 17,
+              "worn_days": 21,
+              "sessions_per_week": 5.67,
+              "workout_minutes_per_worn_day": 32.4,
+              "trimp_per_worn_day": 56.8
+            },
+            "period_b": {
+              "sessions": 13,
+              "worn_days": 21,
+              "sessions_per_week": 4.33,
+              "workout_minutes_per_worn_day": 29.2,
+              "trimp_per_worn_day": 69.5
+            },
+            "change_pct": {
+              "sessions_per_week": -23.6,
+              "workout_minutes_per_worn_day": -9.9,
+              "trimp_per_worn_day": 22.4
+            },
+            "direction": "increased"
+          },
           "truncated": false,
-          "notes": [],
+          "notes": [
+            "1 worn day in period A had a workout recorded below 90% or not scored, so it is left out of trimp_per_worn_day.",
+            "1 worn day in period B had a workout recorded below 90% or not scored, so it is left out of trimp_per_worn_day."
+          ],
           "warnings": []
         }
       }

@@ -1,6 +1,21 @@
 import { describe, it, expect } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import {
+  ADDITIONAL_TOOLS,
+  LEGACY_AGGREGATE_TOOL_NAMES,
+  LEGACY_TOOL_NAMES,
+} from "../../src/tools/registry/index.js";
+
+/** The tools a server lists in each privacy mode: legacy tools plus registry variants. */
+function expectedToolNames(mode: string): string[] {
+  const registry = ADDITIONAL_TOOLS.filter(
+    (definition) => mode !== "aggregate" || definition.aggregate !== undefined
+  ).map((definition) => definition.name);
+  const legacy: readonly string[] =
+    mode === "aggregate" ? LEGACY_AGGREGATE_TOOL_NAMES : LEGACY_TOOL_NAMES;
+  return [...legacy, ...registry].sort();
+}
 
 describe("stdio release contracts", () => {
   it.each(["standard", "aggregate"])(
@@ -15,7 +30,8 @@ describe("stdio release contracts", () => {
       const client = new Client({ name: "stdio-test", version: "1" });
       try {
         await client.connect(transport);
-        expect((await client.listTools()).tools).toHaveLength(mode === "standard" ? 16 : 5);
+        const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
+        expect(names).toEqual(expectedToolNames(mode));
         const result = await client.callTool({ name: "get_sleep_debt", arguments: {} });
         expect(result.isError).not.toBe(true);
         const content = result.content as Array<{ text: string }>;

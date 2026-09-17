@@ -29,6 +29,16 @@ const mockSaveTokens = vi.fn();
 vi.mock("../src/auth/token-store.js", () => ({
   loadTokens: (...args: unknown[]) => mockLoadTokens(...args),
   saveTokens: (...args: unknown[]) => mockSaveTokens(...args),
+  // Used when a test runs the real authenticate() (startup resilience)
+  resolveTokenDir: (explicit?: string): string => explicit ?? "/mock-home/.whoop-mcp",
+  isTokenExpired: (tokens: { expires_at: number }): boolean =>
+    tokens.expires_at <= Date.now() + 60_000,
+}));
+
+const mockStartCallbackServer = vi.fn();
+
+vi.mock("../src/auth/callback-server.js", () => ({
+  startCallbackServer: (...args: unknown[]) => mockStartCallbackServer(...args),
 }));
 
 const mockCreateWhoopClient = vi.fn();
@@ -236,7 +246,7 @@ describe("main() entry point", () => {
       const { main } = await importMain();
       await main();
 
-      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
+      const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as {
         onTokenRefresh?: () => Promise<string>;
       };
       expect(clientOptions.onTokenRefresh).toBeTypeOf("function");
@@ -281,7 +291,7 @@ describe("main() entry point", () => {
       await main();
 
       // Extract the onTokenRefresh callback
-      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
+      const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as {
         onTokenRefresh: () => Promise<string>;
       };
       const newAccessToken = await clientOptions.onTokenRefresh();
@@ -306,7 +316,7 @@ describe("main() entry point", () => {
       const { main } = await importMain();
       await main();
 
-      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
+      const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as {
         onTokenRefresh: () => Promise<string>;
       };
       await expect(clientOptions.onTokenRefresh()).rejects.toThrow(/no stored tokens/i);
@@ -343,7 +353,7 @@ describe("main() entry point", () => {
       await main();
 
       // The shared cache is constructed inside main() and passed to the client.
-      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
+      const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as {
         onTokenRefresh: () => Promise<string>;
         cache: import("../src/cache/memory-cache.js").MemoryCache;
       };
@@ -396,11 +406,11 @@ describe("main() entry point", () => {
       const { main } = await importMain();
       await main();
 
-      const { runtimeStatus } = mockCreateWhoopServer.mock.calls[0][1] as {
+      const { runtimeStatus } = mockCreateWhoopServer.mock.calls[0]![1] as {
         runtimeStatus: import("../src/runtime-status.js").RuntimeStatus;
       };
       const onTokenRefresh = (
-        mockCreateWhoopClient.mock.calls[0][0] as { onTokenRefresh: () => Promise<string> }
+        mockCreateWhoopClient.mock.calls[0]![0] as { onTokenRefresh: () => Promise<string> }
       ).onTokenRefresh;
       expect(runtimeStatus.snapshot().whoop_auth).toEqual({
         access_token_expires_at: "2026-09-16T12:00:00.000Z",
@@ -449,7 +459,7 @@ describe("main() entry point", () => {
       async function startAndGetRefresh(): Promise<() => Promise<string>> {
         const { main } = await importMain();
         await main();
-        const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as {
+        const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as {
           onTokenRefresh: () => Promise<string>;
         };
         return clientOptions.onTokenRefresh;
@@ -533,8 +543,9 @@ describe("main() entry point", () => {
       async function refreshFn(): Promise<() => Promise<string>> {
         const { main } = await importMain();
         await main();
-        return (mockCreateWhoopClient.mock.calls[0][0] as { onTokenRefresh: () => Promise<string> })
-          .onTokenRefresh;
+        return (
+          mockCreateWhoopClient.mock.calls[0]![0] as { onTokenRefresh: () => Promise<string> }
+        ).onTokenRefresh;
       }
 
       it("marks the stored tokens expired so the next start signs in again", async () => {
@@ -646,8 +657,8 @@ describe("main() entry point", () => {
         logger: expect.objectContaining({ warn: expect.any(Function) }),
       });
       // The history cache is the client's shared cache
-      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as { cache: unknown };
-      const serverOptions = mockCreateWhoopServer.mock.calls[0][1] as { historyCache: unknown };
+      const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as { cache: unknown };
+      const serverOptions = mockCreateWhoopServer.mock.calls[0]![1] as { historyCache: unknown };
       expect(serverOptions.historyCache).toBe(clientOptions.cache);
     });
 
@@ -657,10 +668,10 @@ describe("main() entry point", () => {
       const { main } = await importMain();
       await main();
 
-      const { rateLimiter } = mockCreateWhoopClient.mock.calls[0][0] as {
+      const { rateLimiter } = mockCreateWhoopClient.mock.calls[0]![0] as {
         rateLimiter: import("../src/api/rate-limiter.js").RateLimiter;
       };
-      const { runtimeStatus } = mockCreateWhoopServer.mock.calls[0][1] as {
+      const { runtimeStatus } = mockCreateWhoopServer.mock.calls[0]![1] as {
         runtimeStatus: import("../src/runtime-status.js").RuntimeStatus;
       };
       (await rateLimiter.acquire())();
@@ -769,7 +780,7 @@ describe("main() entry point", () => {
         string,
         unknown
       >;
-      const clientOptions = mockCreateWhoopClient.mock.calls[0][0] as { cache: unknown };
+      const clientOptions = mockCreateWhoopClient.mock.calls[0]![0] as { cache: unknown };
       expect(perRequest.historyCache).toBe(clientOptions.cache);
       expect(perRequest.runtimeStatus).toBeDefined();
       expect(perRequest.logger).toBeDefined();
@@ -924,4 +935,370 @@ describe("main() entry point", () => {
       await expect(main()).resolves.toBeUndefined();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // Startup resilience: WHOOP cannot refresh the stored tokens (R1, R2)
+  // -------------------------------------------------------------------------
+
+  describe("startup when WHOOP cannot refresh the stored tokens", () => {
+    type TokenEndpointAnswer = { ok: boolean; status: number; json: () => Promise<unknown> };
+    type RuntimeStatus = import("../src/runtime-status.js").RuntimeStatus;
+
+    const DEGRADED_MSG = "whoop token refresh unavailable at startup; serving with stored tokens";
+    const RETRY_MSG = "whoop token refresh failed at startup; retrying";
+    let stale: {
+      access_token: string;
+      refresh_token: string;
+      expires_at: number;
+      token_type: string;
+    };
+    let fetchMock: ReturnType<typeof vi.fn>;
+    let stderr: string[];
+    let stderrSpy: { mockRestore(): void };
+
+    const answer = (status: number, body: unknown): TokenEndpointAnswer => ({
+      ok: status >= 200 && status < 300,
+      status,
+      json: () => Promise.resolve(body),
+    });
+    const newTokens = answer(200, {
+      access_token: "A-new",
+      refresh_token: "R-new",
+      expires_in: 3600,
+      token_type: "bearer",
+      scope: "read:profile",
+    });
+
+    function logEntries(): Array<Record<string, unknown>> {
+      return stderr
+        .join("")
+        .split("\n")
+        .filter((line) => line.startsWith("{"))
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+    }
+
+    function runtimeStatus(): RuntimeStatus {
+      return (mockCreateWhoopServer.mock.calls[0]![1] as { runtimeStatus: RuntimeStatus })
+        .runtimeStatus;
+    }
+
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-17T08:00:00.000Z"));
+      setupHappyPath();
+      process.env.LOG_LEVEL = "warn";
+      // The real authenticate(): token store and callback server stay mocked.
+      const oauth =
+        await vi.importActual<typeof import("../src/auth/oauth.js")>("../src/auth/oauth.js");
+      mockAuthenticate.mockImplementation((...args: unknown[]) =>
+        oauth.authenticate(...(args as Parameters<typeof oauth.authenticate>))
+      );
+      mockToOAuthTokens.mockImplementation((...args: unknown[]) =>
+        oauth.toOAuthTokens(...(args as Parameters<typeof oauth.toOAuthTokens>))
+      );
+      stale = {
+        access_token: "A-stale",
+        refresh_token: "R-stale",
+        expires_at: Date.now() - 10 * 60_000,
+        token_type: "Bearer",
+      };
+      mockLoadTokens.mockImplementation(async () => ({ ...stale }));
+      mockSaveTokens.mockResolvedValue(undefined);
+      fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      stderr = [];
+      stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        stderr.push(String(chunk));
+        return true;
+      });
+    });
+
+    afterEach(() => {
+      stderrSpy.mockRestore();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    });
+
+    it("retries after 5 s, 15 s and 45 s, then serves in degraded mode with the stored tokens", async () => {
+      fetchMock.mockResolvedValue(answer(503, { error_description: "BODY-maintenance" }));
+      const actualClient =
+        await vi.importActual<typeof import("../src/api/client.js")>("../src/api/client.js");
+      mockCreateWhoopClient.mockImplementation((...args: unknown[]) =>
+        actualClient.createWhoopClient(
+          ...(args as Parameters<typeof actualClient.createWhoopClient>)
+        )
+      );
+      const { main } = await importMain();
+      let started = false;
+      const run = main().then(() => {
+        started = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      await vi.advanceTimersByTimeAsync(44_999);
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(started).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await run;
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      // Never the interactive sign-in, never a write to the token store
+      expect(mockStartCallbackServer).not.toHaveBeenCalled();
+      expect(mockSaveTokens).not.toHaveBeenCalled();
+      // The server runs with the stored (expired) access token
+      expect(mockCreateWhoopClient).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "A-stale" })
+      );
+      expect(mockCreateWhoopServer).toHaveBeenCalledOnce();
+      expect(mockConnect).toHaveBeenCalledOnce();
+      expect(runtimeStatus().snapshot().whoop_auth).toEqual({
+        access_token_expires_at: new Date(stale.expires_at).toISOString(),
+        last_refresh: { at: "2026-09-17T08:01:05.000Z", outcome: "transient_failure" },
+      });
+
+      const entries = logEntries();
+      expect(entries.filter((e) => e.msg === RETRY_MSG)).toEqual([
+        expect.objectContaining({ level: "warn", status: 503, attempt: 1, delayMs: 5_000 }),
+        expect.objectContaining({ level: "warn", status: 503, attempt: 2, delayMs: 15_000 }),
+        expect.objectContaining({ level: "warn", status: 503, attempt: 3, delayMs: 45_000 }),
+      ]);
+      expect(entries.filter((e) => e.msg === DEGRADED_MSG)).toEqual([
+        expect.objectContaining({ level: "error", status: 503, outcome: "transient_failure" }),
+      ]);
+      expect(stderr.join("")).not.toMatch(/BODY-maintenance|A-stale|R-stale/);
+
+      // WHOOP recovers: the next tool call gets a 401, refreshes on demand and succeeds.
+      vi.useRealTimers();
+      mockRefreshAccessToken.mockResolvedValue({
+        access_token: "A-fresh",
+        refresh_token: "R-fresh",
+        expires_in: 3600,
+        token_type: "bearer",
+        scope: "read:profile",
+      });
+      fetchMock.mockImplementation(async (_url: string, init?: RequestInit) =>
+        new Headers(init?.headers).get("authorization") === "Bearer A-fresh"
+          ? new Response(JSON.stringify({ user_id: 7 }), { status: 200 })
+          : new Response("{}", { status: 401 })
+      );
+      const client = mockCreateWhoopClient.mock.results[0]!.value as WhoopClientLike;
+
+      await expect(client.get("/v2/user/profile/basic")).resolves.toEqual({ user_id: 7 });
+
+      expect(mockRefreshAccessToken).toHaveBeenCalledWith("R-stale", expect.anything());
+      expect(mockSaveTokens).toHaveBeenCalledWith(
+        expect.objectContaining({ access_token: "A-fresh", refresh_token: "R-fresh" })
+      );
+      expect(runtimeStatus().snapshot().whoop_auth.last_refresh?.outcome).toBe("ok");
+    });
+
+    it("starts normally when the second attempt succeeds", async () => {
+      fetchMock.mockResolvedValueOnce(answer(503, {})).mockResolvedValueOnce(newTokens);
+      const { main } = await importMain();
+      const run = main();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      await run;
+
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(mockCreateWhoopClient).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "A-new" })
+      );
+      expect(mockSaveTokens).toHaveBeenCalledWith(
+        expect.objectContaining({ access_token: "A-new", refresh_token: "R-new" }),
+        "/mock-home/.whoop-mcp"
+      );
+      expect(mockStartCallbackServer).not.toHaveBeenCalled();
+      const entries = logEntries();
+      expect(entries.filter((e) => e.msg === RETRY_MSG)).toHaveLength(1);
+      expect(entries.filter((e) => e.msg === DEGRADED_MSG)).toEqual([]);
+      expect(runtimeStatus().snapshot().whoop_auth.last_refresh).toBeNull();
+    });
+
+    it("starts in degraded mode with a client_rejected log after invalid_client, keeping the tokens", async () => {
+      fetchMock.mockResolvedValue(
+        answer(401, { error: "invalid_client", error_description: "BODY-client-auth" })
+      );
+      const { main } = await importMain();
+      const run = main();
+
+      await vi.advanceTimersByTimeAsync(65_000);
+      await run;
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(mockStartCallbackServer).not.toHaveBeenCalled();
+      expect(mockSaveTokens).not.toHaveBeenCalled();
+      expect(mockCreateWhoopClient).toHaveBeenCalledWith(
+        expect.objectContaining({ accessToken: "A-stale" })
+      );
+      expect(logEntries().filter((e) => e.msg === DEGRADED_MSG)).toEqual([
+        expect.objectContaining({ level: "error", status: 401, outcome: "client_rejected" }),
+      ]);
+      expect(runtimeStatus().snapshot().whoop_auth.last_refresh?.outcome).toBe("client_rejected");
+      expect(stderr.join("")).not.toContain("BODY-client-auth");
+    });
+
+    it("starts in degraded mode after network errors, logging the error class only", async () => {
+      fetchMock.mockRejectedValue(new TypeError("getaddrinfo ENOTFOUND BODY-host"));
+      const { main } = await importMain();
+      const run = main();
+
+      await vi.advanceTimersByTimeAsync(65_000);
+      await run;
+
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+      expect(logEntries().filter((e) => e.msg === DEGRADED_MSG)).toEqual([
+        expect.objectContaining({ errorClass: "WhoopNetworkError", outcome: "transient_failure" }),
+      ]);
+      expect(stderr.join("")).not.toContain("BODY-host");
+      expect(mockCreateWhoopServer).toHaveBeenCalledOnce();
+    });
+
+    it("exits (rejects) without retrying when there are no stored tokens", async () => {
+      const { WhoopNetworkError } = await import("../src/api/client.js");
+      mockLoadTokens.mockResolvedValue(null);
+      const failure = new WhoopNetworkError(new TypeError("fetch failed"));
+      mockAuthenticate.mockRejectedValue(failure);
+      const { main } = await importMain();
+
+      const outcome = main().then(
+        () => "started",
+        (error: unknown) => error
+      );
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      expect(await outcome).toBe(failure);
+      expect(mockAuthenticate).toHaveBeenCalledOnce();
+      expect(mockCreateWhoopServer).not.toHaveBeenCalled();
+      expect(logEntries().filter((e) => e.msg === DEGRADED_MSG)).toEqual([]);
+    });
+
+    it("does not retry errors other than transient refresh failures", async () => {
+      mockAuthenticate.mockRejectedValue(new Error("Token exchange failed (400): bad code"));
+      const { main } = await importMain();
+
+      await expect(main()).rejects.toThrow("Token exchange failed");
+      expect(mockAuthenticate).toHaveBeenCalledOnce();
+      expect(mockCreateWhoopServer).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Runtime token refresh: rejected client credentials (R2)
+  // -------------------------------------------------------------------------
+
+  describe("runtime token refresh after invalid_client", () => {
+    const stored = {
+      access_token: "A0",
+      refresh_token: "R0",
+      expires_at: Date.now() + 50 * 60_000,
+      token_type: "Bearer",
+    };
+
+    async function start(): Promise<{
+      onTokenRefresh: () => Promise<string>;
+      runtimeStatus: import("../src/runtime-status.js").RuntimeStatus;
+    }> {
+      const { main } = await importMain();
+      await main();
+      return {
+        onTokenRefresh: (
+          mockCreateWhoopClient.mock.calls[0]![0] as { onTokenRefresh: () => Promise<string> }
+        ).onTokenRefresh,
+        runtimeStatus: (
+          mockCreateWhoopServer.mock.calls[0]![1] as {
+            runtimeStatus: import("../src/runtime-status.js").RuntimeStatus;
+          }
+        ).runtimeStatus,
+      };
+    }
+
+    it("keeps the stored tokens (expires_at untouched) and records client_rejected", async () => {
+      setupHappyPath();
+      process.env.LOG_LEVEL = "warn";
+      mockLoadTokens.mockResolvedValue(stored);
+      const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+      const rejection = new TokenRefreshError(401, "BODY-client", "invalid_client");
+      mockRefreshAccessToken.mockRejectedValue(rejection);
+      const stderr: string[] = [];
+      const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+        stderr.push(String(chunk));
+        return true;
+      });
+
+      try {
+        const { onTokenRefresh, runtimeStatus } = await start();
+        await expect(onTokenRefresh()).rejects.toBe(rejection);
+        expect(runtimeStatus.snapshot().whoop_auth.last_refresh?.outcome).toBe("client_rejected");
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(mockSaveTokens).not.toHaveBeenCalled();
+      const log = stderr.join("");
+      expect(log).toContain('"msg":"whoop token refresh failed"');
+      expect(log).toContain('"outcome":"client_rejected"');
+      expect(log).not.toContain("BODY-client");
+    });
+
+    it("still marks the stored tokens expired on 400 invalid_grant with its error code", async () => {
+      setupHappyPath();
+      mockLoadTokens.mockResolvedValue(stored);
+      mockSaveTokens.mockResolvedValue(undefined);
+      const { TokenRefreshError } = await import("../src/auth/token-refresh-error.js");
+      mockRefreshAccessToken.mockRejectedValue(new TokenRefreshError(400, "d", "invalid_grant"));
+
+      const { onTokenRefresh, runtimeStatus } = await start();
+
+      await expect(onTokenRefresh()).rejects.toThrow("(400)");
+      expect(mockSaveTokens).toHaveBeenCalledWith({ ...stored, expires_at: 0 });
+      expect(runtimeStatus.snapshot().whoop_auth.last_refresh?.outcome).toBe("rejected");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Subcommand dispatch: revoke (human-only CLI, never an MCP tool)
+  // -------------------------------------------------------------------------
+
+  describe("revoke subcommand", () => {
+    it("runs the revoke CLI: without --yes it explains, sends nothing and returns 2", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      let out = "";
+      const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        out += String(chunk);
+        return true;
+      });
+
+      try {
+        const { runRevokeSubcommand } = await import("../src/index.js");
+        await expect(runRevokeSubcommand(["--keep-tokens"])).resolves.toBe(2);
+        await expect(runRevokeSubcommand(["--unknown"])).resolves.toBe(2);
+      } finally {
+        spy.mockRestore();
+        vi.unstubAllGlobals();
+      }
+
+      expect(out).toContain("whoop-ai-mcp revoke: revoke this app's access to your WHOOP account.");
+      expect(out).toContain("Nothing was sent.");
+      expect(out).toContain("Usage: whoop-ai-mcp revoke --yes [--keep-tokens]");
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(mockLoadTokens).not.toHaveBeenCalled();
+      expect(mockAuthenticate).not.toHaveBeenCalled();
+    });
+  });
 });
+
+/** The part of the WHOOP client the startup tests call. */
+interface WhoopClientLike {
+  get<T>(path: string): Promise<T>;
+}

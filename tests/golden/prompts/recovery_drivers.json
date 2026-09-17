@@ -1,0 +1,51 @@
+{
+  "name": "recovery_drivers",
+  "mode": "standard",
+  "listing": {
+    "name": "recovery_drivers",
+    "description": "Look for observational patterns between behaviours (bedtime, time asleep, strain, training load, late workouts, naps, sleep debt) and next-morning recovery, HRV, resting heart rate or sleep.",
+    "arguments": [
+      {
+        "name": "outcome",
+        "description": "Outcome to relate behaviours to: recovery, hrv, rhr, sleep_performance, asleep_hours (optional)",
+        "required": false
+      },
+      {
+        "name": "focus",
+        "description": "One behaviour to add bucket means for: asleep_hours, bedtime_min, bedtime_deviation_min, prior_day_strain, prior_day_trimp, prior_day_workout_minutes, hard_zone_minutes, late_workout, last_workout_to_bed_min, nap_before, debt_entering_hours, efficiency_pct, disturbances_per_hour (optional)",
+        "required": false
+      }
+    ]
+  },
+  "default_arguments": {
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Look for patterns between my behaviours and next-morning recovery, HRV and resting heart rate in my WHOOP data. Use the following tools:\n\n1. **get_recovery_drivers** — Observational tests of bedtime, time asleep, day strain, training load, late workouts, naps and sleep debt against the outcome, with effective sample sizes and false-discovery control\n\nReport:\n- First the status, pairs_analyzed against pairs_required and excluded_pairs by reason. While the status is calibrating or insufficient_data, say how many pairs exist and how many are required, and stop there\n- Findings only where consistent is true, each with n, the effect (rho or Cliff's delta) and its 95% confidence interval, in the past tense; say when partly_by_construction is true\n- That the remaining combinations showed no consistent association or were not tested (not_tested_summary), without listing them all\n- If I mention a behaviour WHOOP cannot see (for example alcohol or a late meal), ask me for the exact dates first and call **get_recovery_drivers** again with custom_tags only for the dates I confirm; never infer tag dates from the data\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses.\n\nHow to read training and day data:\n- Strain is WHOOP's 0-21 score and is not linear: don't add day strain across days, and don't split it into workouts (day strain is not the sum of workout strains).\n- TRIMP and heart-rate zones undercount strength sessions, where effort shows little in heart rate. Pace is the elapsed average pace of the whole session, pauses included, not a split.\n- Acute:chronic ratio, EWMA (ATL, CTL, TSB) and monotony describe the load pattern only; don't present them as injury risk, readiness or advice.\n- Relationships between behaviours and recovery are observational and need the stated minimum number of pairs; report one only when the tool marks it consistent, and never as a cause.\n- A workout after local midnight but before the next sleep belongs to the previous WHOOP day: use the day a tool reports, not the calendar date of the start.\n- The sleep need estimate is a statistical estimate from past WHOOP sleep-need records, not WHOOP's Sleep Planner.\n- If a tool reports truncated history, say which data may be missing; repeating the same call continues loading from the cache."
+        }
+      }
+    ]
+  },
+  "omitted_arguments": {
+    "error": "MCP error -32602: MCP error -32602: Invalid arguments for prompt recovery_drivers: Invalid input: expected object, received undefined"
+  },
+  "sample_arguments": {
+    "arguments": {
+      "outcome": "hrv",
+      "focus": "prior_day_strain"
+    },
+    "result": {
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "Look for patterns between my behaviours and next-morning hrv in my WHOOP data. Use the following tools:\n\n1. **get_recovery_drivers** with outcomes [\"hrv\"] and focus \"prior_day_strain\" — Observational tests of bedtime, time asleep, day strain, training load, late workouts, naps and sleep debt against the outcome, with effective sample sizes and false-discovery control\n\nReport:\n- First the status, pairs_analyzed against pairs_required and excluded_pairs by reason. While the status is calibrating or insufficient_data, say how many pairs exist and how many are required, and stop there\n- Findings only where consistent is true, each with n, the effect (rho or Cliff's delta) and its 95% confidence interval, in the past tense; say when partly_by_construction is true\n- That the remaining combinations showed no consistent association or were not tested (not_tested_summary), without listing them all\n- The bucket means for prior_day_strain, with the count in each bucket\n- If I mention a behaviour WHOOP cannot see (for example alcohol or a late meal), ask me for the exact dates first and call **get_recovery_drivers** again with custom_tags only for the dates I confirm; never infer tag dates from the data\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses.\n\nHow to read training and day data:\n- Strain is WHOOP's 0-21 score and is not linear: don't add day strain across days, and don't split it into workouts (day strain is not the sum of workout strains).\n- TRIMP and heart-rate zones undercount strength sessions, where effort shows little in heart rate. Pace is the elapsed average pace of the whole session, pauses included, not a split.\n- Acute:chronic ratio, EWMA (ATL, CTL, TSB) and monotony describe the load pattern only; don't present them as injury risk, readiness or advice.\n- Relationships between behaviours and recovery are observational and need the stated minimum number of pairs; report one only when the tool marks it consistent, and never as a cause.\n- A workout after local midnight but before the next sleep belongs to the previous WHOOP day: use the day a tool reports, not the calendar date of the start.\n- The sleep need estimate is a statistical estimate from past WHOOP sleep-need records, not WHOOP's Sleep Planner.\n- If a tool reports truncated history, say which data may be missing; repeating the same call continues loading from the cache."
+          }
+        }
+      ]
+    }
+  }
+}

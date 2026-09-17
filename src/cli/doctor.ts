@@ -1,6 +1,6 @@
 import { lstat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
+import { resolveTokenDir, TOKEN_DIR_ENV } from "../auth/token-store.js";
 import { privacyModeSchema } from "../privacy.js";
 
 export interface DoctorDependencies {
@@ -16,8 +16,18 @@ export interface DoctorDependencies {
   write: (text: string) => void;
 }
 
+/** Where the token folder comes from: the default, WHOOP_MCP_TOKEN_DIR, or an unusable value */
+function tokenDirectorySource(
+  env: NodeJS.ProcessEnv
+): "default" | "WHOOP_MCP_TOKEN_DIR" | "invalid" {
+  const value = env[TOKEN_DIR_ENV];
+  if (value === undefined || value.trim() === "") return "default";
+  return isAbsolute(value) ? "WHOOP_MCP_TOKEN_DIR" : "invalid";
+}
+
 async function inspectToken(): ReturnType<DoctorDependencies["inspectToken"]> {
-  const directory = join(homedir(), ".whoop-mcp");
+  // Throws for a relative WHOOP_MCP_TOKEN_DIR; runDoctor reports that as a failed check.
+  const directory = resolveTokenDir();
   const [folder, file] = await Promise.all([
     lstat(directory),
     lstat(join(directory, "tokens.json")),
@@ -51,6 +61,7 @@ export async function runDoctor(
   const transport = (env.MCP_TRANSPORT ?? "stdio").trim().toLowerCase();
   const privacy = privacyModeSchema.safeParse(env.WHOOP_MCP_PRIVACY_MODE ?? "standard");
   const port = Number(env.MCP_PORT ?? "3000");
+  const tokenDirectory = tokenDirectorySource(env);
   const checks = {
     runtime: Number(dependencies.nodeVersion.split(".")[0]) >= 20,
     credentials_configured: Boolean(env.WHOOP_CLIENT_ID?.trim() && env.WHOOP_CLIENT_SECRET?.trim()),
@@ -62,6 +73,7 @@ export async function runDoctor(
           port >= 0 &&
           port <= 65535)),
     privacy_configuration: privacy.success,
+    token_directory_configuration: tokenDirectory !== "invalid",
     private_token_file: false,
   };
   try {
@@ -81,6 +93,7 @@ export async function runDoctor(
     checks,
     transport: ["stdio", "http", "both"].includes(transport) ? transport : "invalid",
     privacy_mode: privacy.success ? privacy.data : "invalid",
+    token_directory: tokenDirectory,
     scope_status: "unknown",
     token_validity: "unknown",
     next_step:

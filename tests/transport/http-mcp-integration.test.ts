@@ -14,6 +14,7 @@ import { createHttpServer } from "../../src/transport/http.js";
 import { createWhoopServer } from "../../src/server.js";
 import type { WhoopClient } from "../../src/api/client.js";
 import { analyticsClient } from "../helpers/analytics-fixtures.js";
+import { LEGACY_AGGREGATE_TOOL_NAMES } from "../../src/tools/registry/index.js";
 
 function makeMockWhoopClient(): WhoopClient {
   return {
@@ -41,7 +42,9 @@ describe("HTTP transport — MCP integration", () => {
           requestInit: { headers: { Authorization: "Bearer privacy-test-token" } },
         })
       );
-      expect((await client.listTools()).tools).toHaveLength(5);
+      const aggregateTools = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(aggregateTools).toEqual(expect.arrayContaining([...LEGACY_AGGREGATE_TOOL_NAMES]));
+      expect(aggregateTools).not.toContain("get_today");
       const result = await client.callTool({ name: "get_sleep_debt", arguments: {} });
       expect(result.isError).not.toBe(true);
       expect(result.structuredContent).toBeDefined();
@@ -118,7 +121,6 @@ describe("HTTP transport — MCP integration", () => {
       publicUrl: "https://example.com",
       allowedRedirectUris: ["https://claude.ai/api/mcp/auth_callback"],
       jwtSecret,
-      scopes: ["mcp"],
       client: {
         clientId: "whoop-mcp-connector",
         clientName: "WHOOP MCP Connector",

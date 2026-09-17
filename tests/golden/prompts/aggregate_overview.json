@@ -1,0 +1,45 @@
+{
+  "name": "aggregate_overview",
+  "mode": "aggregate",
+  "listing": {
+    "name": "aggregate_overview",
+    "description": "Overview of the latest released weeks in aggregate privacy mode: the latest released week, trends, the last two released weeks compared and weekly training load.",
+    "arguments": [
+      {
+        "name": "weeks",
+        "description": "Released weeks to cover, 2-13 (default: 4)",
+        "required": false
+      }
+    ]
+  },
+  "default_arguments": {
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Give me an overview of my WHOOP data over the last 4 released weeks. Use the following tools:\n\n1. **get_sync_status** — released_weeks.latest_week_start is the Monday of the latest released week\n2. **get_weekly_summary** with week_start set to that Monday — Averages and totals for the latest released week\n3. **get_trend** with metric \"recovery\" and days 28 — Mean, spread and trend over released weeks (days is rounded up to 1, 2, 4, 8 or 13 weeks; period gives the weeks used); repeat with metric \"hrv\", \"sleep_duration\" and \"strain\"\n4. **compare_periods** with period_a from the Monday 7 days before that Monday to the Sunday before it, and period_b from that Monday to the Sunday 6 days after it — The last 2 released weeks side by side\n5. **get_training_load** with weeks 4 — Weekly sessions, workout minutes, TRIMP, energy and mean day strain over released weeks\n\nReport:\n- The weeks each result covers\n- Averages, trends and changes with their sample sizes, and the training load by week\n- Which values are null because a week is not released, is withheld or has fewer than 3 samples, as the notes say\n\nHow to read the data:\n- This server runs in aggregate privacy mode: results cover whole released weeks only. Don't describe single days, nights or workouts, and don't try to derive them by subtracting one result from another.\n- A null value is withheld or unknown, never 0. Notes say why (a week not released yet, a week with a record still open or being scored, or fewer than 3 samples); say so plainly instead of guessing.\n- Calibrating recoveries are not used, and values are rounded.\n- Sleep hours mean time asleep on main sleeps. Strain is WHOOP's non-linear 0-21 score.\n- If a note says data could not be read completely, repeating the call continues loading from the cache.\n- State which weeks the numbers cover, and don't give medical diagnoses."
+        }
+      }
+    ]
+  },
+  "omitted_arguments": {
+    "error": "MCP error -32602: MCP error -32602: Invalid arguments for prompt aggregate_overview: Invalid input: expected object, received undefined"
+  },
+  "sample_arguments": {
+    "arguments": {
+      "weeks": "13"
+    },
+    "result": {
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "Give me an overview of my WHOOP data over the last 13 released weeks. Use the following tools:\n\n1. **get_sync_status** — released_weeks.latest_week_start is the Monday of the latest released week\n2. **get_weekly_summary** with week_start set to that Monday — Averages and totals for the latest released week\n3. **get_trend** with metric \"recovery\" and days 90 — Mean, spread and trend over released weeks (days is rounded up to 1, 2, 4, 8 or 13 weeks; period gives the weeks used); repeat with metric \"hrv\", \"sleep_duration\" and \"strain\"\n4. **compare_periods** with period_a from the Monday 7 days before that Monday to the Sunday before it, and period_b from that Monday to the Sunday 6 days after it — The last 2 released weeks side by side\n5. **get_training_load** with weeks 13 — Weekly sessions, workout minutes, TRIMP, energy and mean day strain over released weeks\n\nReport:\n- The weeks each result covers\n- Averages, trends and changes with their sample sizes, and the training load by week\n- Which values are null because a week is not released, is withheld or has fewer than 3 samples, as the notes say\n\nHow to read the data:\n- This server runs in aggregate privacy mode: results cover whole released weeks only. Don't describe single days, nights or workouts, and don't try to derive them by subtracting one result from another.\n- A null value is withheld or unknown, never 0. Notes say why (a week not released yet, a week with a record still open or being scored, or fewer than 3 samples); say so plainly instead of guessing.\n- Calibrating recoveries are not used, and values are rounded.\n- Sleep hours mean time asleep on main sleeps. Strain is WHOOP's non-linear 0-21 score.\n- If a note says data could not be read completely, repeating the call continues loading from the cache.\n- State which weeks the numbers cover, and don't give medical diagnoses."
+          }
+        }
+      ]
+    }
+  }
+}

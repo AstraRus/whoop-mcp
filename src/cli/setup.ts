@@ -23,7 +23,15 @@ import { createInterface, type Interface } from "node:readline";
 
 import { authenticate } from "../auth/oauth.js";
 import type { OAuthConfig } from "../auth/oauth.js";
-import { deleteTokens, loadTokens, saveTokens, type OAuthTokens } from "../auth/token-store.js";
+import {
+  deleteTokens,
+  loadTokens,
+  redactHomePath,
+  resolveTokenDir,
+  saveTokens,
+  TOKEN_DIR_ENV,
+  type OAuthTokens,
+} from "../auth/token-store.js";
 import { refreshAccessToken, toOAuthTokens } from "../auth/oauth.js";
 import {
   createWhoopClient,
@@ -306,6 +314,7 @@ export async function runSetup(options: SetupOptions = {}, deps: RunSetupDeps = 
 
   out.write("WHOOP MCP — Setup Wizard\n");
   out.write("------------------------\n\n");
+  writeTokenDirNote(out);
 
   // --- Resolve target client first so we can peek at any existing config. ---
   const target: ClientTarget =
@@ -409,6 +418,26 @@ export async function runSetup(options: SetupOptions = {}, deps: RunSetupDeps = 
   // claude-desktop — read existing, backup, merge, write atomically
   const path = options.configPath ?? claudeDesktopConfigPath();
   await writeClaudeDesktopConfig(path, env, merged.fs, out);
+}
+
+/**
+ * When WHOOP_MCP_TOKEN_DIR is set, say where --verify stores the tokens and
+ * that the server needs the same variable: the generated client configuration
+ * only carries the WHOOP credentials, so the server would look in ~/.whoop-mcp.
+ */
+function writeTokenDirNote(out: NodeJS.WritableStream): void {
+  const value = process.env[TOKEN_DIR_ENV];
+  if (value === undefined || value.trim() === "") return;
+  let location: string;
+  try {
+    location = redactHomePath(resolveTokenDir());
+  } catch (error: unknown) {
+    out.write(`Warning: ${error instanceof Error ? error.message : String(error)}\n\n`);
+    return;
+  }
+  out.write(
+    `WHOOP tokens are stored in ${location} (${TOKEN_DIR_ENV}). Set the same ${TOKEN_DIR_ENV} in the server's environment; the generated configuration does not include it.\n\n`
+  );
 }
 
 async function readExistingWhoopCreds(

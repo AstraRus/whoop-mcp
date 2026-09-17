@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   RESOURCE_DEFINITIONS,
   registerResources,
@@ -6,7 +6,15 @@ import {
   CYCLE_TTL_MS,
   PROFILE_TTL_MS,
   SLEEP_LOOKBACK_LIMIT,
+  WORKOUT_LIST_PATH,
 } from "../../src/resources/index.js";
+import type { Logger } from "../../src/logging/logger.js";
+import type { Workout } from "../../src/api/types.js";
+import { getToday, TODAY_LIST_PATHS } from "../../src/tools/get-today.js";
+import { workoutSummarySchema } from "../../src/tools/workout-utils.js";
+import { connectServer } from "../helpers/contract.js";
+import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
+import { LIVE_SHAPED_IDS, liveShapedUser } from "../helpers/whoop-users.js";
 import type { WhoopClient, WhoopGetOptions } from "../../src/api/client.js";
 import {
   createWhoopClient,
@@ -121,8 +129,14 @@ function definition(uri: string): (typeof RESOURCE_DEFINITIONS)[number] {
 // ---------------------------------------------------------------------------
 
 describe("RESOURCE_DEFINITIONS", () => {
-  it("defines exactly 4 resources", () => {
-    expect(RESOURCE_DEFINITIONS).toHaveLength(4);
+  it("defines the 4 legacy resources and the latest workout", () => {
+    expect(RESOURCE_DEFINITIONS.map((def) => def.uri)).toEqual([
+      "whoop://v2/user/recovery/latest",
+      "whoop://v2/user/sleep/latest",
+      "whoop://v2/user/cycle/latest",
+      "whoop://v2/user/workout/latest",
+      "whoop://v2/user/profile",
+    ]);
   });
 
   it("all resources have required fields", () => {
@@ -342,9 +356,13 @@ describe("RESOURCE_DEFINITIONS", () => {
 
 type ReadCallback = (uri: URL) => Promise<{ contents: Array<{ text: string }> }>;
 
-function recoveryReadCallback(mockClient: WhoopClient): ReadCallback {
+function mockLogger(): Logger {
+  return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+}
+
+function recoveryReadCallback(mockClient: WhoopClient, logger?: Logger): ReadCallback {
   const mockServer = { registerResource: vi.fn() };
-  registerResources(mockServer as never, mockClient);
+  registerResources(mockServer as never, mockClient, logger ? { logger } : {});
   const recoveryCall = mockServer.registerResource.mock.calls.find(
     (c: unknown[]) => c[1] === "whoop://v2/user/recovery/latest"
   );
@@ -352,7 +370,7 @@ function recoveryReadCallback(mockClient: WhoopClient): ReadCallback {
 }
 
 describe("registerResources", () => {
-  it("registers 4 resources on the server", () => {
+  it("registers 5 resources on the server", () => {
     const mockServer = {
       registerResource: vi.fn(),
     };
@@ -360,7 +378,7 @@ describe("registerResources", () => {
 
     registerResources(mockServer as never, mockClient);
 
-    expect(mockServer.registerResource).toHaveBeenCalledTimes(4);
+    expect(mockServer.registerResource).toHaveBeenCalledTimes(5);
   });
 
   it("registers resources with correct URIs and metadata", () => {
@@ -377,6 +395,7 @@ describe("registerResources", () => {
     expect(uris).toContain("whoop://v2/user/recovery/latest");
     expect(uris).toContain("whoop://v2/user/sleep/latest");
     expect(uris).toContain("whoop://v2/user/cycle/latest");
+    expect(uris).toContain("whoop://v2/user/workout/latest");
     expect(uris).toContain("whoop://v2/user/profile");
   });
 
@@ -427,27 +446,71 @@ describe("registerResources", () => {
     [new WhoopNetworkError(new TypeError("fetch failed SECRET")), "Network error"],
   ])("explains WHOOP failures in the resource error (%s)", async (error, phrase) => {
     const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const callback = recoveryReadCallback({ get: vi.fn().mockRejectedValue(error) });
+    const logger = mockLogger();
+    const callback = recoveryReadCallback({ get: vi.fn().mockRejectedValue(error) }, logger);
     const result = await callback(new URL("whoop://v2/user/recovery/latest"));
 
     const payload = JSON.parse(result.contents[0]!.text) as { error: string };
     expect(payload.error).toMatch(/^Resource unavailable\. /);
     expect(payload.error).toContain(phrase);
     expect(payload.error).not.toContain("SECRET");
-    expect(JSON.stringify(stderrSpy.mock.calls)).not.toContain("SECRET");
+    expect(JSON.stringify(vi.mocked(logger.warn).mock.calls)).not.toContain("SECRET");
+    expect(stderrSpy).not.toHaveBeenCalled();
 
     stderrSpy.mockRestore();
   });
 
-  it("resource read logs errors to stderr", async () => {
+  it("logs a read failure at warn with the URI, error class and HTTP status only", async () => {
     const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const callback = recoveryReadCallback({
-      get: vi.fn().mockRejectedValue(new Error("timeout")),
-    });
-    await callback(new URL("whoop://v2/user/recovery/latest"));
+    const logger = mockLogger();
+    const apiCallback = recoveryReadCallback(
+      {
+        get: vi.fn().mockRejectedValue(new WhoopApiError(503, "Unavailable", { token: "SECRET" })),
+      },
+      logger
+    );
+    await apiCallback(new URL("whoop://v2/user/recovery/latest"));
+    const authCallback = recoveryReadCallback(
+      {
+        get: vi
+          .fn()
+          .mockRejectedValue(
+            new WhoopAuthError(new WhoopApiError(401, "Unauthorized", "SECRET body"))
+          ),
+      },
+      logger
+    );
+    await authCallback(new URL("whoop://v2/user/recovery/latest"));
+    const plainCallback = recoveryReadCallback(
+      { get: vi.fn().mockRejectedValue(new Error("timeout SECRET")) },
+      logger
+    );
+    await plainCallback(new URL("whoop://v2/user/recovery/latest"));
 
-    expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining("Resource read failed"));
+    expect(vi.mocked(logger.warn).mock.calls).toEqual([
+      [
+        "resource read failed",
+        { uri: "whoop://v2/user/recovery/latest", errorClass: "WhoopApiError", httpStatus: 503 },
+      ],
+      [
+        "resource read failed",
+        { uri: "whoop://v2/user/recovery/latest", errorClass: "WhoopAuthError", httpStatus: 401 },
+      ],
+      ["resource read failed", { uri: "whoop://v2/user/recovery/latest", errorClass: "Error" }],
+    ]);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(stderrSpy).not.toHaveBeenCalled();
 
+    stderrSpy.mockRestore();
+  });
+
+  it("reads without logging when no logger is passed", async () => {
+    const stderrSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const callback = recoveryReadCallback({ get: vi.fn().mockRejectedValue(new Error("x")) });
+    const result = await callback(new URL("whoop://v2/user/recovery/latest"));
+
+    expect(result.contents[0]!.text).toContain("Resource unavailable");
+    expect(stderrSpy).not.toHaveBeenCalled();
     stderrSpy.mockRestore();
   });
 });
@@ -693,6 +756,236 @@ describe("latest recovery/sleep linkage to the latest cycle", () => {
     } finally {
       vi.unstubAllGlobals();
       nowSpy.mockRestore();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Latest workout
+// ---------------------------------------------------------------------------
+
+describe("latest workout resource", () => {
+  const workoutDef = definition("whoop://v2/user/workout/latest");
+  const LIVE = liveShapedUser();
+  const LIVE_OPEN_CYCLE = LIVE.cycles.find((cycle) => cycle.id === LIVE_SHAPED_IDS.cycles.open)!;
+  const byId = (id: string): Workout => LIVE.workouts.find((workout) => workout.id === id)!;
+  const eveningRun = byId(LIVE_SHAPED_IDS.workouts.eveningRun);
+  const weightlifting = byId(LIVE_SHAPED_IDS.workouts.weightliftingDay3);
+  const padel = byId(LIVE_SHAPED_IDS.workouts.padel);
+
+  type Summary = Record<string, unknown> & { notes?: string[] };
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  function pinNow(iso: string = LIVE.now.toISOString()): void {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(iso);
+  }
+
+  function workoutClient(
+    workouts: unknown[],
+    cycles: unknown = pageOf(LIVE_OPEN_CYCLE)
+  ): WhoopClient {
+    return linkedClient({
+      [WORKOUT_LIST_PATH]: pageOf(...workouts),
+      [CYCLE_PATH]: cycles,
+    });
+  }
+
+  it("reads get_today's workout list key and the cycle resource's key, both with the cycle TTL", async () => {
+    pinNow();
+    const client = workoutClient([eveningRun]);
+    await workoutDef.fetch(client);
+
+    expect(WORKOUT_LIST_PATH).toBe(TODAY_LIST_PATHS.workout);
+    expect(workoutDef.ttlMs).toBe(CYCLE_TTL_MS);
+    expect(client.get).toHaveBeenCalledWith(WORKOUT_LIST_PATH, {
+      cache: true,
+      ttlMs: CYCLE_TTL_MS,
+    });
+    expect(client.get).toHaveBeenCalledWith(CYCLE_PATH, { cache: true, ttlMs: CYCLE_TTL_MS });
+  });
+
+  it("summarizes the live-shaped evening run, keeping sport_id 0 and placing it on the cycle's day", async () => {
+    pinNow();
+    const result = (await workoutDef.fetch(workoutClient(LIVE.workouts))) as Summary;
+
+    expect(workoutSummarySchema.safeParse(result).success).toBe(true);
+    expect(result).toMatchObject({
+      id: eveningRun.id,
+      sport_name: "running",
+      sport_id: 0,
+      day: "2026-09-16",
+      local_date: "2026-09-16",
+      start_local: "2026-09-16T19:26:03.118+02:00",
+      score_state: "SCORED",
+      recorded_fraction: 1,
+      flags: ["cycle_in_progress"],
+    });
+    expect(result.gps).not.toBeNull();
+    expect(result.notes).toBeUndefined();
+  });
+
+  it("chooses the newest finished workout over one still in progress", async () => {
+    pinNow("2026-09-16T17:00:00.000Z"); // 19:00 local: the evening run has not ended yet
+    const inProgress: Workout = { ...eveningRun, start: "2026-09-16T16:50:00.000Z" };
+    const result = (await workoutDef.fetch(
+      workoutClient([inProgress, weightlifting, padel])
+    )) as Summary;
+
+    expect(result.id).toBe(weightlifting.id);
+  });
+
+  it("returns a message when no workout has finished", async () => {
+    pinNow("2026-09-16T17:00:00.000Z");
+    const inProgress: Workout = { ...eveningRun, start: "2026-09-16T16:50:00.000Z" };
+
+    expect(await workoutDef.fetch(workoutClient([]))).toEqual({
+      message: "No workout data available yet.",
+    });
+    expect(await workoutDef.fetch(workoutClient([inProgress]))).toEqual({
+      message: "No workout data available yet.",
+    });
+  });
+
+  it("explains a workout WHOOP has not scored yet", async () => {
+    pinNow();
+    const pending: Workout = { ...eveningRun, score_state: "PENDING_SCORE", score: null };
+    const result = (await workoutDef.fetch(workoutClient([pending]))) as Summary;
+
+    expect(result).toMatchObject({
+      score_state: "PENDING_SCORE",
+      strain: null,
+      zone_minutes: null,
+      recorded_fraction: null,
+      gps: null,
+      flags: ["cycle_in_progress", "not_scored"],
+    });
+    expect(result.notes).toEqual([
+      "WHOOP has not scored this workout yet (PENDING_SCORE); score values are missing until it does.",
+    ]);
+  });
+
+  it("notes a workout that started before the current cycle and dates it by its start", async () => {
+    pinNow();
+    const result = (await workoutDef.fetch(workoutClient([padel]))) as Summary;
+
+    expect(result).toMatchObject({ id: padel.id, day: "2026-09-15", flags: ["day_by_fallback"] });
+    expect(result.notes).toEqual([
+      "This workout started before the current WHOOP cycle (started 2026-09-15T23:13+02:00), so it is not part of that cycle's strain.",
+    ]);
+  });
+
+  it("notes partial heart-rate data and the strength-training caveat", async () => {
+    pinNow();
+    const partial: Workout = {
+      ...weightlifting,
+      score: { ...weightlifting.score!, percent_recorded: 0.62 },
+    };
+    const result = (await workoutDef.fetch(workoutClient([partial]))) as Summary;
+
+    expect(result.flags).toContain("low_recording");
+    expect(result.notes).toEqual([
+      "Heart-rate data covers only 62% of this workout, so its strain, heart-rate zones and calories reflect the recorded part only.",
+      "Heart-rate zones and strain measure cardiovascular load, which can understate the muscular effort of strength training.",
+    ]);
+  });
+
+  it("still summarizes the workout when the cycle cannot be read", async () => {
+    pinNow();
+    const result = (await workoutDef.fetch(
+      workoutClient([eveningRun], new Error("503"))
+    )) as Summary;
+
+    expect(result).toMatchObject({ id: eveningRun.id, flags: ["day_by_fallback"] });
+    expect(result.notes).toEqual([expect.stringContaining("could not be read")]);
+  });
+
+  it("rejects when the workout list cannot be read, so the read callback explains it", async () => {
+    pinNow();
+    const error = new WhoopApiError(429, "Too Many Requests", {});
+    const mockServer = { registerResource: vi.fn() };
+    const logger = mockLogger();
+    registerResources(
+      mockServer as never,
+      linkedClient({ [WORKOUT_LIST_PATH]: error, [CYCLE_PATH]: pageOf(LIVE_OPEN_CYCLE) }),
+      { logger }
+    );
+    const call = mockServer.registerResource.mock.calls.find(
+      (c: unknown[]) => c[1] === "whoop://v2/user/workout/latest"
+    )!;
+    const result = await (call[3] as ReadCallback)(new URL("whoop://v2/user/workout/latest"));
+
+    expect(JSON.parse(result.contents[0]!.text)).toEqual({
+      error:
+        "Resource unavailable. WHOOP rate limit reached (HTTP 429). Wait a minute, then retry.",
+    });
+    expect(logger.warn).toHaveBeenCalledWith("resource read failed", {
+      uri: "whoop://v2/user/workout/latest",
+      errorClass: "WhoopApiError",
+      httpStatus: 429,
+    });
+  });
+
+  it("shares one workout request with get_today within the TTL (real client and cache)", async () => {
+    pinNow();
+    const fixture = createWhoopFixtureClient(LIVE);
+    const workoutFetches: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = new URL(String(input));
+        const path = `${url.pathname}${url.search}`;
+        if (url.pathname === "/v2/activity/workout") workoutFetches.push(path);
+        return new Response(JSON.stringify(await fixture.get(path)), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      })
+    );
+    const client = createWhoopClient({
+      accessToken: "test-token",
+      baseUrl: "https://api.test",
+      cache: new MemoryCache(),
+    });
+
+    const today = await getToday(client, LIVE.now);
+    vi.setSystemTime(LIVE.now.getTime() + 60_000);
+    const result = (await workoutDef.fetch(client)) as Summary;
+
+    expect(today.strain?.last_workout?.sport_name).toBe("running");
+    expect(result.id).toBe(eveningRun.id);
+    expect(workoutFetches).toEqual(["/v2/activity/workout?limit=25"]);
+  });
+
+  it("is listed and read through the MCP server in standard mode, and absent in aggregate mode, where only the guide is listed", async () => {
+    pinNow();
+    const standard = await connectServer(createWhoopFixtureClient(LIVE));
+    try {
+      const listed = (await standard.listResources()).find(
+        (resource) => resource.uri === "whoop://v2/user/workout/latest"
+      );
+      expect(listed).toMatchObject({ name: "Latest Workout", mimeType: "application/json" });
+      const read = await standard.readResource("whoop://v2/user/workout/latest");
+      const content = read.contents[0] as { text: string };
+      expect(JSON.parse(content.text)).toMatchObject({ id: eveningRun.id, sport_id: 0 });
+    } finally {
+      await standard.close();
+    }
+
+    const aggregate = await connectServer(createWhoopFixtureClient(LIVE), {
+      privacyMode: "aggregate",
+    });
+    try {
+      expect((await aggregate.listResources()).map((resource) => resource.uri)).toEqual([
+        "whoop://server/guide",
+      ]);
+      await expect(aggregate.readResource("whoop://v2/user/workout/latest")).rejects.toThrow();
+    } finally {
+      await aggregate.close();
     }
   });
 });

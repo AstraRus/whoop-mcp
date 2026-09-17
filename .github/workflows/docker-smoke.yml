@@ -1,0 +1,291 @@
+name: Docker smoke
+
+# Builds the production image and checks the non-root entrypoint
+# (docker/entrypoint.sh) against the volume layouts deployments use. The
+# server never contacts WHOOP here: every container gets fake, unexpired
+# tokens and fake client credentials, which is enough to reach /health.
+# Never use a copied production tokens.json in this workflow.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .gitattributes
+      - docker/**
+      - src/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - .github/workflows/docker-smoke.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - .dockerignore
+      - .gitattributes
+      - docker/**
+      - src/**
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - .github/workflows/docker-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Non-root container scenarios
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      IMAGE: whoop-mcp:smoke
+      IMAGE_CRLF: whoop-mcp:smoke-crlf
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t "$IMAGE" .
+
+      - name: Build image from a CRLF entrypoint (scenario f)
+        run: |
+          cp docker/entrypoint.sh "$RUNNER_TEMP/entrypoint.lf"
+          sed -i 's/$/\r/' docker/entrypoint.sh
+          test "$(grep -c $'\r$' docker/entrypoint.sh)" -gt 0
+          docker build -t "$IMAGE_CRLF" .
+          cp "$RUNNER_TEMP/entrypoint.lf" docker/entrypoint.sh
+
+      - name: Run scenarios
+        run: |
+          set -euo pipefail
+
+          AUTH_TOKEN="smoke-$(openssl rand -hex 16)"
+          EXPIRES_AT=$(( ($(date +%s) + 86400) * 1000 ))
+          SEED="$RUNNER_TEMP/seed"
+          mkdir -p "$SEED/.whoop-mcp"
+          # Fake, unexpired tokens: the server starts without contacting WHOOP.
+          printf '{"access_token":"smoke-access","refresh_token":"smoke-refresh","expires_at":%s,"token_type":"Bearer"}' \
+            "$EXPIRES_AT" > "$SEED/.whoop-mcp/tokens.json"
+          cat > "$SEED/seed-tokens.mjs" <<'JS'
+          // Writes fake tokens through the server's own token store as the
+          // container user, into the folder the server would use.
+          import { resolveTokenDir, saveTokens } from "/app/dist/auth/token-store.js";
+          const expected = process.argv[2];
+          const dir = resolveTokenDir();
+          if (dir !== expected) throw new Error(`token folder is ${dir}, expected ${expected}`);
+          await saveTokens({
+            access_token: "smoke-access",
+            refresh_token: "smoke-refresh",
+            expires_at: Date.now() + 86_400_000,
+            token_type: "Bearer",
+          });
+          console.error(`seeded tokens in ${dir}`);
+          JS
+          cat > "$SEED/rewrite-tokens.mjs" <<'JS'
+          // Load, save (temp file + rename) and reload tokens.json as the caller.
+          import { loadTokens, saveTokens } from "/app/dist/auth/token-store.js";
+          const tokens = await loadTokens();
+          if (!tokens) throw new Error("tokens.json is not readable");
+          await saveTokens({ ...tokens, expires_at: tokens.expires_at + 1 });
+          const again = await loadTokens();
+          if (again?.expires_at !== tokens.expires_at + 1) throw new Error("the save did not persist");
+          console.log("token write and rename ok");
+          JS
+          chmod 644 "$SEED/.whoop-mcp/tokens.json" "$SEED"/*.mjs
+
+          COMMON=(
+            --label whoop-smoke=1
+            --no-healthcheck
+            -e MCP_TRANSPORT=http
+            -e "MCP_AUTH_TOKEN=$AUTH_TOKEN"
+            -e WHOOP_CLIENT_ID=smoke-client
+            -e WHOOP_CLIENT_SECRET=smoke-secret
+            -v "$SEED:/seed:ro"
+          )
+
+          dump_logs() {
+            for c in $(docker ps -aq --filter label=whoop-smoke=1); do
+              echo "----- logs of $(docker inspect -f '{{.Name}}' "$c")"
+              docker logs "$c" 2>&1 | tail -n 50 || true
+            done
+          }
+          fail() {
+            echo "::error::$*"
+            dump_logs
+            exit 1
+          }
+          cleanup() {
+            docker rm -f $(docker ps -aq --filter label=whoop-smoke=1) >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # Output is captured before matching: with pipefail, grep -q closing a
+          # pipe early would fail the producer and so the whole pipeline.
+          contains() { # haystack needle
+            case "$1" in *"$2"*) return 0 ;; *) return 1 ;; esac
+          }
+          logs_of() { docker logs "$1" 2>&1; }
+
+          wait_healthy() { # container host-port
+            local body
+            for _ in $(seq 1 60); do
+              body=$(curl -fsS "http://127.0.0.1:$2/health" 2>/dev/null || true)
+              if contains "$body" '"status":"ok"'; then
+                return 0
+              fi
+              if [ "$(docker inspect -f '{{.State.Running}}' "$1")" != "true" ]; then
+                fail "$1 exited before /health answered"
+              fi
+              sleep 1
+            done
+            fail "$1: /health did not return 200 with status ok"
+          }
+
+          # PID of the server: the node process whose parent is tini (PID 1).
+          node_pid() {
+            docker exec "$1" sh -c '
+              for p in /proc/[0-9]*; do
+                [ "$(cat "$p/comm" 2>/dev/null)" = node ] || continue
+                set -- $(cat "$p/stat" 2>/dev/null)
+                if [ "${4:-}" = 1 ]; then echo "${p#/proc/}"; fi
+              done
+              true'
+          }
+          node_uid() {
+            local pid
+            pid=$(node_pid "$1")
+            [ -n "$pid" ] || fail "$1: no node server process"
+            docker exec "$1" awk '/^Uid:/ {print $2}' "/proc/$pid/status"
+          }
+          # The server's environment, one variable per line.
+          node_env() {
+            local pid
+            pid=$(node_pid "$1")
+            [ -n "$pid" ] || fail "$1: no node server process"
+            docker exec "$1" sh -c "tr '\\0' '\\n' < /proc/$pid/environ"
+          }
+          # Whether the server's environment has the exact line NAME=value.
+          env_has_line() { # container line
+            contains $'\n'"$(node_env "$1")"$'\n' $'\n'"$2"$'\n'
+          }
+          # Whether the server's environment sets NAME at all.
+          env_has_var() { # container name
+            contains $'\n'"$(node_env "$1")" $'\n'"$2="
+          }
+          expect_eq() { # description actual expected
+            if [ "$2" != "$3" ]; then fail "$1: got '$2', expected '$3'"; fi
+            echo "ok: $1 = $3"
+          }
+          owner_mode() { # container path
+            docker exec "$1" stat -c '%u:%g %a' "$2"
+          }
+
+          # A named volume as older images and Railway left it: root-owned
+          # 0700 folder, root-owned 0600 tokens.json, plus a stale temp file.
+          seed_root_volume() { # volume
+            docker volume create "$1" >/dev/null
+            docker run --rm --entrypoint sh -v "$1:/v" -v "$SEED:/seed:ro" "$IMAGE" -c '
+              cp /seed/.whoop-mcp/tokens.json /v/tokens.json &&
+              cp /seed/.whoop-mcp/tokens.json /v/tokens.json.1.deadbeef.tmp &&
+              chown root:root /v /v/tokens.json /v/tokens.json.1.deadbeef.tmp &&
+              chmod 700 /v && chmod 600 /v/tokens.json /v/tokens.json.1.deadbeef.tmp'
+          }
+
+          graceful_stop() { # container
+            local started elapsed code
+            started=$(date +%s)
+            docker stop -t 10 "$1" >/dev/null
+            elapsed=$(( $(date +%s) - started ))
+            code=$(docker inspect -f '{{.State.ExitCode}}' "$1")
+            [ "$elapsed" -lt 10 ] || fail "$1: docker stop took ${elapsed}s"
+            expect_eq "$1 exit code after docker stop" "$code" 0
+          }
+
+          echo "::group::(a) no volume: runs as node"
+          docker create --name smoke-a -p 127.0.0.1:3101:3000 "${COMMON[@]}" "$IMAGE" >/dev/null
+          docker cp "$SEED/.whoop-mcp" smoke-a:/root/.whoop-mcp
+          docker start smoke-a >/dev/null
+          wait_healthy smoke-a 3101
+          expect_eq "(a) server uid" "$(node_uid smoke-a)" 1000
+          expect_eq "(a) tokens.json owner and mode" "$(owner_mode smoke-a /root/.whoop-mcp/tokens.json)" "1000:1000 600"
+          expect_eq "(a) token folder owner and mode" "$(owner_mode smoke-a /root/.whoop-mcp)" "1000:1000 700"
+          env_has_line smoke-a WHOOP_MCP_TOKEN_DIR=/root/.whoop-mcp || fail "(a) WHOOP_MCP_TOKEN_DIR not exported"
+          env_has_line smoke-a HOME=/home/node || fail "(a) HOME is not /home/node"
+          contains "$(logs_of smoke-a)" '"level":"info","msg":"entrypoint: running as node' || fail "(a) no entrypoint info line"
+          echo "::endgroup::"
+
+          echo "::group::(b) root-owned 0700 volume at /root/.whoop-mcp: runs as node, can write"
+          seed_root_volume smoke-b
+          docker run -d --name smoke-b -p 127.0.0.1:3102:3000 "${COMMON[@]}" \
+            -v smoke-b:/root/.whoop-mcp "$IMAGE" >/dev/null
+          wait_healthy smoke-b 3102
+          expect_eq "(b) server uid" "$(node_uid smoke-b)" 1000
+          expect_eq "(b) tokens.json owner and mode" "$(owner_mode smoke-b /root/.whoop-mcp/tokens.json)" "1000:1000 600"
+          expect_eq "(b) stale temp file owner" "$(owner_mode smoke-b /root/.whoop-mcp/tokens.json.1.deadbeef.tmp)" "1000:1000 600"
+          expect_eq "(b) token folder owner and mode" "$(owner_mode smoke-b /root/.whoop-mcp)" "1000:1000 700"
+          expect_eq "(b) /root mode" "$(owner_mode smoke-b /root)" "0:0 711"
+          docker exec -u node -e WHOOP_MCP_TOKEN_DIR=/root/.whoop-mcp smoke-b node /seed/rewrite-tokens.mjs
+          expect_eq "(b) folder entries after the write" \
+            "$(docker exec smoke-b ls -A /root/.whoop-mcp | tr '\n' ' ')" "tokens.json tokens.json.1.deadbeef.tmp "
+          docker rm -f smoke-b >/dev/null
+          echo "::endgroup::"
+
+          echo "::group::(c) the same kind of volume mounted read-only: stays root, still serves"
+          seed_root_volume smoke-c
+          docker run -d --name smoke-c -p 127.0.0.1:3103:3000 "${COMMON[@]}" \
+            -v smoke-c:/root/.whoop-mcp:ro "$IMAGE" >/dev/null
+          wait_healthy smoke-c 3103
+          expect_eq "(c) server uid" "$(node_uid smoke-c)" 0
+          logs_c=$(logs_of smoke-c)
+          contains "$logs_c" '"level":"warn","msg":"entrypoint: running as root (' || fail "(c) no entrypoint warning"
+          contains "$logs_c" 'set WHOOP_MCP_TOKEN_DIR to a volume path such as /data to run unprivileged' || fail "(c) warning lacks guidance"
+          graceful_stop smoke-c
+          echo "::endgroup::"
+
+          echo "::group::(d) --user 1000 without WHOOP_MCP_TOKEN_DIR: tokens under /home/node/.whoop-mcp"
+          docker run -d --name smoke-d -p 127.0.0.1:3104:3000 "${COMMON[@]}" --user 1000 "$IMAGE" \
+            sh -c 'node /seed/seed-tokens.mjs /home/node/.whoop-mcp && exec node dist/index.js' >/dev/null
+          wait_healthy smoke-d 3104
+          expect_eq "(d) server uid" "$(node_uid smoke-d)" 1000
+          expect_eq "(d) tokens.json owner and mode" "$(owner_mode smoke-d /home/node/.whoop-mcp/tokens.json)" "1000:1000 600"
+          if env_has_var smoke-d WHOOP_MCP_TOKEN_DIR; then fail "(d) WHOOP_MCP_TOKEN_DIR must not be set"; fi
+          env_has_line smoke-d HOME=/home/node || fail "(d) HOME is not /home/node"
+          if contains "$(logs_of smoke-d)" 'entrypoint:'; then fail "(d) the entrypoint must not act for a non-root user"; fi
+          docker rm -f smoke-d >/dev/null
+          echo "::endgroup::"
+
+          echo "::group::(e) WHOOP_MCP_TOKEN_DIR=/data volume: runs as node"
+          seed_root_volume smoke-e
+          docker run -d --name smoke-e -p 127.0.0.1:3105:3000 "${COMMON[@]}" \
+            -e WHOOP_MCP_TOKEN_DIR=/data -v smoke-e:/data "$IMAGE" >/dev/null
+          wait_healthy smoke-e 3105
+          expect_eq "(e) server uid" "$(node_uid smoke-e)" 1000
+          expect_eq "(e) tokens.json owner and mode" "$(owner_mode smoke-e /data/tokens.json)" "1000:1000 600"
+          expect_eq "(e) /root left untouched" "$(owner_mode smoke-e /root)" \
+            "$(docker run --rm --entrypoint stat "$IMAGE" -c '%u:%g %a' /root)"
+          docker exec -u node -e WHOOP_MCP_TOKEN_DIR=/data smoke-e node /seed/rewrite-tokens.mjs
+          echo "::endgroup::"
+
+          echo "::group::(f) image built from a CRLF entrypoint"
+          if docker run --rm --entrypoint sh "$IMAGE_CRLF" -c 'grep -q "$(printf "\r")" /usr/local/bin/docker-entrypoint.sh'; then
+            fail "(f) carriage returns survived the build"
+          fi
+          seed_root_volume smoke-f
+          docker run -d --name smoke-f -p 127.0.0.1:3106:3000 "${COMMON[@]}" \
+            -e WHOOP_MCP_TOKEN_DIR=/data -v smoke-f:/data "$IMAGE_CRLF" >/dev/null
+          wait_healthy smoke-f 3106
+          expect_eq "(f) server uid" "$(node_uid smoke-f)" 1000
+          docker rm -f smoke-f >/dev/null
+          echo "::endgroup::"
+
+          echo "::group::(g) docker stop exits gracefully in under 10 s"
+          graceful_stop smoke-e
+          graceful_stop smoke-a
+          echo "::endgroup::"
+
+          echo "All docker smoke scenarios passed."

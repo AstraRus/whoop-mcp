@@ -1,6 +1,6 @@
 {
   "name": "get_today",
-  "description": "Get today's complete health snapshot — recovery score, last night's sleep, current strain, and last workout in one call. Today is the current WHOOP cycle, which starts at last night's sleep onset and stays open until WHOOP processes the next sleep (it can run longer than a day); sleep and recovery are the ones linked to that cycle. If no newer sleep has been processed yet (wake-up not synced, or no sleep detected), the most recent sleep and recovery are still returned with status stale in data_quality.sources and a note giving their date: do not present them as last night's. A cycle WHOOP has not updated for a day is shown with cycle status stale and a possibly-not-synced note. Sleep hours are time asleep (time_in_bed_hours is separate). recovery.user_calibrating=true means WHOOP is still learning the user's baselines and the score is provisional. A section is null when its data is not available yet or could not be fetched; `notes` explains why in plain language and data_quality.sources gives each source's status.",
+  "description": "Get today's complete health snapshot — recovery score, last night's sleep, current strain, and last workout in one call. Today is the current WHOOP cycle, which starts at last night's sleep onset and stays open until WHOOP processes the next sleep (it can run longer than a day); sleep and recovery are the ones linked to that cycle. If no newer sleep has been processed yet (wake-up not synced, or no sleep detected), the most recent sleep and recovery are still returned with status stale in data_quality.sources and a note giving their date: do not present them as last night's. A cycle WHOOP has not updated for a day is shown with cycle status stale and a possibly-not-synced note. Sleep hours are time asleep (time_in_bed_hours is separate); sleep also gives disturbances, sleep_cycles, no_data_hours, consistency_pct (null while WHOOP is still calibrating and reports 0) and need_hours_including_debt (WHOOP's sleep need). recovery.user_calibrating=true means WHOOP is still learning the user's baselines and the score is provisional; recovery.zone is WHOOP's green/yellow/red band. A section is null when its data is not available yet or could not be fetched; `notes` explains why in plain language and data_quality.sources gives each source's status, fetch time and cache status. data_quality periods are local times with their UTC offset.",
   "inputSchema": {
     "type": "object",
     "properties": {},
@@ -48,6 +48,15 @@
               },
               "user_calibrating": {
                 "type": "boolean"
+              },
+              "zone": {
+                "type": "string",
+                "enum": [
+                  "green",
+                  "yellow",
+                  "red"
+                ],
+                "description": "WHOOP recovery band: green 67-100, yellow 34-66, red 0-33"
               }
             },
             "required": [
@@ -56,7 +65,8 @@
               "resting_heart_rate",
               "spo2_pct",
               "skin_temp_celsius",
-              "user_calibrating"
+              "user_calibrating",
+              "zone"
             ],
             "additionalProperties": false
           },
@@ -120,6 +130,35 @@
                     "type": "null"
                   }
                 ]
+              },
+              "disturbances": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "sleep_cycles": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "no_data_hours": {
+                "type": "number",
+                "description": "Time in bed without strap data"
+              },
+              "consistency_pct": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "WHOOP sleep consistency; null when WHOOP reports none or reports 0 while still calibrating"
+              },
+              "need_hours_including_debt": {
+                "type": "number",
+                "description": "WHOOP sleep need: baseline + sleep debt + recent strain + recent naps (a nap lowers it)"
               }
             },
             "required": [
@@ -132,7 +171,12 @@
               "awake_hours",
               "performance_pct",
               "efficiency_pct",
-              "respiratory_rate"
+              "respiratory_rate",
+              "disturbances",
+              "sleep_cycles",
+              "no_data_hours",
+              "consistency_pct",
+              "need_hours_including_debt"
             ],
             "additionalProperties": false
           },

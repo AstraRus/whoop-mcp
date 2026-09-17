@@ -64,12 +64,31 @@ export interface WhoopGetOptions {
    * {@link WhoopRateBudgetError} instead.
    */
   deadlineMs?: number;
+  /**
+   * With `cache`: drop the stored entry for this path first, then fetch and
+   * store a fresh value (a fetch for the same path already in flight is joined).
+   */
+  refresh?: boolean;
+}
+
+/** A GET result with when it was fetched and whether it came from the cache. */
+export interface WhoopFetchResult<T> {
+  data: T;
+  /** Epoch ms when the data was fetched from WHOOP (for a cache hit: when it was stored). */
+  fetchedAt: number;
+  /** "hit" when served from a stored cache entry; "miss" when fetched (or joined in flight). */
+  cacheStatus: "hit" | "miss";
 }
 
 /** WHOOP API client returned by createWhoopClient */
 export interface WhoopClient {
   /** Send a GET request and parse the JSON response as T */
   get<T>(path: string, options?: WhoopGetOptions): Promise<T>;
+  /**
+   * {@link get} that also reports the fetch time and cache status. Optional:
+   * test doubles may omit it, and callers then report both as unknown.
+   */
+  getWithMeta?<T>(path: string, options?: WhoopGetOptions): Promise<WhoopFetchResult<T>>;
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +152,7 @@ const SIGN_IN_FLOW =
   "it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server)";
 
 /** Remediation that forces a new sign-in: needed when refreshing still works but WHOOP refuses the tokens. */
-const SIGN_IN_AFTER_DELETING_TOKENS = `To sign in again, delete tokens.json from the server's token folder (~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): ${SIGN_IN_FLOW}.`;
+const SIGN_IN_AFTER_DELETING_TOKENS = `To sign in again, delete tokens.json from the server's token folder (WHOOP_MCP_TOKEN_DIR when set, else ~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): ${SIGN_IN_FLOW}.`;
 
 function describeApiStatus(statusCode: number): string {
   if (statusCode === 400) {
@@ -191,12 +210,16 @@ function describeWhoopErrorAt(error: unknown, depth: number): string | undefined
     if (error.cause instanceof WhoopNetworkError) {
       return describeWhoopErrorAt(error.cause, depth + 1);
     }
+    if (error.cause instanceof TokenRefreshError && error.cause.clientRejected) {
+      // invalid_client: the app's credentials, not the user's refresh token
+      return `WHOOP rejected this app's client credentials (HTTP ${error.cause.statusCode} invalid_client). Check WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET; your WHOOP sign-in itself is still valid.`;
+    }
     if (error.cause instanceof TokenRefreshError && !error.cause.rejected) {
       return error.cause.statusCode === 429
         ? "WHOOP rate-limited the token refresh. Your sign-in is still valid; retry in a minute."
         : "WHOOP's sign-in service is temporarily unavailable. Your sign-in is still valid; retry shortly.";
     }
-    return `WHOOP authentication failed: the access token could not be refreshed. To sign in again, restart the server (locally, setup --verify also works): ${SIGN_IN_FLOW}. If it starts without asking you to sign in, delete tokens.json from its token folder (~/.whoop-mcp; on a hosted server, its mounted volume) and restart it again.`;
+    return `WHOOP authentication failed: the access token could not be refreshed. To sign in again, restart the server (locally, setup --verify also works): ${SIGN_IN_FLOW}. If it starts without asking you to sign in, delete tokens.json from its token folder (WHOOP_MCP_TOKEN_DIR when set, else ~/.whoop-mcp; on a hosted server, its mounted volume) and restart it again.`;
   }
   if (error instanceof WhoopNetworkError) {
     const cause = error.cause;
@@ -418,16 +441,32 @@ export function createWhoopClient(options: WhoopClientOptions): WhoopClient {
     }
   }
 
+  async function getWithMeta<T>(
+    path: string,
+    getOptions?: WhoopGetOptions
+  ): Promise<WhoopFetchResult<T>> {
+    const deadlineMs = getOptions?.deadlineMs;
+    if (getOptions?.cache && cache) {
+      const key = cacheKey(path);
+      if (getOptions.refresh === true) {
+        cache.delete(key);
+      }
+      const { value, storedAt, hit } = await cache.getOrFetchWithMeta<T>(
+        key,
+        getOptions.ttlMs ?? DEFAULT_TTL_MS,
+        () => doGet<T>(path, deadlineMs)
+      );
+      return { data: value, fetchedAt: storedAt, cacheStatus: hit ? "hit" : "miss" };
+    }
+    const data = await doGet<T>(path, deadlineMs);
+    return { data, fetchedAt: Date.now(), cacheStatus: "miss" };
+  }
+
   return {
     async get<T>(path: string, getOptions?: WhoopGetOptions): Promise<T> {
-      const deadlineMs = getOptions?.deadlineMs;
-      if (getOptions?.cache && cache) {
-        return cache.getOrFetch<T>(cacheKey(path), getOptions.ttlMs ?? DEFAULT_TTL_MS, () =>
-          doGet<T>(path, deadlineMs)
-        );
-      }
-      return doGet<T>(path, deadlineMs);
+      return (await getWithMeta<T>(path, getOptions)).data;
     },
+    getWithMeta,
   };
 
   /**

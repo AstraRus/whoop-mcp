@@ -12,10 +12,10 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-09-03",
-            "end": "2026-09-16"
+            "start": "2026-08-31",
+            "end": "2026-09-13"
           },
-          "nights_analyzed": 2,
+          "nights_analyzed": 0,
           "status": "insufficient_data",
           "nights_required": 3,
           "total_debt_hours": null,
@@ -28,21 +28,29 @@
           "output_capped": false,
           "truncated": false,
           "notes": [
-            "Not enough data yet: 2 of 3 required scored main sleeps in this window, so deficit totals and bedtime/wake consistency are not calculated."
+            "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13.",
+            "Not enough data yet: 0 of 3 required scored main sleeps in released weeks with at least 3 each, so deficit totals and bedtime/wake consistency are not calculated."
           ],
           "disclaimer": "Statistical observation from your data, not medical advice.",
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-09-03",
-              "end": "2026-09-16"
+              "start": "2026-08-31",
+              "end": "2026-09-13"
             },
-            "method_version": "sleep-debt-2",
+            "method_version": "sleep-debt-2-released-weeks",
             "sources": {
               "sleep": {
-                "status": "available",
-                "records_fetched": 2,
-                "records_used": 2,
+                "status": "missing",
+                "records_fetched": 0,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              },
+              "cycle": {
+                "status": "missing",
+                "records_fetched": 0,
+                "records_used": 0,
                 "exclusions": {},
                 "truncated": false
               }
@@ -61,41 +69,47 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-09-03",
-            "end": "2026-09-16"
+            "start": "2026-08-31",
+            "end": "2026-09-13"
           },
-          "nights_analyzed": 13,
+          "nights_analyzed": 14,
           "status": "available",
           "nights_required": 3,
-          "total_debt_hours": 24.261688333333332,
-          "avg_nightly_debt_hours": 1.866283717948718,
+          "total_debt_hours": 27.2,
+          "avg_nightly_debt_hours": 1.9,
           "consistency": {
-            "bedtime_std_dev_minutes": 49.77519504015352,
-            "waketime_std_dev_minutes": 36.250421612729276,
-            "social_jetlag_minutes": 32.018189233993326
+            "bedtime_std_dev_minutes": 47,
+            "waketime_std_dev_minutes": 36,
+            "social_jetlag_minutes": 36
           },
           "output_capped": false,
           "truncated": false,
           "notes": [
-            "1 sleep is still being scored by WHOOP and not counted yet."
+            "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13."
           ],
           "disclaimer": "Statistical observation from your data, not medical advice.",
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-09-03",
-              "end": "2026-09-16"
+              "start": "2026-08-31",
+              "end": "2026-09-13"
             },
-            "method_version": "sleep-debt-2",
+            "method_version": "sleep-debt-2-released-weeks",
             "sources": {
               "sleep": {
                 "status": "available",
-                "records_fetched": 17,
-                "records_used": 13,
+                "records_fetched": 16,
+                "records_used": 14,
                 "exclusions": {
-                  "nap": 3,
-                  "pending": 1
+                  "nap": 2
                 },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "records_fetched": 14,
+                "records_used": 14,
+                "exclusions": {},
                 "truncated": false
               }
             }
@@ -115,41 +129,47 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-08-18",
-            "end": "2026-09-16"
+            "start": "2026-07-20",
+            "end": "2026-09-13"
           },
-          "nights_analyzed": 29,
+          "nights_analyzed": 56,
           "status": "available",
           "nights_required": 3,
-          "total_debt_hours": 52.191998611111124,
-          "avg_nightly_debt_hours": 1.7997240900383147,
+          "total_debt_hours": 117.4,
+          "avg_nightly_debt_hours": 2.1,
           "consistency": {
-            "bedtime_std_dev_minutes": 46.620941902459016,
-            "waketime_std_dev_minutes": 36.35402532081081,
-            "social_jetlag_minutes": 33.55554135168131
+            "bedtime_std_dev_minutes": 45,
+            "waketime_std_dev_minutes": 36,
+            "social_jetlag_minutes": 15
           },
           "output_capped": false,
           "truncated": false,
           "notes": [
-            "1 sleep is still being scored by WHOOP and not counted yet."
+            "Aggregate privacy mode uses whole released weeks: 8 weeks ending 2026-09-13."
           ],
           "disclaimer": "Statistical observation from your data, not medical advice.",
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-08-18",
-              "end": "2026-09-16"
+              "start": "2026-07-20",
+              "end": "2026-09-13"
             },
-            "method_version": "sleep-debt-2",
+            "method_version": "sleep-debt-2-released-weeks",
             "sources": {
               "sleep": {
                 "status": "available",
-                "records_fetched": 35,
-                "records_used": 29,
+                "records_fetched": 65,
+                "records_used": 56,
                 "exclusions": {
-                  "nap": 5,
-                  "pending": 1
+                  "nap": 9
                 },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "records_fetched": 56,
+                "records_used": 56,
+                "exclusions": {},
                 "truncated": false
               }
             }
@@ -169,39 +189,48 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-09-07",
+            "start": "2026-08-31",
             "end": "2026-09-13"
           },
-          "nights_analyzed": 7,
+          "nights_analyzed": 14,
           "status": "available",
           "nights_required": 3,
-          "total_debt_hours": 12.878426388888887,
-          "avg_nightly_debt_hours": 1.839775198412698,
+          "total_debt_hours": 27.2,
+          "avg_nightly_debt_hours": 1.9,
           "consistency": {
-            "bedtime_std_dev_minutes": 47.874379176935044,
-            "waketime_std_dev_minutes": 33.58183583588622,
-            "social_jetlag_minutes": 17.653602549388324
+            "bedtime_std_dev_minutes": 47,
+            "waketime_std_dev_minutes": 36,
+            "social_jetlag_minutes": 36
           },
           "output_capped": false,
           "truncated": false,
-          "notes": [],
+          "notes": [
+            "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13.",
+            "Aggregate privacy mode ignores start: the window always ends at the latest released week."
+          ],
           "disclaimer": "Statistical observation from your data, not medical advice.",
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-09-07",
+              "start": "2026-08-31",
               "end": "2026-09-13"
             },
-            "method_version": "sleep-debt-2",
+            "method_version": "sleep-debt-2-released-weeks",
             "sources": {
               "sleep": {
                 "status": "available",
-                "records_fetched": 9,
-                "records_used": 7,
+                "records_fetched": 16,
+                "records_used": 14,
                 "exclusions": {
-                  "outside_window_or_invalid_duration": 1,
-                  "nap": 1
+                  "nap": 2
                 },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "records_fetched": 14,
+                "records_used": 14,
+                "exclusions": {},
                 "truncated": false
               }
             }
@@ -222,39 +251,48 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-08-01",
-            "end": "2026-08-10"
+            "start": "2026-08-31",
+            "end": "2026-09-13"
           },
-          "nights_analyzed": 10,
+          "nights_analyzed": 14,
           "status": "available",
           "nights_required": 3,
-          "total_debt_hours": 24.852528055555553,
-          "avg_nightly_debt_hours": 2.485252805555555,
+          "total_debt_hours": 27.2,
+          "avg_nightly_debt_hours": 1.9,
           "consistency": {
-            "bedtime_std_dev_minutes": 35.02925164274503,
-            "waketime_std_dev_minutes": 33.99717343761069,
-            "social_jetlag_minutes": 14.698038681091475
+            "bedtime_std_dev_minutes": 47,
+            "waketime_std_dev_minutes": 36,
+            "social_jetlag_minutes": 36
           },
           "output_capped": false,
           "truncated": false,
-          "notes": [],
+          "notes": [
+            "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13.",
+            "Aggregate privacy mode ignores start: the window always ends at the latest released week."
+          ],
           "disclaimer": "Statistical observation from your data, not medical advice.",
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-08-01",
-              "end": "2026-08-10"
+              "start": "2026-08-31",
+              "end": "2026-09-13"
             },
-            "method_version": "sleep-debt-2",
+            "method_version": "sleep-debt-2-released-weeks",
             "sources": {
               "sleep": {
                 "status": "available",
-                "records_fetched": 12,
-                "records_used": 10,
+                "records_fetched": 16,
+                "records_used": 14,
                 "exclusions": {
-                  "outside_window_or_invalid_duration": 1,
-                  "nap": 1
+                  "nap": 2
                 },
+                "truncated": false
+              },
+              "cycle": {
+                "status": "available",
+                "records_fetched": 14,
+                "records_used": 14,
+                "exclusions": {},
                 "truncated": false
               }
             }
@@ -272,8 +310,8 @@
         "text_format": "pretty_json",
         "structuredContent": {
           "period": {
-            "start": "2026-09-03",
-            "end": "2026-09-16"
+            "start": "2026-08-31",
+            "end": "2026-09-13"
           },
           "nights_analyzed": 0,
           "status": "insufficient_data",
@@ -288,18 +326,26 @@
           "output_capped": false,
           "truncated": false,
           "notes": [
-            "Not enough data yet: 0 of 3 required scored main sleeps in this window, so deficit totals and bedtime/wake consistency are not calculated."
+            "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13.",
+            "Not enough data yet: 0 of 3 required scored main sleeps in released weeks with at least 3 each, so deficit totals and bedtime/wake consistency are not calculated."
           ],
           "disclaimer": "Statistical observation from your data, not medical advice.",
           "data_quality": {
-            "evaluated_at": "2026-09-16T21:30:00.000Z",
+            "evaluated_at": "2026-09-16",
             "requested_period": {
-              "start": "2026-09-03",
-              "end": "2026-09-16"
+              "start": "2026-08-31",
+              "end": "2026-09-13"
             },
-            "method_version": "sleep-debt-2",
+            "method_version": "sleep-debt-2-released-weeks",
             "sources": {
               "sleep": {
+                "status": "missing",
+                "records_fetched": 0,
+                "records_used": 0,
+                "exclusions": {},
+                "truncated": false
+              },
+              "cycle": {
                 "status": "missing",
                 "records_fetched": 0,
                 "records_used": 0,

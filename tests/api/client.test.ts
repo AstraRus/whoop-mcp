@@ -60,6 +60,29 @@ describe("describeWhoopError", () => {
     ).toMatch(/sign in again/);
   });
 
+  it.each([401, 400])(
+    "blames the app's client credentials, not the sign-in, for HTTP %i invalid_client",
+    (status) => {
+      const error = new WhoopAuthError(
+        new TokenRefreshError(status, "Client SECRET-DESCRIPTION failed", "invalid_client")
+      );
+      const expected = `WHOOP rejected this app's client credentials (HTTP ${status} invalid_client). Check WHOOP_CLIENT_ID and WHOOP_CLIENT_SECRET; your WHOOP sign-in itself is still valid.`;
+
+      expect(describeWhoopError(error)).toBe(expected);
+      // Also when a composite tool rethrows it wrapped in a network error
+      expect(describeWhoopError(new WhoopNetworkError(error))).toBe(expected);
+      expect(describeWhoopError(error)).not.toMatch(
+        /sign in again|tokens\.json|SECRET-DESCRIPTION/
+      );
+    }
+  );
+
+  it("still asks for a new sign-in when invalid_grant carries its error code", () => {
+    expect(
+      describeWhoopError(new WhoopAuthError(new TokenRefreshError(400, "d", "invalid_grant")))
+    ).toMatch(/sign in again/);
+  });
+
   const SECRET_BODY = { error_description: "token abc.def.ghi for jane@example.com", hrv: 61.2 };
 
   it.each([

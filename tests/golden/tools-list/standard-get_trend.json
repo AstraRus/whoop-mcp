@@ -1,6 +1,6 @@
 {
   "name": "get_trend",
-  "description": "Analyze one health metric over the last N local days (today included): values oldest first with their local dates, statistics, a linear-regression slope per day, and anomalies. trend.change is the raw direction (increasing/decreasing/stable); trend.direction says whether that is improving or declining for this metric (better_when: higher for recovery, HRV and sleep; lower for resting heart rate; strain has no better direction, so direction is null). Confidence rates how well a sloped line fits the values (R²), capped by sample size (low below 7 points, at most medium below 14). Identical values are stable and rated on sample size alone. A stable trend from values that vary usually has low confidence: no consistent upward or downward direction was found, which does not mean the stability finding is unreliable. With fewer than 4 data points (e.g. while WHOOP is still calibrating) status is insufficient_data, trend fields are null, anomalies are empty and notes say why; statistics are still given for the data that exists. sleep_duration is hours asleep on main sleeps (naps excluded); strain uses completed cycles only.",
+  "description": "Analyze one health metric over the last N local days (today included): values oldest first with their local dates, statistics, a linear-regression slope per day, and anomalies. trend.change is the raw direction (increasing/decreasing/stable); trend.direction says whether that is improving or declining for this metric (better_when: higher for recovery, HRV, sleep_duration, sleep_performance, sleep_efficiency and sleep_consistency; lower for resting heart rate and sleep_debt; strain, respiratory_rate, rem_share, deep_share, disturbances_per_hour, spo2 and skin_temp have no better direction, so direction is null). Confidence rates how well a sloped line fits the values (R²), capped by sample size (low below 7 points, at most medium below 14). Identical values are stable and rated on sample size alone. A stable trend from values that vary usually has low confidence: no consistent upward or downward direction was found, which does not mean the stability finding is unreliable. With fewer than 4 data points (e.g. while WHOOP is still calibrating) status is insufficient_data, trend fields are null, anomalies are empty and notes say why; statistics are still given for the data that exists. sleep_duration is hours asleep on main sleeps (naps excluded); strain uses completed cycles only. rem_share and deep_share are % of time asleep; disturbances_per_hour skips nights under 1 hour asleep; sleep_consistency skips WHOOP's 0 while calibrating; sleep_debt is WHOOP's sleep-debt need in hours; spo2 and skin_temp come from recoveries and are reported only by WHOOP 4.0 or later. sleep_efficiency, rem_share, deep_share, disturbances_per_hour and sleep_debt skip nights with low data coverage (counted in notes).",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -12,7 +12,16 @@
           "rhr",
           "sleep_duration",
           "sleep_performance",
-          "strain"
+          "strain",
+          "sleep_efficiency",
+          "respiratory_rate",
+          "rem_share",
+          "deep_share",
+          "disturbances_per_hour",
+          "sleep_consistency",
+          "sleep_debt",
+          "spo2",
+          "skin_temp"
         ],
         "description": "The health metric to analyze."
       },

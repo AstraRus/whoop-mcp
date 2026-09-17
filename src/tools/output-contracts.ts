@@ -7,7 +7,7 @@ import {
 } from "../api/record-schemas.js";
 import { dataQualitySchema, periodSchema } from "./analytics-utils.js";
 import { MIN_SAMPLES_PER_PERIOD } from "./compare-periods.js";
-import { baselinesOutputSchema } from "./get-baselines.js";
+import { baselineMetricNameSchema, baselinesOutputSchema } from "./get-baselines.js";
 import { sleepDebtOutputSchema } from "./get-sleep-debt.js";
 import { MIN_TREND_POINTS } from "./stats-utils.js";
 
@@ -21,7 +21,18 @@ const collection = <Schema extends z.ZodType>(
 ): z.ZodObject<{
   records: z.ZodArray<Schema>;
   next_token: z.ZodOptional<z.ZodNullable<z.ZodString>>;
-}> => z.object({ records: z.array(record), next_token: z.string().nullish() });
+  notes: z.ZodOptional<z.ZodArray<z.ZodString>>;
+}> =>
+  z.object({
+    records: z.array(record),
+    next_token: z.string().nullish(),
+    notes: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Present only when a date in start or end was read in UTC because the user's time zone could not be read from WHOOP"
+      ),
+  });
 const weekly = z.object({
   week_start: z.string(),
   week_end: z.string(),
@@ -44,7 +55,9 @@ const weekly = z.object({
     count: nullable.describe(
       "Scored workouts in the week; null when workouts could not be loaded or the week has no WHOOP data at all (0 means a worn week without workouts)"
     ),
-    total_strain: nullable,
+    total_strain: nullable.describe(
+      "Sum of per-workout strain. Strain is non-linear (0-21), so this sum is not comparable to day strain."
+    ),
     total_calories_kj: nullable,
     sport_breakdown: z.record(z.string(), number),
   }),
@@ -75,6 +88,36 @@ const comparisonDay = z
   .nullable()
   .describe("Local day (YYYY-MM-DD) counted in the period; null when it covers no local day");
 const comparisonPeriod = period.extend({ first_day: comparisonDay, last_day: comparisonDay });
+const trainingPeriod = z.object({
+  sessions: comparisonCount.describe("Scored workouts placed on worn local days of the period"),
+  worn_days: comparisonCount.describe(
+    "Counted local days with a WHOOP cycle placed on them (the strap was worn)"
+  ),
+  sessions_per_week: nullable.describe(
+    "Sessions per 7 worn days; null unless both periods have at least 7 worn days"
+  ),
+  workout_minutes_per_worn_day: nullable.describe(
+    "Workout minutes (start to end) per worn day, 0 on worn days without workouts; null unless both periods have at least 7 worn days"
+  ),
+  trimp_per_worn_day: nullable.describe(
+    "Edwards TRIMP (WHOOP heart-rate zone 1-5 minutes weighted 1-5) per worn day; days with a workout recorded below 90% or not scored are left out; null unless both periods have at least 7 worn days"
+  ),
+});
+const training = z
+  .object({
+    period_a: trainingPeriod,
+    period_b: trainingPeriod,
+    change_pct: z.object({
+      sessions_per_week: nullable,
+      workout_minutes_per_worn_day: nullable,
+      trimp_per_worn_day: nullable,
+    }),
+    direction: z
+      .enum(["increased", "decreased", "unchanged", "insufficient_data"])
+      .describe("From trimp_per_worn_day; a change within ±5% is unchanged"),
+  })
+  .nullable()
+  .describe("Workout load per period; null when workouts or cycles could not be loaded");
 const comparison = z.object({
   period_a: comparisonPeriod,
   period_b: comparisonPeriod,
@@ -93,6 +136,7 @@ const comparison = z.object({
   strain: comparisonMetric.extend({
     direction: z.enum(["increased", "decreased", "unchanged", "insufficient_data"]),
   }),
+  training,
   truncated: z.boolean(),
   notes: z.array(z.string()),
   warnings: z.array(z.string()),
@@ -133,6 +177,9 @@ const today = z.object({
       spo2_pct: nullable,
       skin_temp_celsius: nullable,
       user_calibrating: z.boolean(),
+      zone: z
+        .enum(["green", "yellow", "red"])
+        .describe("WHOOP recovery band: green 67-100, yellow 34-66, red 0-33"),
     })
     .nullable(),
   sleep: z
@@ -147,6 +194,15 @@ const today = z.object({
       performance_pct: nullable,
       efficiency_pct: nullable,
       respiratory_rate: nullable,
+      disturbances: z.number().int().nonnegative(),
+      sleep_cycles: z.number().int().nonnegative(),
+      no_data_hours: number.describe("Time in bed without strap data"),
+      consistency_pct: nullable.describe(
+        "WHOOP sleep consistency; null when WHOOP reports none or reports 0 while still calibrating"
+      ),
+      need_hours_including_debt: number.describe(
+        "WHOOP sleep need: baseline + sleep debt + recent strain + recent naps (a nap lowers it)"
+      ),
     })
     .nullable(),
   strain: z
@@ -221,16 +277,15 @@ export const outputSchemas: Record<string, z.ZodObject> = {
   get_sleep_debt: sleepDebtOutputSchema,
 };
 
+// Aggregate bands drop the latest observation and the outer percentiles (p10, p90).
 const aggregateBand = z.object({
   sample_size: number,
   mean: number,
   median: number,
   std_dev: number,
-  p10: number,
   p25: number,
   p50: number,
   p75: number,
-  p90: number,
   constant_baseline: z.boolean(),
 });
 const aggregateQuality = dataQualitySchema
@@ -274,7 +329,7 @@ const aggregateComparisonPeriod = comparisonPeriod.extend({
     .describe("Last local day counted (YYYY-MM-DD, inclusive); null when it covers no local day"),
   days: number.describe("Local days counted, start to end inclusive"),
 });
-const aggregateComparison = comparison.extend({
+const aggregateComparison = comparison.omit({ training: true }).extend({
   period_a: aggregateComparisonPeriod,
   period_b: aggregateComparisonPeriod,
 });
@@ -286,10 +341,7 @@ export const aggregateOutputSchemas: Record<string, z.ZodObject> = {
   compare_periods: aggregateComparison,
   get_trend: aggregateTrend,
   get_baselines: baselinesOutputSchema.extend({
-    metrics: z.record(
-      z.enum(["hrv", "rhr", "respiratory_rate", "sleep_hours", "recovery_score"]),
-      aggregateBand.nullable()
-    ),
+    metrics: z.record(baselineMetricNameSchema, aggregateBand.nullable()),
     data_quality: aggregateQuality,
   }),
   get_sleep_debt: sleepDebtOutputSchema

@@ -1,0 +1,51 @@
+{
+  "name": "export_my_data",
+  "mode": "standard",
+  "listing": {
+    "name": "export_my_data",
+    "description": "Export WHOOP daily and workout rows as CSV or JSON for the last N local days, with the period, row counts and any cap or truncation stated.",
+    "arguments": [
+      {
+        "name": "days",
+        "description": "Local days to export, today included, 1-180 (default: 30)",
+        "required": false
+      },
+      {
+        "name": "format",
+        "description": "\"csv\" (default) or \"json\"",
+        "required": false
+      }
+    ]
+  },
+  "default_arguments": {
+    "messages": [
+      {
+        "role": "user",
+        "content": {
+          "type": "text",
+          "text": "Export my WHOOP data for the last 30 days as CSV. Use the following tool:\n\n1. **export_health_data** with start \"last 29 days\" and format \"csv\" — Daily rows and workout rows for the last 30 local days, today included\n\nThen tell me:\n- The period exported (period.start to period.end) and the row count of each dataset\n- Whether output_capped is true: the export keeps the newest days within 60,000 characters, and first_included_day and the notes give where to start the next export for the older days\n- Whether truncated is true or warnings report data that could not be loaded, and for which days\n- That empty cells are unknown values, not zero, and that energy covers whole WHOOP cycles (sleep onset to sleep onset)\n\nShow the exported CSV text of each dataset unchanged, without recomputing or rounding any value.\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses."
+        }
+      }
+    ]
+  },
+  "omitted_arguments": {
+    "error": "MCP error -32602: MCP error -32602: Invalid arguments for prompt export_my_data: Invalid input: expected object, received undefined"
+  },
+  "sample_arguments": {
+    "arguments": {
+      "days": "60",
+      "format": "json"
+    },
+    "result": {
+      "messages": [
+        {
+          "role": "user",
+          "content": {
+            "type": "text",
+            "text": "Export my WHOOP data for the last 60 days as JSON. Use the following tool:\n\n1. **export_health_data** with start \"last 59 days\" and format \"json\" — Daily rows and workout rows for the last 60 local days, today included\n\nThen tell me:\n- The period exported (period.start to period.end) and the row count of each dataset\n- Whether output_capped is true: the export keeps the newest days within 60,000 characters, and first_included_day and the notes give where to start the next export for the older days\n- Whether truncated is true or warnings report data that could not be loaded, and for which days\n- That empty cells are unknown values, not zero, and that energy covers whole WHOOP cycles (sleep onset to sleep onset)\n\nShow the exported rows unchanged, without recomputing or rounding any value.\n\nHow to read the data:\n- If a value is null, or a tool returns warnings, notes or data-quality details (for example \"not enough data\" while WHOOP is still calibrating in the first days of wear), say so plainly. Never treat a missing value as 0 and don't fill gaps with guesses.\n- Recoveries with user_calibrating = true are provisional; say so whenever you use one.\n- Don't describe a trend that rests on fewer than 4 data points; report the individual values instead.\n- Sleep hours mean time asleep (light + slow-wave + REM) from main sleeps. Naps and time in bed are separate figures; label them if you use them.\n- Collection tools (get_*_collection) return records newest first, at most 25 per call (default 10). They also include records that were still ongoing at the window start, such as the cycle and sleep that began the evening before, so check each record's start before assigning it to a day. Keep calling with next_token until it is null, and if a tool reports truncated results, say which period is missing.\n- State which days the numbers cover, and don't give medical diagnoses."
+          }
+        }
+      ]
+    }
+  }
+}

@@ -12,6 +12,11 @@ import {
   generateAuthCode,
   AuthCodeStore,
   MIN_CONNECTOR_PASSWORD_LENGTH,
+  CONNECTOR_SCOPE,
+  isAcceptedResource,
+  mcpResourceUrls,
+  normalizeResource,
+  redirectUriOrigins,
 } from "../../src/transport/oauth-helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -170,6 +175,67 @@ describe("parseAllowedRedirectUris", () => {
 
   it("returns empty array for empty string", () => {
     expect(parseAllowedRedirectUris("")).toEqual([]);
+  });
+});
+
+describe("redirectUriOrigins", () => {
+  it("returns each allowlisted origin once, in order, skipping invalid URIs", () => {
+    expect(
+      redirectUriOrigins([
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://claude.ai/other",
+        "https://claude.com/api/mcp/auth_callback",
+        "http://localhost:6274/oauth/callback",
+        "not a url",
+        "custom-scheme:/callback",
+      ])
+    ).toEqual(["https://claude.ai", "https://claude.com", "http://localhost:6274"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MCP resource identity
+// ---------------------------------------------------------------------------
+
+describe("mcpResourceUrls", () => {
+  it.each([["https://whoop.example.com"], ["https://whoop.example.com/"]])(
+    "derives the /mcp resource and metadata URL from %s",
+    (publicUrl) => {
+      expect(mcpResourceUrls(publicUrl)).toEqual({
+        origin: "https://whoop.example.com",
+        canonicalResource: "https://whoop.example.com/mcp",
+        resourceMetadataUrl: "https://whoop.example.com/.well-known/oauth-protected-resource/mcp",
+      });
+    }
+  );
+
+  it("rejects a non-https PUBLIC_URL", () => {
+    expect(() => mcpResourceUrls("http://whoop.example.com")).toThrow(/https/);
+  });
+});
+
+describe("isAcceptedResource", () => {
+  const urls = mcpResourceUrls("https://whoop.example.com");
+
+  it.each([
+    ["https://whoop.example.com/mcp", true],
+    ["https://whoop.example.com/mcp/", true],
+    ["https://whoop.example.com", true],
+    ["https://whoop.example.com/", true],
+    ["https://WHOOP.example.com/mcp", true],
+    ["https://whoop.example.com/mcp/extra", false],
+    ["https://whoop.example.com/other", false],
+    ["http://whoop.example.com/mcp", false],
+    ["https://evil.example/mcp", false],
+    ["not a url", false],
+  ])("%s → %s", (resource, accepted) => {
+    expect(isAcceptedResource(resource, urls)).toBe(accepted);
+  });
+
+  it("normalizeResource strips trailing slashes only", () => {
+    expect(normalizeResource("https://a.example/mcp//")).toBe("https://a.example/mcp");
+    expect(normalizeResource(new URL("https://a.example"))).toBe("https://a.example");
+    expect(CONNECTOR_SCOPE).toBe("mcp");
   });
 });
 

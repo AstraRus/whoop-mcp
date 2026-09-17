@@ -547,6 +547,7 @@ const LEGACY_RESOURCES: Record<string, string> = {
   "recovery-latest": "whoop://v2/user/recovery/latest",
   "sleep-latest": "whoop://v2/user/sleep/latest",
   "cycle-latest": "whoop://v2/user/cycle/latest",
+  "workout-latest": "whoop://v2/user/workout/latest",
   profile: "whoop://v2/user/profile",
 };
 

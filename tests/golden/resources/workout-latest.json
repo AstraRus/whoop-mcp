@@ -1,0 +1,286 @@
+{
+  "uri": "whoop://v2/user/workout/latest",
+  "listing": {
+    "name": "Latest Workout",
+    "uri": "whoop://v2/user/workout/latest",
+    "description": "Most recent finished workout as a summary: sport, local start and end, duration, strain, average and max heart rate, energy (kJ and kcal), recorded_fraction (share of the session with heart-rate data), zone minutes and shares, Edwards TRIMP, GPS distance, pace and speed when recorded, and flags. day is the local day of the WHOOP cycle containing its start. Notes say when it is not scored yet, heart-rate data is partial, it started before the current cycle, or heart-rate zones understate strength training.",
+    "mimeType": "application/json"
+  },
+  "reads": [
+    {
+      "name": "evening with every record",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/workout/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c08",
+            "sport_name": "running",
+            "sport_id": 0,
+            "day": "2026-09-16",
+            "local_date": "2026-09-16",
+            "start_local": "2026-09-16T19:26:03.118+02:00",
+            "end_local": "2026-09-16T20:11:47.905+02:00",
+            "timezone_offset": "+02:00",
+            "score_state": "SCORED",
+            "duration_minutes": 45.7,
+            "recorded_fraction": 1,
+            "recorded_minutes": 45.7,
+            "strain": 12.45,
+            "kilojoule": 2204,
+            "kcal": 527,
+            "average_heart_rate": 155,
+            "max_heart_rate": 179,
+            "zone_minutes": {
+              "zone_0": 0.3,
+              "zone_1": 1.5,
+              "zone_2": 5.8,
+              "zone_3": 20,
+              "zone_4": 15,
+              "zone_5": 3
+            },
+            "zone_share_pct": {
+              "zone_0": 0.7,
+              "zone_1": 3.3,
+              "zone_2": 12.8,
+              "zone_3": 43.8,
+              "zone_4": 32.9,
+              "zone_5": 6.5
+            },
+            "trimp": 148.4,
+            "high_intensity_minutes": 18,
+            "gps": {
+              "distance_km": 8.1,
+              "avg_pace_sec_per_km": 339,
+              "avg_speed_kmh": 10.6,
+              "altitude_gain_m": 45,
+              "altitude_change_m": -1,
+              "beats_per_km": 875
+            },
+            "flags": [
+              "cycle_in_progress"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "cycle synced before sleep and recovery",
+      "fixture": "liveShapedUser@2026-09-16T07:01:37+02:00",
+      "now": "2026-09-16T05:01:37.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/workout/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c05",
+            "sport_name": "padel",
+            "sport_id": 249,
+            "day": "2026-09-15",
+            "local_date": "2026-09-15",
+            "start_local": "2026-09-15T20:05:17.402+02:00",
+            "end_local": "2026-09-15T21:34:40.019+02:00",
+            "timezone_offset": "+02:00",
+            "score_state": "SCORED",
+            "duration_minutes": 89.4,
+            "recorded_fraction": 1,
+            "recorded_minutes": 89.4,
+            "strain": 12.61,
+            "kilojoule": 2545,
+            "kcal": 608,
+            "average_heart_rate": 136,
+            "max_heart_rate": 181,
+            "zone_minutes": {
+              "zone_0": 3.4,
+              "zone_1": 15,
+              "zone_2": 30.1,
+              "zone_3": 27.7,
+              "zone_4": 11.7,
+              "zone_5": 1.5
+            },
+            "zone_share_pct": {
+              "zone_0": 3.8,
+              "zone_1": 16.8,
+              "zone_2": 33.6,
+              "zone_3": 31,
+              "zone_4": 13.1,
+              "zone_5": 1.7
+            },
+            "trimp": 212.6,
+            "high_intensity_minutes": 13.2,
+            "gps": null,
+            "flags": [
+              "day_by_fallback"
+            ],
+            "notes": [
+              "This workout started before the current WHOOP cycle (started 2026-09-15T23:13+02:00), so it is not part of that cycle's strain."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "after local midnight before the next sleep",
+      "fixture": "liveShapedUser@2026-09-17T00:30:00+02:00",
+      "now": "2026-09-16T22:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/workout/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "id": "a3c5e7f9-1b2d-4f60-8a1c-3e5f7a9b0c08",
+            "sport_name": "running",
+            "sport_id": 0,
+            "day": "2026-09-16",
+            "local_date": "2026-09-16",
+            "start_local": "2026-09-16T19:26:03.118+02:00",
+            "end_local": "2026-09-16T20:11:47.905+02:00",
+            "timezone_offset": "+02:00",
+            "score_state": "SCORED",
+            "duration_minutes": 45.7,
+            "recorded_fraction": 1,
+            "recorded_minutes": 45.7,
+            "strain": 12.45,
+            "kilojoule": 2204,
+            "kcal": 527,
+            "average_heart_rate": 155,
+            "max_heart_rate": 179,
+            "zone_minutes": {
+              "zone_0": 0.3,
+              "zone_1": 1.5,
+              "zone_2": 5.8,
+              "zone_3": 20,
+              "zone_4": 15,
+              "zone_5": 3
+            },
+            "zone_share_pct": {
+              "zone_0": 0.7,
+              "zone_1": 3.3,
+              "zone_2": 12.8,
+              "zone_3": 43.8,
+              "zone_4": 32.9,
+              "zone_5": 6.5
+            },
+            "trimp": 148.4,
+            "high_intensity_minutes": 18,
+            "gps": {
+              "distance_km": 8.1,
+              "avg_pace_sec_per_km": 339,
+              "avg_speed_kmh": 10.6,
+              "altitude_gain_m": 45,
+              "altitude_change_m": -1,
+              "beats_per_km": 875
+            },
+            "flags": [
+              "cycle_in_progress"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "pending last night after naps",
+      "fixture": "matureUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/workout/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "id": "f52a0f74-12d6-4876-a46d-04ae841882da",
+            "sport_name": "running",
+            "sport_id": 0,
+            "day": "2026-09-15",
+            "local_date": "2026-09-15",
+            "start_local": "2026-09-15T08:40:36.795+01:00",
+            "end_local": "2026-09-15T09:16:57.892+01:00",
+            "timezone_offset": "+01:00",
+            "score_state": "SCORED",
+            "duration_minutes": 36.4,
+            "recorded_fraction": 1,
+            "recorded_minutes": 36.4,
+            "strain": 12.98,
+            "kilojoule": 449,
+            "kcal": 107,
+            "average_heart_rate": 155,
+            "max_heart_rate": 185,
+            "zone_minutes": {
+              "zone_0": 0.8,
+              "zone_1": 3.3,
+              "zone_2": 7.1,
+              "zone_3": 13.7,
+              "zone_4": 9.4,
+              "zone_5": 2.1
+            },
+            "zone_share_pct": {
+              "zone_0": 2.2,
+              "zone_1": 8.9,
+              "zone_2": 19.6,
+              "zone_3": 37.6,
+              "zone_4": 25.8,
+              "zone_5": 5.8
+            },
+            "trimp": 106.7,
+            "high_intensity_minutes": 11.5,
+            "gps": {
+              "distance_km": 5.56,
+              "avg_pace_sec_per_km": 392,
+              "avg_speed_kmh": 9.2,
+              "altitude_gain_m": 23,
+              "altitude_change_m": 10,
+              "beats_per_km": 1014
+            },
+            "flags": [
+              "day_by_fallback"
+            ],
+            "notes": [
+              "This workout started before the current WHOOP cycle (started 2026-09-15T22:42+01:00), so it is not part of that cycle's strain."
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "empty account",
+      "fixture": "emptyAccount",
+      "now": "2026-09-16T21:30:00.000Z",
+      "contents": [
+        {
+          "uri": "whoop://v2/user/workout/latest",
+          "mimeType": "application/json",
+          "text_format": "pretty_json",
+          "json": {
+            "message": "No workout data available yet."
+          }
+        }
+      ]
+    },
+    {
+      "name": "WHOOP unavailable",
+      "fixture": "liveShapedUser",
+      "now": "2026-09-16T21:30:00.000Z",
+      "failures": [
+        {
+          "path": "^/v2/",
+          "status": 503
+        }
+      ],
+      "contents": [
+        {
+          "uri": "whoop://v2/user/workout/latest",
+          "mimeType": "application/json",
+          "text_format": "compact_json",
+          "json": {
+            "error": "Resource unavailable. WHOOP API is temporarily unavailable (HTTP 503). Retry later."
+          }
+        }
+      ]
+    }
+  ]
+}

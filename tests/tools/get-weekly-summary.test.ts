@@ -19,13 +19,22 @@
  * - Handles partial failures; rethrows WHOOP errors when all 4 endpoints fail
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../../src/api/client.js";
 import { WhoopApiError } from "../../src/api/client.js";
 import { createWhoopServer } from "../../src/server.js";
-import { getWeeklySummary } from "../../src/tools/get-weekly-summary.js";
+import { getWeeklySummary, WEEK_NOT_RELEASED_NOTE } from "../../src/tools/get-weekly-summary.js";
+import { MAX_TOOL_TEXT_CHARS } from "../../src/tools/tool-definition.js";
+import { assertNeutralText, connectServer } from "../helpers/contract.js";
+import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
+import {
+  liveShapedUser,
+  matureUser,
+  stressUser,
+  type WhoopUserFixture,
+} from "../helpers/whoop-users.js";
 
 // ---------------------------------------------------------------------------
 // Live-shaped fake WHOOP API
@@ -292,10 +301,11 @@ describe("getWeeklySummary — week resolution", () => {
 
     expect(result.week_start).toBe("2026-09-14T00:00:00.000+02:00");
     expect(result.week_end).toBe("2026-09-20T23:59:59.999+02:00");
-    // WHOOP gets full UTC timestamps; the query starts a day early to catch edge records
+    // WHOOP gets full UTC timestamps over fetchRangeForDays: from local midnight two days
+    // before Monday to two days after Sunday, but never beyond now.
     const query = queryOf(paths, "/v2/recovery");
-    expect(query.get("start")).toBe("2026-09-12T22:00:00.000Z");
-    expect(query.get("end")).toBe("2026-09-20T22:00:00.000Z");
+    expect(query.get("start")).toBe("2026-09-11T22:00:00.000Z");
+    expect(query.get("end")).toBe(NOW.toISOString());
     expect(result.notes).toContain("This week is still in progress (data through 2026-09-16).");
   });
 
@@ -305,7 +315,7 @@ describe("getWeeklySummary — week resolution", () => {
 
     expect(result.week_start).toBe("2026-09-14T00:00:00.000Z");
     expect(result.week_end).toBe("2026-09-20T23:59:59.999Z");
-    expect(queryOf(paths, "/v2/cycle").get("start")).toBe("2026-09-13T00:00:00.000Z");
+    expect(queryOf(paths, "/v2/cycle").get("start")).toBe("2026-09-12T00:00:00.000Z");
   });
 
   it("accepts a date-only week_start and never sends a date-only value to WHOOP", async () => {
@@ -597,8 +607,10 @@ describe("getWeeklySummary — membership and trend", () => {
       { openLatest: true }
     );
     data.workout = [
-      workout("sun-late", "2026-09-13T21:30:00.000Z", "walking", 5, 500), // Sunday 23:30 local
-      workout("mon-early", "2026-09-13T22:30:00.000Z", "running", 9, 900), // Monday 00:30 local
+      // Sunday 22:30 local, before the 23:00 sleep onset: Sunday's cycle
+      workout("sun-late", "2026-09-13T20:30:00.000Z", "walking", 5, 500),
+      // Monday 00:30 local, after the onset: Monday's cycle
+      workout("mon-early", "2026-09-13T22:30:00.000Z", "running", 9, 900),
     ];
     return data;
   };
@@ -833,31 +845,316 @@ describe("get_weekly_summary output contract", () => {
     expect(result.structuredContent).not.toHaveProperty("warnings");
   });
 
-  it("withholds extremes and averages from fewer than 3 data points in aggregate mode", async () => {
-    const { client } = fakeWhoop(calibratingUser());
-    const aggregate = (await callWeekly(client, "aggregate")).structuredContent!;
+  it("withholds the current week, and a released week with too few samples, in aggregate mode", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(NOW);
+      const current = (await callWeekly(fakeWhoop(calibratingUser()).client, "aggregate"))
+        .structuredContent!;
+      expect(current.recovery).toEqual({
+        average_score: null,
+        average_hrv: null,
+        average_rhr: null,
+        trend: null,
+      });
+      expect(current.workouts).toEqual({
+        count: null,
+        total_strain: null,
+        total_calories_kj: null,
+      });
+      expect(current.sample_sizes).toEqual({
+        recovery_days: 0,
+        sleep_nights: 0,
+        completed_cycles: 0,
+      });
+      expect(current.notes).toEqual([WEEK_NOT_RELEASED_NOTE]);
 
-    expect(aggregate.recovery).toEqual({
-      average_score: null,
-      average_hrv: null,
-      average_rhr: null,
-      trend: null,
-    });
-    expect(aggregate.sleep).toEqual({
-      average_duration_hours: null,
-      average_performance_pct: null,
-      average_efficiency_pct: null,
-    });
-    expect(aggregate.strain).toEqual({ average_daily_strain: null });
-    expect(aggregate.sample_sizes).toMatchObject({ recovery_days: 2, sleep_nights: 2 });
-    expect(aggregate.notes).toContainEqual(
-      expect.stringMatching(
-        /^Aggregate privacy mode withholds averages and totals based on fewer than 3 data points: recovery \(2 days\), sleep \(2 nights\), daily strain \(1 completed cycle\)/
-      )
-    );
+      // A week later, on Wednesday, the week is released: its last cycle is still open,
+      // so the week is withheld as a whole.
+      vi.setSystemTime(new Date("2026-09-23T12:00:00.000Z"));
+      const open = (
+        await callWeekly(fakeWhoop(calibratingUser()).client, "aggregate", {
+          week_start: "2026-09-14",
+        })
+      ).structuredContent!;
+      expect(open.sample_sizes).toEqual({ recovery_days: 0, sleep_nights: 0, completed_cycles: 0 });
+      expect(open.notes).toEqual([
+        "1 week is withheld because a record placed in it is still open or being scored by WHOOP.",
+      ]);
+
+      // Closed: 2 nights stay below 3 samples and both recoveries are calibrating.
+      const closed = calibratingUser();
+      closed.cycle[0]!.end = "2026-09-16T21:00:00.000Z";
+      const sparse = (
+        await callWeekly(fakeWhoop(closed).client, "aggregate", { week_start: "2026-09-14" })
+      ).structuredContent!;
+      expect(sparse.sleep).toEqual({
+        average_duration_hours: null,
+        average_performance_pct: null,
+        average_efficiency_pct: null,
+      });
+      expect(sparse.sample_sizes).toEqual({
+        recovery_days: 0,
+        sleep_nights: 0,
+        completed_cycles: 0,
+      });
+      expect(sparse.calibrating).toBe(true);
+      expect(sparse.notes).toEqual(
+        expect.arrayContaining([
+          "Recovery: 2 recoveries WHOOP flags as calibrating are not used in aggregate privacy mode.",
+          "Sleep: 1 week with fewer than 3 scored nights is left out.",
+        ])
+      );
+      // Workout totals from 3 workouts are shown, rounded.
+      expect(sparse.workouts).toEqual({ count: 3, total_strain: 26, total_calories_kj: 3800 });
+    } finally {
+      vi.useRealTimers();
+    }
 
     const standard = (await callWeekly(fakeWhoop(calibratingUser()).client, "standard"))
       .structuredContent!;
     expect(standard.recovery).toMatchObject({ min_score: 66, max_score: 95 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Workouts on the day of their cycle, fetch window and rounding
+// ---------------------------------------------------------------------------
+
+describe("getWeeklySummary — workouts by cycle day", () => {
+  /** 30-day UTC epoch chunk length used by the history loader */
+  const CHUNK_MS = 30 * DAY_MS;
+  const LATE_NOW = new Date("2026-07-09T12:00:00.000Z"); // Thursday
+
+  /**
+   * A UTC user around Monday 2026-07-06, whose local midnight is exactly a
+   * 30-day epoch chunk boundary. Sunday's cycle stays open until a late sleep
+   * onset at Monday 01:00; that sleep ends at 05:30.
+   */
+  function lateSundayNight(): FakeData {
+    const days = [
+      "2026-06-30",
+      "2026-07-01",
+      "2026-07-02",
+      "2026-07-03",
+      "2026-07-04",
+      "2026-07-05",
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+    ];
+    const data = history(
+      days.map((day, index) => ({ day, recovery: 60 + index, strain: 10 + index / 10 })),
+      { offset: "+00:00", openLatest: false }
+    );
+    const monday = data.sleep.find((sleep) => sleep.id === "sleep-2026-07-06")!;
+    const mondayCycle = data.cycle.find((cycle) => cycle.id === monday.cycle_id)!;
+    const sundayCycle = data.cycle.find((cycle) => cycle.end === mondayCycle.start)!;
+    monday.start = "2026-07-06T01:00:00.000Z";
+    monday.end = "2026-07-06T05:30:00.000Z";
+    mondayCycle.start = "2026-07-06T01:00:00.000Z";
+    sundayCycle.end = "2026-07-06T01:00:00.000Z";
+    const walk = workout("sun-night", "2026-07-06T00:30:00.000Z", "walking", 4, 400);
+    const run = workout("mon-morning", "2026-07-06T06:00:00.000Z", "running", 11, 1100);
+    for (const record of [walk, run]) record.timezone_offset = "+00:00";
+    data.workout = [run, walk];
+    return data;
+  }
+
+  it("counts a Monday 00:30 workout inside Sunday's still-open cycle in the previous week, even at a chunk boundary", async () => {
+    expect(Date.parse("2026-07-06T00:00:00.000Z") % CHUNK_MS).toBe(0);
+    const { client, paths } = fakeWhoop(lateSundayNight());
+    const result = await getWeeklySummary(client, { week_start: "2026-06-29" }, LATE_NOW);
+
+    expect(result.workouts.sport_breakdown).toEqual({ walking: 1 });
+    expect(result.workouts.count).toBe(1);
+    // The window ends two days after Sunday, not at Monday 00:00 (the chunk boundary).
+    const query = queryOf(paths, "/v2/activity/workout");
+    expect(query.get("start")).toBe("2026-06-27T00:00:00.000Z");
+    expect(query.get("end")).toBe("2026-07-07T00:00:00.000Z");
+  });
+
+  it("counts a Monday 06:00 workout after the late sleep in the new week", async () => {
+    const result = await getWeeklySummary(
+      fakeWhoop(lateSundayNight()).client,
+      { week_start: "2026-07-06" },
+      LATE_NOW
+    );
+
+    expect(result.workouts).toEqual({
+      count: 1,
+      total_strain: 11,
+      total_calories_kj: 1100,
+      sport_breakdown: { running: 1 },
+    });
+    expect(result.notes.join(" ")).not.toContain("no containing WHOOP cycle");
+  });
+
+  it("places workouts on their local start day with a note when cycles cannot be loaded", async () => {
+    const result = await getWeeklySummary(
+      fakeWhoop(lateSundayNight(), { fail: { cycle: new Error("cycles down") } }).client,
+      { week_start: "2026-07-06" },
+      LATE_NOW
+    );
+
+    expect(result.workouts.sport_breakdown).toEqual({ running: 1, walking: 1 });
+    expect(result.notes).toContain(
+      "2 workouts had no containing WHOOP cycle and were placed on their local start day."
+    );
+    expect(result.warnings).toEqual(["cycle: cycles down"]);
+    expect(result.strain.average_daily_strain).toBeNull();
+  });
+
+  it("rounds averages at output: scores, HRV and RHR 1 dp, hours 2 dp, percentages 1 dp, strain 2 dp, kJ 0 dp", async () => {
+    const data = history(
+      [
+        {
+          day: "2026-09-07",
+          recovery: 61,
+          hrv: 70.123,
+          rhr: 55.55,
+          strain: 10.111,
+          performance: 81.25,
+          efficiency: 90.07,
+        },
+        {
+          day: "2026-09-08",
+          recovery: 62,
+          hrv: 71.456,
+          rhr: 56.05,
+          strain: 11.456,
+          performance: 80.5,
+          efficiency: 88.8,
+        },
+        {
+          day: "2026-09-09",
+          recovery: 64,
+          hrv: 72.001,
+          rhr: 54.4,
+          strain: 12.919,
+          performance: 79,
+          efficiency: 91.13,
+        },
+      ],
+      { openLatest: false }
+    );
+    data.workout = [
+      workout("a", "2026-09-07T15:00:00.000Z", "running", 8.3333, 1000.4),
+      workout("b", "2026-09-08T15:00:00.000Z", "walking", 4.1111, 500.3),
+    ];
+    data.sleep[0]!.score = {
+      ...(data.sleep[0]!.score as Record<string, unknown>),
+      stage_summary: {
+        ...(data.sleep[0]!.score as { stage_summary: Record<string, number> }).stage_summary,
+        total_light_sleep_time_milli: 3.5 * HOUR_MS + 1234,
+      },
+    };
+    const result = await getWeeklySummary(
+      fakeWhoop(data).client,
+      { week_start: "2026-09-07" },
+      NOW
+    );
+
+    expect(result.recovery).toMatchObject({
+      average_score: 62.3,
+      average_hrv: 71.2,
+      average_rhr: 55.3,
+    });
+    expect(result.sleep).toEqual({
+      average_duration_hours: 7,
+      average_performance_pct: 80.3,
+      average_efficiency_pct: 90,
+    });
+    expect(result.strain).toEqual({ average_daily_strain: 11.5, max_daily_strain: 12.92 });
+    expect(result.workouts).toMatchObject({ total_strain: 12.44, total_calories_kj: 1501 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared fixture users and aggregate privacy mode
+// ---------------------------------------------------------------------------
+
+describe("get_weekly_summary on the shared fixture users", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function callWeekly(
+    data: WhoopUserFixture,
+    privacyMode: "standard" | "aggregate",
+    args: Record<string, unknown> = {}
+  ): Promise<{ isError: boolean; text: string; structured: Record<string, unknown> | null }> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      privacyMode,
+      disableResources: true,
+    });
+    try {
+      return await connection.callTool("get_weekly_summary", args);
+    } finally {
+      await connection.close();
+    }
+  }
+
+  it("summarizes the live-shaped user's first week by cycle day in standard mode", async () => {
+    const result = await callWeekly(liveShapedUser(), "standard");
+    expect(result.isError, result.text).toBe(false);
+    const summary = result.structured!;
+    // All 8 workouts, including the 23:17 walk before the 00:39 sleep onset.
+    expect(summary.workouts).toMatchObject({ count: 8 });
+    expect(summary.sample_sizes).toEqual({
+      recovery_days: 2,
+      sleep_nights: 2,
+      completed_cycles: 1,
+    });
+    expect(summary.notes).toContain(
+      "1 day WHOOP covered only in part (the strap was put on that day) is not included in daily strain."
+    );
+    assertNeutralText(summary);
+  });
+
+  it("withholds the live-shaped user's current week in aggregate mode", async () => {
+    const result = await callWeekly(liveShapedUser(), "aggregate");
+    expect(result.isError, result.text).toBe(false);
+    expect(result.structured).toMatchObject({
+      week_start: "2026-09-14",
+      week_end: "2026-09-20",
+      workouts: { count: null, total_strain: null, total_calories_kj: null },
+      sample_sizes: { recovery_days: 0, sleep_nights: 0, completed_cycles: 0 },
+      notes: [WEEK_NOT_RELEASED_NOTE],
+    });
+  });
+
+  it("releases last week only from Wednesday 00:00 local", async () => {
+    const tuesday = matureUser({ now: "2026-09-15T23:59:00+01:00" });
+    const before = await callWeekly(tuesday, "aggregate", { week_start: "last week" });
+    expect(before.structured).toMatchObject({
+      week_start: "2026-09-07",
+      notes: [WEEK_NOT_RELEASED_NOTE],
+      sample_sizes: { recovery_days: 0, sleep_nights: 0, completed_cycles: 0 },
+    });
+
+    const wednesday = matureUser({ now: "2026-09-16T00:00:00+01:00" });
+    const after = await callWeekly(wednesday, "aggregate", { week_start: "2026-09-07" });
+    expect(after.structured).toMatchObject({
+      week_start: "2026-09-07",
+      sample_sizes: { recovery_days: 7, sleep_nights: 7, completed_cycles: 7 },
+    });
+    const recovery = after.structured!.recovery as Record<string, number>;
+    expect(Number.isInteger(recovery.average_score)).toBe(true);
+    expect(Number.isInteger(recovery.average_hrv)).toBe(true);
+    const sleep = after.structured!.sleep as Record<string, number>;
+    expect(Math.round(sleep.average_duration_hours! * 10) / 10).toBe(sleep.average_duration_hours);
+    assertNeutralText(after.structured);
+  });
+
+  it("stays within the text size limit on the stress user in both modes", async () => {
+    for (const mode of ["standard", "aggregate"] as const) {
+      const result = await callWeekly(stressUser(), mode, { week_start: "last week" });
+      expect(result.isError, result.text.slice(0, 200)).toBe(false);
+      expect(result.text.length).toBeLessThan(MAX_TOOL_TEXT_CHARS);
+      assertNeutralText(result.structured);
+    }
   });
 });

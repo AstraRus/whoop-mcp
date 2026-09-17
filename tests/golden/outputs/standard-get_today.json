@@ -18,7 +18,8 @@
             "resting_heart_rate": 58,
             "spo2_pct": 95.8,
             "skin_temp_celsius": 33.871,
-            "user_calibrating": true
+            "user_calibrating": true,
+            "zone": "green"
           },
           "sleep": {
             "total_hours": 7.1,
@@ -30,7 +31,12 @@
             "awake_hours": 0.6,
             "performance_pct": 83,
             "efficiency_pct": 91.73,
-            "respiratory_rate": 15.234375
+            "respiratory_rate": 15.234375,
+            "disturbances": 14,
+            "sleep_cycles": 5,
+            "no_data_hours": 0,
+            "consistency_pct": null,
+            "need_hours_including_debt": 9.3
           },
           "strain": {
             "day_strain": 13.0542,
@@ -49,12 +55,12 @@
           "data_quality": {
             "evaluated_at": "2026-09-16T21:30:00.000Z",
             "requested_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T21:30:00.000Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-16T23:30:00.000+02:00"
             },
             "observed_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T18:11:47.905Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-16T20:11:47.905+02:00"
             },
             "sources": {
               "recovery": {
@@ -98,13 +104,14 @@
                 "truncated": false
               }
             },
-            "method_version": "today-4",
+            "method_version": "today-5",
             "limitations": [
               "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
               "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
               "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
               "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
               "The latest workout may be from before the current cycle.",
+              "requested_period is local time in the current cycle's UTC offset (without a current cycle: the latest sleep's or cycle's), observed_period in each shown record's own offset; timestamp and evaluated_at are UTC.",
               "Fetch time and cache status are not available from the client."
             ]
           }
@@ -142,12 +149,12 @@
           "data_quality": {
             "evaluated_at": "2026-09-16T05:01:37.000Z",
             "requested_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T05:01:37.000Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-16T07:01:37.000+02:00"
             },
             "observed_period": {
-              "start": "2026-09-15T18:05:17.402Z",
-              "end": "2026-09-15T21:13:31.460Z"
+              "start": "2026-09-15T20:05:17.402+02:00",
+              "end": "2026-09-15T23:13:31.460+02:00"
             },
             "sources": {
               "recovery": {
@@ -191,13 +198,14 @@
                 "truncated": false
               }
             },
-            "method_version": "today-4",
+            "method_version": "today-5",
             "limitations": [
               "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
               "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
               "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
               "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
               "The latest workout may be from before the current cycle.",
+              "requested_period is local time in the current cycle's UTC offset (without a current cycle: the latest sleep's or cycle's), observed_period in each shown record's own offset; timestamp and evaluated_at are UTC.",
               "Fetch time and cache status are not available from the client."
             ]
           }
@@ -220,7 +228,8 @@
             "resting_heart_rate": 58,
             "spo2_pct": 95.8,
             "skin_temp_celsius": 33.871,
-            "user_calibrating": true
+            "user_calibrating": true,
+            "zone": "green"
           },
           "sleep": {
             "total_hours": 7.1,
@@ -232,7 +241,12 @@
             "awake_hours": 0.6,
             "performance_pct": 83,
             "efficiency_pct": 91.73,
-            "respiratory_rate": 15.234375
+            "respiratory_rate": 15.234375,
+            "disturbances": 14,
+            "sleep_cycles": 5,
+            "no_data_hours": 0,
+            "consistency_pct": null,
+            "need_hours_including_debt": 9.3
           },
           "strain": {
             "day_strain": 13.0542,
@@ -251,12 +265,12 @@
           "data_quality": {
             "evaluated_at": "2026-09-16T22:30:00.000Z",
             "requested_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T22:30:00.000Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-17T00:30:00.000+02:00"
             },
             "observed_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T18:11:47.905Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-16T20:11:47.905+02:00"
             },
             "sources": {
               "recovery": {
@@ -300,13 +314,14 @@
                 "truncated": false
               }
             },
-            "method_version": "today-4",
+            "method_version": "today-5",
             "limitations": [
               "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
               "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
               "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
               "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
               "The latest workout may be from before the current cycle.",
+              "requested_period is local time in the current cycle's UTC offset (without a current cycle: the latest sleep's or cycle's), observed_period in each shown record's own offset; timestamp and evaluated_at are UTC.",
               "Fetch time and cache status are not available from the client."
             ]
           }
@@ -344,12 +359,12 @@
           "data_quality": {
             "evaluated_at": "2026-09-16T21:30:00.000Z",
             "requested_period": {
-              "start": "2026-09-15T21:42:29.574Z",
-              "end": "2026-09-16T21:30:00.000Z"
+              "start": "2026-09-15T22:42:29.574+01:00",
+              "end": "2026-09-16T22:30:00.000+01:00"
             },
             "observed_period": {
-              "start": "2026-09-15T07:40:36.795Z",
-              "end": "2026-09-15T21:42:29.574Z"
+              "start": "2026-09-15T08:40:36.795+01:00",
+              "end": "2026-09-15T22:42:29.574+01:00"
             },
             "sources": {
               "recovery": {
@@ -393,13 +408,14 @@
                 "truncated": true
               }
             },
-            "method_version": "today-4",
+            "method_version": "today-5",
             "limitations": [
               "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
               "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
               "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
               "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
               "The latest workout may be from before the current cycle.",
+              "requested_period is local time in the current cycle's UTC offset (without a current cycle: the latest sleep's or cycle's), observed_period in each shown record's own offset; timestamp and evaluated_at are UTC.",
               "Fetch time and cache status are not available from the client."
             ]
           }
@@ -474,13 +490,14 @@
                 "truncated": false
               }
             },
-            "method_version": "today-4",
+            "method_version": "today-5",
             "limitations": [
               "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
               "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
               "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
               "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
               "The latest workout may be from before the current cycle.",
+              "requested_period is local time in the current cycle's UTC offset (without a current cycle: the latest sleep's or cycle's), observed_period in each shown record's own offset; timestamp and evaluated_at are UTC.",
               "Fetch time and cache status are not available from the client."
             ]
           }
@@ -509,7 +526,8 @@
             "resting_heart_rate": 58,
             "spo2_pct": 95.8,
             "skin_temp_celsius": 33.871,
-            "user_calibrating": true
+            "user_calibrating": true,
+            "zone": "green"
           },
           "sleep": {
             "total_hours": 7.1,
@@ -521,7 +539,12 @@
             "awake_hours": 0.6,
             "performance_pct": 83,
             "efficiency_pct": 91.73,
-            "respiratory_rate": 15.234375
+            "respiratory_rate": 15.234375,
+            "disturbances": 14,
+            "sleep_cycles": 5,
+            "no_data_hours": 0,
+            "consistency_pct": null,
+            "need_hours_including_debt": 9.3
           },
           "strain": {
             "day_strain": 13.0542,
@@ -536,12 +559,12 @@
           "data_quality": {
             "evaluated_at": "2026-09-16T21:30:00.000Z",
             "requested_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T21:30:00.000Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-16T23:30:00.000+02:00"
             },
             "observed_period": {
-              "start": "2026-09-15T21:13:31.460Z",
-              "end": "2026-09-16T04:58:12.066Z"
+              "start": "2026-09-15T23:13:31.460+02:00",
+              "end": "2026-09-16T06:58:12.066+02:00"
             },
             "sources": {
               "recovery": {
@@ -585,13 +608,14 @@
                 "truncated": false
               }
             },
-            "method_version": "today-4",
+            "method_version": "today-5",
             "limitations": [
               "Today is the current WHOOP cycle: it starts at last night's sleep onset and stays open until WHOOP processes the next sleep, however long that takes; a closed newest cycle is never shown as today (cycle status stale, strain null).",
               "When the linked sleep ended more than 20 hours ago, no newer sleep has been processed yet: that sleep and recovery are still shown, with status stale and a note giving their date. A cycle WHOOP has not updated for 24 hours is shown with status stale and a note that the strap may not have synced.",
               "Sleep and recovery are joined to the current cycle by cycle_id and sleep_id; without a current cycle, the latest main sleep that ended on today's local date is used.",
               "Sleep hours are time asleep (light + slow-wave + REM); time_in_bed_hours includes awake time.",
               "The latest workout may be from before the current cycle.",
+              "requested_period is local time in the current cycle's UTC offset (without a current cycle: the latest sleep's or cycle's), observed_period in each shown record's own offset; timestamp and evaluated_at are UTC.",
               "Fetch time and cache status are not available from the client."
             ]
           }
@@ -612,7 +636,7 @@
       "result": {
         "isError": true,
         "text_format": "text",
-        "text": "WHOOP rejected the authorization (HTTP 401). To sign in again, delete tokens.json from the server's token folder (~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server).",
+        "text": "WHOOP rejected the authorization (HTTP 401). To sign in again, delete tokens.json from the server's token folder (WHOOP_MCP_TOKEN_DIR when set, else ~/.whoop-mcp; on a hosted server, its mounted volume), then restart the server (locally, setup --verify also works): it opens the WHOOP authorization page, or prints the authorization link in the server logs when it cannot open a browser (e.g. the deploy logs of a hosted server).",
         "structuredContent": null
       }
     }

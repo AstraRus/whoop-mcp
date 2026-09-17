@@ -25,26 +25,22 @@
             "average_efficiency_pct": null
           },
           "workouts": {
-            "count": 8,
-            "total_strain": 66.0205,
-            "total_calories_kj": 10807.8
+            "count": null,
+            "total_strain": null,
+            "total_calories_kj": null
           },
           "strain": {
             "average_daily_strain": null
           },
           "sample_sizes": {
-            "recovery_days": 2,
-            "sleep_nights": 2,
-            "completed_cycles": 2
+            "recovery_days": 0,
+            "sleep_nights": 0,
+            "completed_cycles": 0
           },
-          "calibrating": true,
+          "calibrating": false,
           "truncated": false,
           "notes": [
-            "This week is still in progress (data through 2026-09-16).",
-            "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
-            "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
-            "Today's strain is still accumulating and is not included.",
-            "Aggregate privacy mode withholds averages and totals based on fewer than 3 data points: recovery (2 days), sleep (2 nights), daily strain (2 completed cycles)."
+            "This week is released two days after it completes (Wednesday, local time)."
           ]
         }
       }
@@ -89,10 +85,7 @@
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "No scored recovery recorded this week.",
-            "No scored main sleep recorded this week.",
-            "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0.",
-            "No completed, scored cycle this week, so daily strain is null."
+            "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0."
           ]
         }
       }
@@ -120,26 +113,22 @@
             "average_efficiency_pct": null
           },
           "workouts": {
-            "count": 8,
-            "total_strain": 66.0205,
-            "total_calories_kj": 10807.8
+            "count": null,
+            "total_strain": null,
+            "total_calories_kj": null
           },
           "strain": {
             "average_daily_strain": null
           },
           "sample_sizes": {
-            "recovery_days": 2,
-            "sleep_nights": 2,
-            "completed_cycles": 2
+            "recovery_days": 0,
+            "sleep_nights": 0,
+            "completed_cycles": 0
           },
-          "calibrating": true,
+          "calibrating": false,
           "truncated": false,
           "notes": [
-            "This week is still in progress (data through 2026-09-17).",
-            "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
-            "WHOOP is still calibrating (2 of 2 scored recovery day(s) flagged); recovery, HRV and resting heart rate may shift.",
-            "Today's strain is still accumulating and is not included.",
-            "Aggregate privacy mode withholds averages and totals based on fewer than 3 data points: recovery (2 days), sleep (2 nights), daily strain (2 completed cycles)."
+            "This week is released two days after it completes (Wednesday, local time)."
           ]
         }
       }
@@ -167,7 +156,7 @@
             "average_efficiency_pct": null
           },
           "workouts": {
-            "count": 2,
+            "count": null,
             "total_strain": null,
             "total_calories_kj": null
           },
@@ -175,17 +164,14 @@
             "average_daily_strain": null
           },
           "sample_sizes": {
-            "recovery_days": 2,
-            "sleep_nights": 2,
-            "completed_cycles": 2
+            "recovery_days": 0,
+            "sleep_nights": 0,
+            "completed_cycles": 0
           },
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "This week is still in progress (data through 2026-09-16).",
-            "Not enough data yet for a recovery trend: 2 scored recovery day(s) this week; a trend needs at least 4.",
-            "Today's strain is still accumulating and is not included.",
-            "Aggregate privacy mode withholds averages and totals based on fewer than 3 data points: recovery (2 days), sleep (2 nights), daily strain (2 completed cycles), workout totals (2 workouts)."
+            "This week is released two days after it completes (Wednesday, local time)."
           ]
         }
       }
@@ -204,23 +190,23 @@
           "week_start": "2026-09-07",
           "week_end": "2026-09-13",
           "recovery": {
-            "average_score": 78.85714285714286,
-            "average_hrv": 93.19814285714286,
+            "average_score": 79,
+            "average_hrv": 93,
             "average_rhr": 54,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 6.485541944444444,
+            "average_duration_hours": 6.5,
             "average_performance_pct": 75,
-            "average_efficiency_pct": 92.11714285714287
+            "average_efficiency_pct": 92
           },
           "workouts": {
             "count": 7,
-            "total_strain": 53.474000000000004,
-            "total_calories_kj": 1957.69
+            "total_strain": 53.5,
+            "total_calories_kj": 1958
           },
           "strain": {
-            "average_daily_strain": 9.398328571428573
+            "average_daily_strain": 9.4
           },
           "sample_sizes": {
             "recovery_days": 7,
@@ -247,23 +233,23 @@
           "week_start": "2026-07-13",
           "week_end": "2026-07-19",
           "recovery": {
-            "average_score": 74.6,
-            "average_hrv": 79.641,
+            "average_score": 75,
+            "average_hrv": 80,
             "average_rhr": 55,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 6.252837777777779,
-            "average_performance_pct": 72.4,
-            "average_efficiency_pct": 91.294
+            "average_duration_hours": 6.3,
+            "average_performance_pct": 72,
+            "average_efficiency_pct": 91
           },
           "workouts": {
             "count": 4,
-            "total_strain": 35.1199,
-            "total_calories_kj": 1838.1699999999998
+            "total_strain": 35.1,
+            "total_calories_kj": 1838
           },
           "strain": {
-            "average_daily_strain": 8.75534
+            "average_daily_strain": 8.8
           },
           "sample_sizes": {
             "recovery_days": 5,
@@ -273,7 +259,7 @@
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "2026-07-15 is a Wednesday; summarizing the week from Monday 2026-07-13 to Sunday 2026-07-19."
+            "week_start was moved to the Monday of its local week."
           ]
         }
       }
@@ -292,23 +278,23 @@
           "week_start": "2026-08-03",
           "week_end": "2026-08-09",
           "recovery": {
-            "average_score": 70.14285714285714,
-            "average_hrv": 85.934,
-            "average_rhr": 55.57142857142857,
+            "average_score": 70,
+            "average_hrv": 86,
+            "average_rhr": 56,
             "trend": "improving"
           },
           "sleep": {
-            "average_duration_hours": 5.80201873015873,
-            "average_performance_pct": 67.57142857142857,
-            "average_efficiency_pct": 88.12714285714287
+            "average_duration_hours": 5.8,
+            "average_performance_pct": 68,
+            "average_efficiency_pct": 91
           },
           "workouts": {
             "count": 7,
-            "total_strain": 63.4207,
-            "total_calories_kj": 2498.72
+            "total_strain": 63.4,
+            "total_calories_kj": 2499
           },
           "strain": {
-            "average_daily_strain": 10.29327142857143
+            "average_daily_strain": 10.3
           },
           "sample_sizes": {
             "recovery_days": 7,
@@ -318,7 +304,8 @@
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "2026-08-08 is a Saturday; summarizing the week from Monday 2026-08-03 to Sunday 2026-08-09."
+            "week_start was moved to the Monday of its local week.",
+            "Sleep efficiency: 1 night with low data coverage (no strap data for more than 20% of time in bed) was skipped."
           ]
         }
       }
@@ -337,33 +324,33 @@
           "week_start": "2026-06-22",
           "week_end": "2026-06-28",
           "recovery": {
-            "average_score": 50.625,
-            "average_hrv": 71.1115,
-            "average_rhr": 56.125,
+            "average_score": 52,
+            "average_hrv": 71,
+            "average_rhr": 56,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 5.834135079365081,
-            "average_performance_pct": 66.28571428571429,
-            "average_efficiency_pct": 92.71
+            "average_duration_hours": 5.8,
+            "average_performance_pct": 66,
+            "average_efficiency_pct": 93
           },
           "workouts": {
             "count": 7,
-            "total_strain": 61.80329999999999,
-            "total_calories_kj": 3389.51
+            "total_strain": 61.8,
+            "total_calories_kj": 3390
           },
           "strain": {
-            "average_daily_strain": 8.966925
+            "average_daily_strain": 10
           },
           "sample_sizes": {
-            "recovery_days": 8,
+            "recovery_days": 7,
             "sleep_nights": 7,
-            "completed_cycles": 8
+            "completed_cycles": 7
           },
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "2026-06-25 is a Thursday; summarizing the week from Monday 2026-06-22 to Sunday 2026-06-28."
+            "week_start was moved to the Monday of its local week."
           ]
         }
       }
@@ -406,11 +393,7 @@
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "This week is still in progress (data through 2026-09-16).",
-            "No scored recovery recorded this week.",
-            "No scored main sleep recorded this week.",
-            "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0.",
-            "No completed, scored cycle this week, so daily strain is null."
+            "This week is released two days after it completes (Wednesday, local time)."
           ]
         }
       }
@@ -449,15 +432,15 @@
           "week_start": "2026-09-07",
           "week_end": "2026-09-13",
           "recovery": {
-            "average_score": 78.85714285714286,
-            "average_hrv": 93.19814285714286,
+            "average_score": 79,
+            "average_hrv": 93,
             "average_rhr": 54,
             "trend": "stable"
           },
           "sleep": {
-            "average_duration_hours": 6.485541944444444,
+            "average_duration_hours": 6.5,
             "average_performance_pct": 75,
-            "average_efficiency_pct": 92.11714285714287
+            "average_efficiency_pct": 92
           },
           "workouts": {
             "count": null,
@@ -465,7 +448,7 @@
             "total_calories_kj": null
           },
           "strain": {
-            "average_daily_strain": 9.398328571428573
+            "average_daily_strain": 9.4
           },
           "sample_sizes": {
             "recovery_days": 7,
@@ -475,7 +458,7 @@
           "calibrating": false,
           "truncated": false,
           "notes": [
-            "Workout data could not be loaded from WHOOP."
+            "Workout data for this week could not be read completely from WHOOP, so workout values are unknown (null)."
           ]
         }
       }

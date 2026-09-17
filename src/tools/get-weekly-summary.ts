@@ -4,16 +4,24 @@
  * Summarizes one Monday-to-Sunday week in the user's local time: recovery,
  * sleep, workouts and daily strain, plus the recovery trend.
  *
- * Each record is counted in exactly one week, by its own local day: cycles by
- * cycleDay(), recoveries through their cycle (cycle_id), sleeps by the local
- * day they end, workouts by the local day they start. The in-progress cycle
- * is left out of strain averages.
+ * Records are placed on local days with the shared day model, as get_calendar
+ * shows them: each cycle with its main sleep and recovery on one day
+ * (placeDays), and each workout on the day of the cycle containing its start
+ * (assignWorkouts), so a workout after midnight that still belongs to
+ * Sunday's cycle counts in that week. A workout without a containing cycle
+ * falls back to its local start day (noted). Records are fetched over
+ * fetchRangeForDays(Monday, Sunday): two days either side of the week. The
+ * in-progress cycle and a partial first day of wear are left out of strain
+ * averages.
  *
  * Sparse data (a new or still-calibrating WHOOP user) is a normal state:
  * values that cannot be computed are null, never 0, with the reason in
- * `notes`. Endpoint calls are serialized to respect rate limits; partial
- * failures return partial results with warnings, and the call throws only if
- * ALL 4 endpoints fail.
+ * `notes`. Endpoint calls are serialized; partial failures return partial
+ * results with warnings, and the call throws only if ALL 4 endpoints fail.
+ * Averages are rounded at output.
+ *
+ * In aggregate privacy mode only released weeks (two days after they end) are
+ * summarized, from the samples every aggregate tool shares (see get-trend.ts).
  */
 
 import type { z } from "zod";
@@ -32,18 +40,36 @@ import {
   sleepRecordSchema,
   workoutRecordSchema,
 } from "../api/record-schemas.js";
+import type { RecoveryScore } from "../api/types.js";
 import {
   asleepHours,
-  cycleDay,
   DAY_MS,
   localDay,
-  mainSleeps,
+  mostRelevantError,
   parseRecords,
   sourceQuality,
 } from "./analytics-utils.js";
+import { lastReleasedWeeks, roundStep, type LocalWeek } from "./aggregate-window.js";
 import { resolveUserUtcOffsetInfo, withOffsetNote } from "./collection-utils.js";
 import { parseUtcOffset, resolveDateExpression } from "./date-utils.js";
-import { mean, linearRegressionXY, trendDirection, MIN_TREND_POINTS } from "./stats-utils.js";
+import { assignWorkouts, fetchRangeForDays, isOpenCycle, placeDays } from "./day-model.js";
+import {
+  AGGREGATE_METRIC_STEP,
+  aggregateMetric,
+  isPartialDay,
+  loadAggregateData,
+  withheldWeekNotes,
+  weekDays,
+  type AggregateMetricResult,
+  type AnalyticsToolOptions,
+} from "./get-trend.js";
+import {
+  mean,
+  linearRegressionXY,
+  trendDirection,
+  MIN_TREND_POINTS,
+  roundTo,
+} from "./stats-utils.js";
 import type { TrendDirectionResult } from "./stats-utils.js";
 
 // ---------------------------------------------------------------------------
@@ -78,6 +104,7 @@ export interface WeeklySummary {
   };
   workouts: {
     count: number | null;
+    /** Sum of per-workout strain (not comparable to day strain) */
     total_strain: number | null;
     total_calories_kj: number | null;
     sport_breakdown: Record<string, number>;
@@ -101,13 +128,9 @@ type FetchOutcome<T> =
   | { ok: true; records: T[]; truncated: boolean; invalid: number }
   | { ok: false; error: unknown };
 
-interface Week {
-  monday: string;
-  sunday: string;
-  /** Local Monday 00:00 as epoch ms */
-  startMs: number;
-  /** Following local Monday 00:00 as epoch ms (exclusive) */
-  endMs: number;
+interface Week extends LocalWeek {
+  /** The local day week_start named (today without week_start) */
+  requestedDay: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +140,10 @@ interface Week {
 const MAX_RECORDS_PER_ENDPOINT = 200;
 const MAX_PAGES = 10;
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** Note for a week that is not released yet in aggregate privacy mode */
+export const WEEK_NOT_RELEASED_NOTE =
+  "This week is released two days after it completes (Wednesday, local time).";
 
 // ---------------------------------------------------------------------------
 // Local-day helpers
@@ -171,11 +198,7 @@ function requestedLocalDay(weekStart: string, now: Date, offset: string): string
  * Resolve week_start to the local Monday-to-Sunday week containing it.
  * Without week_start, the week containing today.
  */
-function resolveWeek(
-  weekStart: string | undefined,
-  now: Date,
-  offset: string
-): Week & { requestedDay: string } {
+function resolveWeek(weekStart: string | undefined, now: Date, offset: string): Week {
   const requestedDay =
     weekStart === undefined
       ? localDay(now.toISOString(), offset)
@@ -204,9 +227,10 @@ function buildWeekQuery(start: string, end: string): string {
 async function safeFetch<T>(
   client: WhoopClient,
   endpoint: string,
-  query: string,
+  query: string | null,
   schema: z.ZodType<T>
 ): Promise<FetchOutcome<T>> {
+  if (query === null) return { ok: true, records: [], truncated: false, invalid: 0 };
   try {
     const result = await fetchAllPages<unknown>(client, `${endpoint}${query}`, {
       maxRecords: MAX_RECORDS_PER_ENDPOINT,
@@ -252,6 +276,34 @@ function finiteNumbers(values: (number | null | undefined)[]): number[] {
   );
 }
 
+function plural(count: number, singular: string, pluralForm = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : pluralForm}`;
+}
+
+/** Recovery trend from day-ordered scores (at least MIN_TREND_POINTS) */
+function recoveryTrendOf(points: { day: string; score: number }[]): TrendDirectionResult | null {
+  if (points.length < MIN_TREND_POINTS) return null;
+  const firstDay = dayMs(points[0]!.day);
+  const xs = points.map((point) => (dayMs(point.day) - firstDay) / DAY_MS);
+  const regression = linearRegressionXY(
+    xs,
+    points.map((point) => point.score)
+  );
+  return trendDirection(regression.slope, regression.r2);
+}
+
+/** 'N workouts had no containing WHOOP cycle and were placed on their local start day.' */
+export function fallbackWorkoutsNote(count: number): string {
+  return count === 1
+    ? "1 workout had no containing WHOOP cycle and was placed on its local start day."
+    : `${count} workouts had no containing WHOOP cycle and were placed on their local start day.`;
+}
+
+/** Round a value at output; null stays null */
+function rounded(value: number | null, digits: number): number | null {
+  return value === null ? null : roundTo(value, digits);
+}
+
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
@@ -266,10 +318,15 @@ function finiteNumbers(values: (number | null | undefined)[]): number[] {
 export async function getWeeklySummary(
   client: WhoopClient,
   params: WeeklySummaryParams,
-  now: Date = new Date()
+  now: Date = new Date(),
+  options: AnalyticsToolOptions = {}
 ): Promise<WeeklySummary> {
   const { offset, fallback: offsetFallback } = await resolveUserUtcOffsetInfo(client);
   const week = resolveWeek(params.week_start, now, offset);
+  if (options.privacyMode === "aggregate") {
+    return aggregateWeeklySummary(client, params, week, now, offset, offsetFallback);
+  }
+  const weekDaysList = weekDays([week.monday]);
   const inWeek = (day: string): boolean => day >= week.monday && day <= week.sunday;
   const notes: string[] = [];
 
@@ -285,11 +342,14 @@ export async function getWeeklySummary(
     notes.push("This week has not started yet.");
   }
 
-  // Start a day early so records spanning Monday 00:00 (e.g. Sunday-night
-  // sleep) are returned; membership is decided per record below.
-  const queryStart = new Date(week.startMs - DAY_MS).toISOString();
-  const queryEnd = new Date(week.endMs).toISOString();
-  const query = buildWeekQuery(queryStart, queryEnd);
+  // Two days either side of the week: the cycle and sleep that begin the
+  // evening before Monday, and after-midnight workouts that still belong to
+  // Sunday's cycle. Membership is decided per placed day below.
+  const range = fetchRangeForDays(week.monday, week.sunday, offset, now.getTime());
+  const query =
+    range.endMs > range.startMs
+      ? buildWeekQuery(new Date(range.startMs).toISOString(), new Date(range.endMs).toISOString())
+      : null;
 
   // Serialize endpoint calls (not parallel) to respect rate limits
   const sources = {
@@ -329,44 +389,34 @@ export async function getWeeklySummary(
   }
 
   const cycles = recordsOf(sources.cycle);
-  const sleeps = recordsOf(sources.sleep);
+  const placement = placeDays({
+    cycles,
+    sleeps: recordsOf(sources.sleep),
+    recoveries: recordsOf(sources.recovery),
+    sleepsAvailable: sources.sleep.ok,
+    today,
+    utcOffset: offset,
+  });
 
-  // --- Recovery: joined to its cycle; oldest first for the trend ---
-  const cyclesById = new Map(cycles.map((cycle) => [cycle.id, cycle]));
-  const sleepsById = new Map(sleeps.map((sleep) => [sleep.id, sleep]));
-  const weekRecoveries = recordsOf(sources.recovery)
-    .filter((record) => record.score_state === "SCORED" && record.score)
-    .map((record) => {
-      const cycle = cyclesById.get(record.cycle_id);
-      const sleep = sleepsById.get(record.sleep_id);
-      const placement = cycle
-        ? { day: cycleDay(cycle), anchor: Date.parse(cycle.start) }
-        : sleep
-          ? { day: localDay(sleep.end, sleep.timezone_offset), anchor: Date.parse(sleep.start) }
-          : { day: localDay(record.created_at, offset), anchor: Date.parse(record.created_at) };
-      return { ...placement, score: record.score! };
-    })
-    .filter((recovery) => inWeek(recovery.day))
-    .sort((left, right) => left.anchor - right.anchor);
-
+  // --- Recovery: the recovery placed on each day of the week ---
+  const weekRecoveries: { day: string; score: RecoveryScore }[] = [];
+  for (const day of weekDaysList) {
+    const recovery = placement.byDay.get(day)?.recovery;
+    if (recovery?.score_state === "SCORED" && recovery.score)
+      weekRecoveries.push({ day, score: recovery.score });
+  }
   const recoveryScores = weekRecoveries.map((recovery) => recovery.score.recovery_score);
   const calibratingCount = weekRecoveries.filter((r) => r.score.user_calibrating).length;
 
-  let recoveryTrend: TrendDirectionResult | null = null;
-  if (recoveryScores.length >= MIN_TREND_POINTS) {
-    const firstDay = dayMs(weekRecoveries[0]!.day);
-    const xs = weekRecoveries.map((recovery) => (dayMs(recovery.day) - firstDay) / DAY_MS);
-    const regression = linearRegressionXY(xs, recoveryScores);
-    recoveryTrend = trendDirection(regression.slope, regression.r2);
-  }
-
   const recovery = {
-    average_score: averageOrNull(recoveryScores),
-    min_score: recoveryScores.length ? Math.min(...recoveryScores) : null,
-    max_score: recoveryScores.length ? Math.max(...recoveryScores) : null,
-    average_hrv: averageOrNull(weekRecoveries.map((r) => r.score.hrv_rmssd_milli)),
-    average_rhr: averageOrNull(weekRecoveries.map((r) => r.score.resting_heart_rate)),
-    trend: recoveryTrend,
+    average_score: rounded(averageOrNull(recoveryScores), 1),
+    min_score: recoveryScores.length ? roundTo(Math.min(...recoveryScores), 1) : null,
+    max_score: recoveryScores.length ? roundTo(Math.max(...recoveryScores), 1) : null,
+    average_hrv: rounded(averageOrNull(weekRecoveries.map((r) => r.score.hrv_rmssd_milli)), 1),
+    average_rhr: rounded(averageOrNull(weekRecoveries.map((r) => r.score.resting_heart_rate)), 1),
+    trend: recoveryTrendOf(
+      weekRecoveries.map((entry) => ({ day: entry.day, score: entry.score.recovery_score }))
+    ),
   };
 
   if (sources.recovery.ok) {
@@ -384,36 +434,43 @@ export async function getWeeklySummary(
     );
   }
 
-  // --- Sleep: main sleeps only, by the local day they end, hours asleep ---
-  const sleepQuality = sourceQuality();
-  const nights = mainSleeps(
-    sleeps.filter((sleep) => inWeek(localDay(sleep.end, sleep.timezone_offset))),
-    // Membership was decided by local day; the period only has to contain every candidate
-    {
-      start: new Date(Date.parse(queryStart) - DAY_MS).toISOString(),
-      end: new Date(Date.parse(queryEnd) + DAY_MS).toISOString(),
-    },
-    sleepQuality
-  );
+  // --- Sleep: the main sleep placed on each day, hours asleep ---
+  const nights = weekDaysList.flatMap((day) => {
+    const sleep = placement.byDay.get(day)?.sleep;
+    return sleep &&
+      !sleep.nap &&
+      Date.parse(sleep.end) > Date.parse(sleep.start) &&
+      sleep.score_state === "SCORED" &&
+      sleep.score
+      ? [sleep]
+      : [];
+  });
   const sleep = {
-    average_duration_hours: averageOrNull(nights.map(asleepHours)),
-    average_performance_pct: averageOrNull(
-      finiteNumbers(nights.map((night) => night.score?.sleep_performance_percentage))
+    average_duration_hours: rounded(averageOrNull(nights.map(asleepHours)), 2),
+    average_performance_pct: rounded(
+      averageOrNull(
+        finiteNumbers(nights.map((night) => night.score?.sleep_performance_percentage))
+      ),
+      1
     ),
-    average_efficiency_pct: averageOrNull(
-      finiteNumbers(nights.map((night) => night.score?.sleep_efficiency_percentage))
+    average_efficiency_pct: rounded(
+      averageOrNull(finiteNumbers(nights.map((night) => night.score?.sleep_efficiency_percentage))),
+      1
     ),
   };
   if (sources.sleep.ok && !nights.length) {
     notes.push("No scored main sleep recorded this week.");
   }
 
-  // --- Workouts: by the local day they start ---
-  const scoredWorkouts = recordsOf(sources.workout).filter(
-    (workout) =>
-      workout.score_state === "SCORED" &&
-      workout.score &&
-      inWeek(localDay(workout.start, workout.timezone_offset))
+  // --- Workouts: on the day of the cycle containing their start ---
+  const workoutRecords = recordsOf(sources.workout);
+  const workoutPlacement = assignWorkouts(workoutRecords, placement, cycles);
+  const weekWorkouts = workoutRecords.filter((workout) => {
+    const placed = workoutPlacement.get(workout.id);
+    return placed !== undefined && inWeek(placed.day);
+  });
+  const scoredWorkouts = weekWorkouts.filter(
+    (workout) => workout.score_state === "SCORED" && workout.score
   );
   const sportBreakdown: Record<string, number> = {};
   let totalStrain = 0;
@@ -423,20 +480,18 @@ export async function getWeeklySummary(
     totalCaloriesKj += workout.score!.kilojoule;
     sportBreakdown[workout.sport_name] = (sportBreakdown[workout.sport_name] ?? 0) + 1;
   }
-  // A worn day always produces a cycle, so a week without any cycle, sleep,
-  // recovery or workout record (or one that has not started) was not recorded:
+  const fallbackWorkouts = weekWorkouts.filter(
+    (workout) => workoutPlacement.get(workout.id)?.fallback === true
+  ).length;
+  // A worn day always produces a cycle, so a week without any placed cycle,
+  // sleep, recovery or workout (or one that has not started) was not recorded:
   // its workout totals are unknown, not 0.
-  const weekCycles = cycles.filter((cycle) => inWeek(cycleDay(cycle)));
   const weekNotStarted = week.monday > today;
   const noWeekData =
     weekNotStarted ||
     (sources.cycle.ok &&
-      weekCycles.length === 0 &&
-      weekRecoveries.length === 0 &&
-      !sleeps.some((record) => inWeek(localDay(record.end, record.timezone_offset))) &&
-      !recordsOf(sources.workout).some((record) =>
-        inWeek(localDay(record.start, record.timezone_offset))
-      ));
+      weekDaysList.every((day) => !placement.byDay.has(day)) &&
+      weekWorkouts.length === 0);
   const unknownWorkouts = {
     count: null,
     total_strain: null,
@@ -456,22 +511,40 @@ export async function getWeeklySummary(
   } else {
     workouts = {
       count: scoredWorkouts.length,
-      total_strain: totalStrain,
-      total_calories_kj: totalCaloriesKj,
+      total_strain: roundTo(totalStrain, 2),
+      total_calories_kj: roundTo(totalCaloriesKj, 0),
       sport_breakdown: sportBreakdown,
     };
+    if (fallbackWorkouts) notes.push(fallbackWorkoutsNote(fallbackWorkouts));
+    const unscored = weekWorkouts.length - scoredWorkouts.length;
+    if (unscored)
+      notes.push(
+        `${plural(unscored, "workout")} without a WHOOP score ${unscored === 1 ? "is" : "are"} not counted.`
+      );
   }
 
-  // --- Strain: completed cycles by cycleDay ---
-  const strainValues = weekCycles
-    .filter((cycle) => cycle.end != null && cycle.score_state === "SCORED" && cycle.score)
-    .map((cycle) => cycle.score!.strain);
+  // --- Strain: the completed cycle placed on each day ---
+  const strainValues: number[] = [];
+  let inProgress = false;
+  let partialDays = 0;
+  for (const day of weekDaysList) {
+    const cycle = placement.cycleByDay.get(day);
+    if (!cycle) continue;
+    if (isOpenCycle(cycle)) inProgress = true;
+    else if (isPartialDay(placement, day, cycle)) partialDays += 1;
+    else if (cycle.score_state === "SCORED" && cycle.score) strainValues.push(cycle.score.strain);
+  }
   const strain = {
-    average_daily_strain: averageOrNull(strainValues),
-    max_daily_strain: strainValues.length ? Math.max(...strainValues) : null,
+    average_daily_strain: rounded(averageOrNull(strainValues), 2),
+    max_daily_strain: strainValues.length ? roundTo(Math.max(...strainValues), 2) : null,
   };
-  if (weekCycles.some((cycle) => cycle.end == null)) {
+  if (inProgress) {
     notes.push("Today's strain is still accumulating and is not included.");
+  }
+  if (partialDays) {
+    notes.push(
+      `${partialDays === 1 ? "1 day" : `${partialDays} days`} WHOOP covered only in part (the strap was put on that day) ${partialDays === 1 ? "is" : "are"} not included in daily strain.`
+    );
   }
   if (sources.cycle.ok && !strainValues.length) {
     notes.push("No completed, scored cycle this week, so daily strain is null.");
@@ -499,4 +572,168 @@ export async function getWeeklySummary(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// Aggregate privacy mode
+// ---------------------------------------------------------------------------
+
+/**
+ * A released week summarized from the samples every aggregate tool shares:
+ * whole weeks only, each metric withheld below AGGREGATE_WEEK_MIN_SAMPLES
+ * samples, calibrating recoveries not used, values rounded. A week after the
+ * latest released week (the current week, last week before Wednesday, or a
+ * future week) returns only nulls and WEEK_NOT_RELEASED_NOTE, without reading
+ * WHOOP data.
+ */
+async function aggregateWeeklySummary(
+  client: WhoopClient,
+  params: WeeklySummaryParams,
+  week: Week,
+  now: Date,
+  offset: string,
+  offsetFallback: boolean
+): Promise<WeeklySummary> {
+  const notes: string[] = [];
+  if (params.week_start !== undefined && week.requestedDay !== week.monday)
+    notes.push("week_start was moved to the Monday of its local week.");
+  const nullSummary = (): WeeklySummary => ({
+    week_start: formatLocal(week.startMs, offset),
+    week_end: formatLocal(week.endMs - 1, offset),
+    recovery: {
+      average_score: null,
+      min_score: null,
+      max_score: null,
+      average_hrv: null,
+      average_rhr: null,
+      trend: null,
+    },
+    sleep: {
+      average_duration_hours: null,
+      average_performance_pct: null,
+      average_efficiency_pct: null,
+    },
+    workouts: { count: null, total_strain: null, total_calories_kj: null, sport_breakdown: {} },
+    strain: { average_daily_strain: null, max_daily_strain: null },
+    sample_sizes: { recovery_days: 0, sleep_nights: 0, completed_cycles: 0 },
+    calibrating: false,
+    truncated: false,
+    notes: [],
+  });
+
+  const latestReleased = lastReleasedWeeks(now, offset, 1)[0]!;
+  if (week.monday > latestReleased.monday) {
+    notes.push(WEEK_NOT_RELEASED_NOTE);
+    return { ...nullSummary(), notes: withOffsetNote(notes, offsetFallback) };
+  }
+
+  const data = await loadAggregateData(client, [week], offset, now, { workouts: true });
+  const sources = [data.recovery, data.sleep, data.workout!, data.cycle];
+  if (sources.every((source) => source.quality.status === "fetch_failed"))
+    throw mostRelevantError(sources.map((source) => source.error));
+  notes.push(...withheldWeekNotes(data));
+
+  const metric = (
+    name: Parameters<typeof aggregateMetric>[1],
+    subject: string,
+    unitPlural: string,
+    exclusionNotes = true
+  ): AggregateMetricResult => aggregateMetric(data, name, { subject, unitPlural, exclusionNotes });
+  const recoveryResult = metric("recovery", "Recovery", "scored recoveries");
+  const hrvResult = metric("hrv", "HRV", "scored recoveries", false);
+  const rhrResult = metric("rhr", "Resting heart rate", "scored recoveries", false);
+  const durationResult = metric("sleep_duration", "Sleep", "scored nights");
+  const performanceResult = metric(
+    "sleep_performance",
+    "Sleep performance",
+    "nights with a sleep performance score"
+  );
+  const efficiencyResult = metric(
+    "sleep_efficiency",
+    "Sleep efficiency",
+    "nights with a sleep efficiency"
+  );
+  const strainResult = metric("strain", "Daily strain", "completed cycles");
+  for (const result of [
+    recoveryResult,
+    durationResult,
+    performanceResult,
+    efficiencyResult,
+    strainResult,
+  ])
+    for (const note of result.notes) if (!notes.includes(note)) notes.push(note);
+
+  const average = (result: AggregateMetricResult): number | null => {
+    const values = result.released.map((sample) => sample.value);
+    if (!values.length || result.metric === "sleep_deficit") return null;
+    return roundStep(mean(values), AGGREGATE_METRIC_STEP[result.metric]);
+  };
+
+  const summary = nullSummary();
+  summary.recovery = {
+    average_score: average(recoveryResult),
+    min_score: null,
+    max_score: null,
+    average_hrv: average(hrvResult),
+    average_rhr: average(rhrResult),
+    trend: recoveryTrendOf(
+      recoveryResult.released.map((sample) => ({ day: sample.day, score: sample.value }))
+    ),
+  };
+  summary.sleep = {
+    average_duration_hours: average(durationResult),
+    average_performance_pct: average(performanceResult),
+    average_efficiency_pct: average(efficiencyResult),
+  };
+  summary.strain = { average_daily_strain: average(strainResult), max_daily_strain: null };
+  summary.sample_sizes = {
+    recovery_days: recoveryResult.released.length,
+    sleep_nights: durationResult.released.length,
+    completed_cycles: strainResult.released.length,
+  };
+  summary.calibrating = (recoveryResult.exclusions.calibrating ?? 0) > 0;
+  summary.truncated = sources.some((source) => source.quality.truncated);
+
+  const final = data.finalMondays.includes(week.monday);
+  const placedInWeek = weekDays([week.monday]).some((day) => data.placement.byDay.has(day));
+  const weekWorkouts = data.workout!.records.filter((workout) => {
+    const placed = data.workoutPlacement.get(workout.id);
+    return placed !== undefined && placed.day >= week.monday && placed.day <= week.sunday;
+  });
+  if (!data.workoutsComplete) {
+    notes.push(
+      "Workout data for this week could not be read completely from WHOOP, so workout values are unknown (null)."
+    );
+  } else if (final && data.placementComplete) {
+    if (!placedInWeek && weekWorkouts.length === 0) {
+      notes.push(
+        "No WHOOP data was recorded this week, so workout count, strain and calories are unknown (null), not 0."
+      );
+    } else {
+      const scored = weekWorkouts.filter(
+        (workout) => workout.score_state === "SCORED" && workout.score
+      );
+      summary.workouts = {
+        count: scored.length,
+        total_strain: roundStep(
+          scored.reduce((sum, workout) => sum + workout.score!.strain, 0),
+          0.1
+        ),
+        total_calories_kj: roundStep(
+          scored.reduce((sum, workout) => sum + workout.score!.kilojoule, 0),
+          1
+        ),
+        sport_breakdown: {},
+      };
+      const fallback = weekWorkouts.filter(
+        (workout) => data.workoutPlacement.get(workout.id)?.fallback === true
+      ).length;
+      if (fallback) notes.push(fallbackWorkoutsNote(fallback));
+    }
+  }
+  if (summary.truncated)
+    notes.push(
+      "WHOOP returned more records than could be fetched for this week, so it is withheld."
+    );
+  return { ...summary, notes: withOffsetNote(notes, offsetFallback) };
 }

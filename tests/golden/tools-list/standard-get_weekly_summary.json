@@ -1,6 +1,6 @@
 {
   "name": "get_weekly_summary",
-  "description": "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Each record counts in exactly one week by its local day; today's in-progress strain is excluded. Values that cannot be computed yet are null (never 0) and notes say why; workout count/strain/calories are also null for a week with no WHOOP data at all (strap not worn yet, or a week that has not started), while a worn week without workouts gives 0. The recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average.",
+  "description": "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Records are placed on local days as get_calendar shows them; a workout counts on the day of the WHOOP cycle containing its start, so one after midnight before the next sleep counts toward the previous day (a workout without a cycle uses its local start day, noted). Today's in-progress strain and a partial first day of wear are excluded from daily strain. total_strain sums per-workout strain and is not comparable to day strain. Values that cannot be computed yet are null (never 0) and notes say why; workout count/strain/calories are also null for a week with no WHOOP data at all (strap not worn yet, or a week that has not started), while a worn week without workouts gives 0. The recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average; averages are rounded.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -163,7 +163,8 @@
               {
                 "type": "null"
               }
-            ]
+            ],
+            "description": "Sum of per-workout strain. Strain is non-linear (0-21), so this sum is not comparable to day strain."
           },
           "total_calories_kj": {
             "anyOf": [

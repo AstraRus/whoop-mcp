@@ -10,7 +10,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const mockLoadTokens = vi.fn();
 const mockSaveTokens = vi.fn();
 
-vi.mock("../../src/auth/token-store.js", () => ({
+vi.mock("../../src/auth/token-store.js", async (importOriginal) => ({
+  // Keeps the pure helpers (resolveTokenDir, redactHomePath, TOKEN_DIR_ENV)
+  ...(await importOriginal<typeof import("../../src/auth/token-store.js")>()),
   loadTokens: (...args: unknown[]) => mockLoadTokens(...args),
   saveTokens: (...args: unknown[]) => mockSaveTokens(...args),
   deleteTokens: vi.fn(),

@@ -16,14 +16,18 @@
  * - Surfaces pagination truncation
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../../src/api/client.js";
 import { WhoopApiError } from "../../src/api/client.js";
 import { createWhoopServer } from "../../src/server.js";
-import { getTrend } from "../../src/tools/get-trend.js";
+import { getTrend, TREND_METRICS } from "../../src/tools/get-trend.js";
 import type { TrendMetric } from "../../src/tools/get-trend.js";
+import { MAX_TOOL_TEXT_CHARS } from "../../src/tools/tool-definition.js";
+import { assertNeutralText, connectServer } from "../helpers/contract.js";
+import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
+import { liveShapedUser, matureUser, stressUser } from "../helpers/whoop-users.js";
 
 // ---------------------------------------------------------------------------
 // Live-shaped fake WHOOP API
@@ -46,6 +50,21 @@ interface DaySpec {
   strain?: number;
   performance?: number | null;
   calibrating?: boolean;
+  efficiency?: number | null;
+  respiratory?: number | null;
+  consistency?: number | null;
+  /** WHOOP need_from_sleep_debt_milli */
+  debtMs?: number;
+  /** Stage times; defaults 3.5 h light, 1.5 h slow-wave, 2 h REM, 1 h awake, no no-data time */
+  lightMs?: number;
+  swsMs?: number;
+  remMs?: number;
+  noDataMs?: number;
+  disturbances?: number;
+  spo2?: number | null;
+  skinTemp?: number | null;
+  /** Recovery score state (default SCORED) */
+  recoveryState?: "SCORED" | "PENDING_SCORE";
 }
 
 const NOW = new Date("2026-09-16T12:00:00.000Z"); // 14:00 local (+02:00), a Wednesday
@@ -56,16 +75,21 @@ function shiftDay(day: string, count: number): string {
   return new Date(Date.parse(`${day}T00:00:00Z`) + count * DAY_MS).toISOString().slice(0, 10);
 }
 
-function stageSummary(): Record<string, number> {
+function stageSummary(spec: Partial<DaySpec> = {}): Record<string, number> {
+  const light = spec.lightMs ?? 3.5 * HOUR_MS;
+  const sws = spec.swsMs ?? 1.5 * HOUR_MS;
+  const rem = spec.remMs ?? 2 * HOUR_MS;
+  const noData = spec.noDataMs ?? 0;
   return {
-    total_in_bed_time_milli: 8 * HOUR_MS,
-    total_awake_time_milli: HOUR_MS,
-    total_no_data_time_milli: 0,
-    total_light_sleep_time_milli: 3.5 * HOUR_MS,
-    total_slow_wave_sleep_time_milli: 1.5 * HOUR_MS,
-    total_rem_sleep_time_milli: 2 * HOUR_MS, // 7h asleep, 8h in bed
+    // Awake time fills the rest of 8 h in bed (7 h asleep and 1 h awake by default)
+    total_in_bed_time_milli: Math.max(8 * HOUR_MS, light + sws + rem + noData),
+    total_awake_time_milli: Math.max(0, 8 * HOUR_MS - light - sws - rem - noData),
+    total_no_data_time_milli: noData,
+    total_light_sleep_time_milli: light,
+    total_slow_wave_sleep_time_milli: sws,
+    total_rem_sleep_time_milli: rem,
     sleep_cycle_count: 4,
-    disturbance_count: 10,
+    disturbance_count: spec.disturbances ?? 10,
   };
 }
 
@@ -101,17 +125,17 @@ function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeD
       nap: false,
       score_state: "SCORED",
       score: {
-        stage_summary: stageSummary(),
+        stage_summary: stageSummary(spec),
         sleep_needed: {
           baseline_milli: 8 * HOUR_MS,
-          need_from_sleep_debt_milli: 0,
+          need_from_sleep_debt_milli: spec.debtMs ?? 0,
           need_from_recent_strain_milli: 0,
           need_from_recent_nap_milli: 0,
         },
-        respiratory_rate: 15,
+        respiratory_rate: spec.respiratory === undefined ? 15 : spec.respiratory,
         sleep_performance_percentage: spec.performance === undefined ? 80 : spec.performance,
-        sleep_consistency_percentage: 0,
-        sleep_efficiency_percentage: 88,
+        sleep_consistency_percentage: spec.consistency === undefined ? 0 : spec.consistency,
+        sleep_efficiency_percentage: spec.efficiency === undefined ? 88 : spec.efficiency,
       },
     });
     data.cycle.push({
@@ -136,15 +160,18 @@ function history(days: DaySpec[], options: { openLatest?: boolean } = {}): FakeD
       user_id: 1,
       created_at: `${spec.day}T05:30:00.000Z`,
       updated_at: `${spec.day}T05:30:00.000Z`,
-      score_state: "SCORED",
-      score: {
-        user_calibrating: spec.calibrating ?? false,
-        recovery_score: spec.recovery ?? 60,
-        resting_heart_rate: spec.rhr ?? 55,
-        hrv_rmssd_milli: spec.hrv ?? 70,
-        spo2_percentage: 96,
-        skin_temp_celsius: 34,
-      },
+      score_state: spec.recoveryState ?? "SCORED",
+      score:
+        spec.recoveryState === "PENDING_SCORE"
+          ? null
+          : {
+              user_calibrating: spec.calibrating ?? false,
+              recovery_score: spec.recovery ?? 60,
+              resting_heart_rate: spec.rhr ?? 55,
+              hrv_rmssd_milli: spec.hrv ?? 70,
+              spo2_percentage: spec.spo2 === undefined ? 96 : spec.spo2,
+              skin_temp_celsius: spec.skinTemp === undefined ? 34 : spec.skinTemp,
+            },
     });
   });
   return {
@@ -741,23 +768,371 @@ describe("get_trend output contract", () => {
   }
 
   it("omits per-day values and dates in aggregate mode", async () => {
-    const result = await callTrend(sparse, "recovery", "aggregate");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const result = await callTrend(sparse, "recovery", "aggregate");
 
-    expect(result.structuredContent).not.toHaveProperty("values");
-    expect(result.structuredContent).not.toHaveProperty("dates");
-    expect(result.structuredContent).not.toHaveProperty("anomalies");
-    expect(result.structuredContent?.notes).toBeDefined();
-    // Two points (95 and 66): statistics would reveal both nights, so they are withheld
-    expect(result.structuredContent?.sample_size).toBe(2);
-    expect(result.structuredContent?.statistics).toEqual({ mean: null, std_dev: null });
-    expect(result.structuredContent?.notes).toContain(
-      "Aggregate privacy mode withholds statistics until at least 4 data points exist (2 so far)."
-    );
+      expect(result.structuredContent).not.toHaveProperty("values");
+      expect(result.structuredContent).not.toHaveProperty("dates");
+      expect(result.structuredContent).not.toHaveProperty("anomalies");
+      // Both nights are in the current week, which is not released yet
+      expect(result.structuredContent?.sample_size).toBe(0);
+      expect(result.structuredContent?.statistics).toEqual({ mean: null, std_dev: null });
+      expect(result.structuredContent?.period).toEqual({
+        start: "2026-07-20",
+        end: "2026-09-13",
+        days: 56,
+      });
+      expect(result.structuredContent?.notes).toContain(
+        "Aggregate privacy mode uses whole released weeks: 8 weeks ending 2026-09-13."
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps full statistics for the same sparse data in standard mode", async () => {
     const result = await callTrend(sparse, "recovery", "standard");
 
     expect(result.structuredContent?.statistics).toMatchObject({ min: 66, max: 95 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Metrics added for sleep detail, sleep debt, SpO2 and skin temperature
+// ---------------------------------------------------------------------------
+
+describe("getTrend — sleep detail, sleep debt, SpO2 and skin temperature", () => {
+  const dayList = ["2026-09-12", "2026-09-13", "2026-09-14", "2026-09-15", "2026-09-16"];
+
+  async function trend(specs: DaySpec[], metric: TrendMetric): ReturnType<typeof getTrend> {
+    return getTrend(fakeWhoop(history(specs)).client, { metric, days: 7 }, NOW);
+  }
+
+  it("maps sleep_efficiency to WHOOP's percentage, skipping nights without one (null is not 0)", async () => {
+    const result = await trend(
+      dayList.map((day, index) => ({ day, efficiency: [90, 85, null, 80, 95][index] })),
+      "sleep_efficiency"
+    );
+
+    expect(result.values).toEqual([90, 85, 80, 95]);
+    expect(result.dates).toEqual(["2026-09-12", "2026-09-13", "2026-09-15", "2026-09-16"]);
+    expect(result.trend.better_when).toBe("higher");
+    expect(result.notes).toContain("1 scored night had no sleep efficiency and was skipped.");
+  });
+
+  it("gives respiratory rate a change but no better or worse direction", async () => {
+    const result = await trend(
+      dayList.map((day, index) => ({ day, respiratory: 14 + index })),
+      "respiratory_rate"
+    );
+
+    expect(result.values).toEqual([14, 15, 16, 17, 18]);
+    expect(result.trend).toMatchObject({
+      change: "increasing",
+      direction: null,
+      better_when: null,
+    });
+    expect(result.notes).toContain(
+      "Respiratory rate is neither better nor worse when higher, so only trend.change is given."
+    );
+  });
+
+  it("maps rem_share and deep_share to percentages of time asleep", async () => {
+    const specs = dayList.map((day, index) => ({
+      day,
+      lightMs: 4 * HOUR_MS,
+      swsMs: (1 + index * 0.25) * HOUR_MS,
+      remMs: 1 * HOUR_MS,
+    }));
+    const rem = await trend(specs, "rem_share");
+    const deep = await trend(specs, "deep_share");
+
+    const asleep = (index: number): number => 6 + index * 0.25;
+    expect(rem.values.map((value) => Number(value.toFixed(6)))).toEqual(
+      dayList.map((_, index) => Number((100 / asleep(index)).toFixed(6)))
+    );
+    expect(deep.values.map((value) => Number(value.toFixed(6)))).toEqual(
+      dayList.map((_, index) => Number(((100 * (1 + index * 0.25)) / asleep(index)).toFixed(6)))
+    );
+    expect(rem.trend.direction).toBeNull();
+    expect(deep.trend.better_when).toBeNull();
+  });
+
+  it("maps disturbances_per_hour to disturbances per hour asleep and skips nights under 1 hour asleep", async () => {
+    const result = await trend(
+      [
+        { day: "2026-09-12", disturbances: 14 },
+        { day: "2026-09-13", disturbances: 7 },
+        { day: "2026-09-14", disturbances: 3, lightMs: 0.5 * HOUR_MS, swsMs: 0, remMs: 0 },
+        { day: "2026-09-15", disturbances: 21 },
+      ],
+      "disturbances_per_hour"
+    );
+
+    expect(result.values).toEqual([2, 1, 3]);
+    expect(result.notes).toContain(
+      "1 night with less than 1 hour asleep was skipped: disturbances per hour needs at least 1 hour asleep."
+    );
+  });
+
+  it("skips sleep consistency zeros WHOOP reports while calibrating, but keeps a real 0", async () => {
+    const { client, paths } = fakeWhoop(
+      history([
+        { day: "2026-09-12", consistency: 0, calibrating: true },
+        { day: "2026-09-13", consistency: 0, calibrating: false },
+        { day: "2026-09-14", consistency: 0, recoveryState: "PENDING_SCORE" },
+        { day: "2026-09-15", consistency: 70 },
+        { day: "2026-09-16", consistency: null },
+      ])
+    );
+    const result = await getTrend(client, { metric: "sleep_consistency", days: 7 }, NOW);
+
+    expect(result.values).toEqual([0, 70]);
+    expect(result.dates).toEqual(["2026-09-13", "2026-09-15"]);
+    expect(paths.some((path) => path.startsWith("/v2/recovery?"))).toBe(true);
+    expect(result.notes).toEqual(
+      expect.arrayContaining([
+        "1 scored night had no sleep consistency and was skipped.",
+        "1 night had a sleep consistency of 0 while WHOOP was still calibrating and was skipped (WHOOP reports 0 until calibration ends).",
+        "1 night had a sleep consistency of 0 without a scored recovery to check WHOOP's calibration flag and was skipped.",
+      ])
+    );
+    expect(result.trend.better_when).toBe("higher");
+  });
+
+  it("maps sleep_debt to WHOOP's sleep-debt need in hours, lower being better", async () => {
+    const result = await trend(
+      dayList.map((day, index) => ({ day, debtMs: (2 - index * 0.25) * HOUR_MS })),
+      "sleep_debt"
+    );
+
+    expect(result.values).toEqual([2, 1.75, 1.5, 1.25, 1]);
+    expect(result.trend).toMatchObject({
+      change: "decreasing",
+      direction: "improving",
+      better_when: "lower",
+    });
+  });
+
+  it("skips nights with low data coverage only for the added sleep metrics", async () => {
+    const specs = dayList.map((day, index) => ({
+      day,
+      // 2 h without strap data out of 8 h in bed on the middle night (25% > 20%)
+      noDataMs: index === 2 ? 2 * HOUR_MS : 0,
+      lightMs: index === 2 ? 2.5 * HOUR_MS : undefined,
+      debtMs: HOUR_MS,
+      consistency: 75,
+    }));
+    const note =
+      "1 night with low data coverage (no strap data for more than 20% of time in bed) was skipped.";
+    for (const metric of [
+      "sleep_efficiency",
+      "rem_share",
+      "deep_share",
+      "disturbances_per_hour",
+      "sleep_debt",
+    ] as const) {
+      const result = await trend(specs, metric);
+      expect(result.sample_size, metric).toBe(4);
+      expect(result.notes, metric).toContain(note);
+    }
+    for (const metric of [
+      "sleep_duration",
+      "sleep_performance",
+      "respiratory_rate",
+      "sleep_consistency",
+    ] as const) {
+      const result = await trend(specs, metric);
+      expect(result.sample_size, metric).toBe(5);
+      expect(result.notes, metric).not.toContain(note);
+    }
+  });
+
+  it("maps spo2 and skin_temp to recovery fields, skipping nulls with a count note", async () => {
+    const specs = dayList.map((day, index) => ({
+      day,
+      spo2: [96, null, 95.5, null, 97][index],
+      skinTemp: [33.1, 33.4, null, 33.9, 34.2][index],
+    }));
+    const spo2 = await trend(specs, "spo2");
+    const skin = await trend(specs, "skin_temp");
+
+    expect(spo2.values).toEqual([96, 95.5, 97]);
+    expect(spo2.notes).toContain(
+      "2 scored recoveries had no SpO2 and were skipped: not reported (WHOOP 4.0 or later)."
+    );
+    expect(spo2.trend.better_when).toBeNull();
+    expect(skin.values).toEqual([33.1, 33.4, 33.9, 34.2]);
+    expect(skin.notes).toContain(
+      "1 scored recovery had no skin temperature and was skipped: not reported (WHOOP 4.0 or later)."
+    );
+    expect(skin.trend).toMatchObject({ change: "increasing", direction: null });
+    expect(skin.calibrating).toBe(false);
+  });
+
+  it("explains a device that reports no SpO2 at all instead of reporting no recoveries", async () => {
+    const result = await trend(
+      dayList.map((day) => ({ day, spo2: null })),
+      "spo2"
+    );
+
+    expect(result.status).toBe("insufficient_data");
+    expect(result.statistics.mean).toBeNull();
+    expect(result.notes[0]).toBe(
+      "Not enough data yet: no scored recoveries with SpO2 in the last 7 days; a trend needs at least 4."
+    );
+    expect(result.notes).toContain(
+      "5 scored recoveries had no SpO2 and were skipped: not reported (WHOOP 4.0 or later)."
+    );
+  });
+
+  it("flags calibrating recoveries for spo2 without claiming the values shift", async () => {
+    const result = await trend(
+      dayList.map((day) => ({ day, calibrating: true })),
+      "spo2"
+    );
+
+    expect(result.calibrating).toBe(true);
+    expect(result.notes).toContain(
+      "WHOOP is still calibrating (5 of 5 scored recoveries flagged); these recoveries are included."
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared fixture users
+// ---------------------------------------------------------------------------
+
+interface ToolResult {
+  isError: boolean;
+  text: string;
+  structured: Record<string, unknown> | null;
+}
+
+describe("get_trend on the shared fixture users", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function callAll(
+    data: ReturnType<typeof liveShapedUser>,
+    privacyMode: "standard" | "aggregate",
+    days: number
+  ): Promise<Map<TrendMetric, ToolResult>> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      privacyMode,
+      disableResources: true,
+    });
+    const results = new Map<TrendMetric, ToolResult>();
+    try {
+      for (const metric of TREND_METRICS) {
+        results.set(metric, await connection.callTool("get_trend", { metric, days }));
+      }
+    } finally {
+      await connection.close();
+    }
+    return results;
+  }
+
+  it("reports every metric as insufficient data for the calibrating live-shaped user", async () => {
+    const results = await callAll(liveShapedUser(), "standard", 7);
+    for (const [metric, result] of results) {
+      expect(result.isError, `${metric}: ${result.text}`).toBe(false);
+      expect(result.structured?.status, metric).toBe("insufficient_data");
+      expect(result.structured?.trend, metric).toMatchObject({ direction: null, slope: null });
+      assertNeutralText(result.structured);
+    }
+    // The calibration zeros WHOOP reports for sleep consistency are not values.
+    expect(results.get("sleep_consistency")?.structured?.sample_size).toBe(0);
+    // Both scored recoveries have a numeric SpO2 and skin temperature.
+    expect(results.get("spo2")?.structured?.sample_size).toBe(2);
+    expect(results.get("skin_temp")?.structured?.calibrating).toBe(true);
+  });
+
+  it("computes every metric on 90 days of a mature account", async () => {
+    const results = await callAll(matureUser(), "standard", 90);
+    for (const [metric, result] of results) {
+      expect(result.isError, `${metric}: ${result.text}`).toBe(false);
+      expect(result.structured?.status, metric).toBe("available");
+      expect(Number(result.structured?.sample_size), metric).toBeGreaterThan(60);
+      assertNeutralText(result.structured);
+    }
+    const efficiency = results.get("sleep_efficiency")!.structured!;
+    const duration = results.get("sleep_duration")!.structured!;
+    // Every 11th night has low data coverage: only the added sleep metrics leave it out.
+    expect(Number(efficiency.sample_size)).toBeLessThan(Number(duration.sample_size));
+    expect(efficiency.notes).toEqual(
+      expect.arrayContaining([expect.stringMatching(/with low data coverage .* were skipped\.$/)])
+    );
+  });
+
+  it("stays within the text size limit at 90 days on the stress user", async () => {
+    const results = await callAll(stressUser(), "standard", 90);
+    for (const [metric, result] of results) {
+      expect(result.isError, `${metric}: ${result.text.slice(0, 200)}`).toBe(false);
+      expect(result.text.length, metric).toBeLessThan(MAX_TOOL_TEXT_CHARS);
+    }
+  });
+
+  it("returns rounded statistics over whole released weeks in aggregate mode", async () => {
+    const results = await callAll(matureUser(), "aggregate", 30);
+    const tenths = new Set<TrendMetric>([
+      "skin_temp",
+      "sleep_duration",
+      "respiratory_rate",
+      "disturbances_per_hour",
+      "sleep_debt",
+      "strain",
+    ]);
+    for (const [metric, result] of results) {
+      expect(result.isError, `${metric}: ${result.text}`).toBe(false);
+      const structured = result.structured!;
+      expect(structured).not.toHaveProperty("values");
+      expect(structured).not.toHaveProperty("anomalies");
+      // 30 days snap to 8 released weeks, the latest ending the Sunday before Wednesday 09-16
+      expect(structured.period, metric).toEqual({
+        start: "2026-07-20",
+        end: "2026-09-13",
+        days: 56,
+      });
+      expect(structured.status, metric).toBe("available");
+      const { mean, std_dev: sd } = structured.statistics as { mean: number; std_dev: number };
+      const step = tenths.has(metric) ? 0.1 : 1;
+      for (const value of [mean, sd]) {
+        expect(
+          Math.abs(value / step - Math.round(value / step)),
+          `${metric} ${value}`
+        ).toBeLessThan(1e-9);
+      }
+      assertNeutralText(structured);
+    }
+  });
+
+  it("snaps 8 to 14 days to the same two released weeks, so one extra day never changes the result", async () => {
+    const data = matureUser();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      privacyMode: "aggregate",
+      disableResources: true,
+    });
+    try {
+      const outputs: Record<string, unknown>[] = [];
+      for (let days = 7; days <= 14; days++) {
+        outputs.push((await connection.callTool("get_trend", { metric: "hrv", days })).structured!);
+      }
+      const [oneWeek, ...twoWeeks] = outputs;
+      for (const output of twoWeeks) expect(output).toEqual(twoWeeks[0]);
+      // The difference between 7 and 8 days is a whole released week, never a single day.
+      const difference = Number(twoWeeks[0]!.sample_size) - Number(oneWeek!.sample_size);
+      expect(difference === 0 || difference >= 3).toBe(true);
+      expect(oneWeek!.period).toEqual({ start: "2026-09-07", end: "2026-09-13", days: 7 });
+    } finally {
+      await connection.close();
+    }
   });
 });

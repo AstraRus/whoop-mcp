@@ -17,7 +17,7 @@
  * - Matches the standard and aggregate output contracts
  */
 
-import { describe, it, expect } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { WhoopClient } from "../../src/api/client.js";
@@ -34,7 +34,17 @@ import {
   projectAggregateDates,
 } from "../../src/tools/output-contracts.js";
 import { createWhoopServer } from "../../src/server.js";
-import type { Cycle, Recovery, Sleep } from "../../src/api/types.js";
+import type { Cycle, Recovery, Sleep, Workout } from "../../src/api/types.js";
+import { assignWorkouts, placeDays } from "../../src/tools/day-model.js";
+import { MAX_TOOL_TEXT_CHARS } from "../../src/tools/tool-definition.js";
+import { assertNeutralText, connectServer } from "../helpers/contract.js";
+import { createWhoopFixtureClient, type FixtureFailure } from "../helpers/whoop-fixture-client.js";
+import {
+  liveShapedUser,
+  matureUser,
+  stressUser,
+  type WhoopUserFixture,
+} from "../helpers/whoop-users.js";
 
 // ---------------------------------------------------------------------------
 // Live-shaped fixtures
@@ -50,6 +60,7 @@ interface History {
   cycles: Cycle[];
   sleeps: Sleep[];
   recoveries: Recovery[];
+  workouts?: Workout[];
 }
 
 interface DaySpec {
@@ -248,6 +259,10 @@ function fakeWhoop(history: History, options: FakeOptions = {}): FakeWhoop {
               Date.parse(sleepsById.get(right.sleep_id)!.start) -
               Date.parse(sleepsById.get(left.sleep_id)!.start)
           );
+      } else if (base === "/v2/activity/workout") {
+        records = (history.workouts ?? [])
+          .filter((workout) => overlaps(workout.start, workout.end, params))
+          .sort((left, right) => Date.parse(right.start) - Date.parse(left.start));
       } else {
         throw new WhoopApiError(404, "", null);
       }
@@ -327,7 +342,8 @@ describe("comparePeriods — calibrating user with sparse data", () => {
     const result = await comparePeriods(client, SPARSE_PERIODS, NOW);
 
     const dataPaths = paths.filter((path) => path.includes("start="));
-    expect(dataPaths).toHaveLength(6);
+    // Recovery, sleep, cycle and workouts for each period
+    expect(dataPaths).toHaveLength(8);
     for (const path of dataPaths) {
       const params = new URLSearchParams(path.split("?")[1]);
       expect(params.get("start")).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
@@ -524,7 +540,14 @@ describe("comparePeriods — attribution to exactly one period", () => {
     expect(result.recovery.period_a_n).toBe(3);
     expect(result.recovery.period_b_n).toBe(3);
     expect(result.strain.direction).toBe("insufficient_data");
-    expect(result.warnings).toHaveLength(2);
+    // Worn days are unknown without cycles, so training is not compared.
+    expect(result.training).toBeNull();
+    expect(result.warnings).toEqual([
+      "Cycle (strain) data for period A could not be loaded (WHOOP API returned 502), so that period has no cycle (strain) samples.",
+      "Cycle (strain) data for period B could not be loaded (WHOOP API returned 502), so that period has no cycle (strain) samples.",
+      "Training is not compared: cycle data for period A could not be loaded, so worn days are unknown.",
+      "Training is not compared: cycle data for period B could not be loaded, so worn days are unknown.",
+    ]);
   });
 
   it("keeps each record's own local day when its offset differs from the user's current one", async () => {
@@ -695,6 +718,7 @@ describe("comparePeriods — local days counted for date-time bounds", () => {
       "Cannot compare recovery: period A covers no local day.",
       "Cannot compare sleep: period A covers no local day.",
       "Cannot compare strain: period A covers no local day.",
+      "Cannot compare training: period A covers no local day.",
     ]);
     expect(outputSchemas.compare_periods!.safeParse(result).success).toBe(true);
     const aggregate = aggregateOutputSchemas.compare_periods!.safeParse(result);
@@ -792,7 +816,9 @@ describe("comparePeriods — comparison math", () => {
     expect(result.recovery.period_b_avg).toBe(80);
     expect(result.recovery.change_pct).toBe(33.3);
     expect(result.recovery.direction).toBe("improved");
-    expect(result.notes).toEqual([]);
+    expect(result.notes).toEqual([
+      "Not enough data yet to compare training: period A has 3 worn days and period B has 3; at least 7 per period are needed.",
+    ]);
   });
 
   it("identifies 'declined'", async () => {
@@ -1054,9 +1080,11 @@ describe("comparePeriods — fetching", () => {
       "/v2/recovery",
       "/v2/activity/sleep",
       "/v2/cycle",
+      "/v2/activity/workout",
       "/v2/recovery",
       "/v2/activity/sleep",
       "/v2/cycle",
+      "/v2/activity/workout",
     ]);
   });
 
@@ -1194,7 +1222,13 @@ describe("compare_periods over MCP", () => {
     }
   );
 
-  it("withholds single-day averages in aggregate mode but not in standard mode", async () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("gives single days no values in aggregate mode (no whole released week) but not in standard mode", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     const oneDayEach = {
       period_a_start: "2026-09-15",
       period_a_end: "2026-09-15",
@@ -1211,37 +1245,85 @@ describe("compare_periods over MCP", () => {
 
     const aggregate = (await callTool("aggregate", oneDayEach)).structuredContent as Result;
     expect(aggregate.recovery).toMatchObject({ period_a_avg: null, period_b_avg: null });
-    expect(aggregate.recovery.period_a_n).toBe(1);
+    expect(aggregate.recovery.period_a_n).toBe(0);
     expect(aggregate.sleep).toMatchObject({ period_a_avg_hours: null, period_b_avg_hours: null });
     expect(aggregate.strain.period_a_avg).toBeNull();
-    expect(aggregate.period_a).toMatchObject({ start: "2026-09-15", end: "2026-09-15", days: 1 });
-    expect(aggregate.notes).toContainEqual(
-      expect.stringMatching(
-        /^Aggregate privacy mode withholds period averages based on fewer than 3 samples: recovery in period A \(1 scored recovery\)/
-      )
+    expect(aggregate.period_a).toMatchObject({ start: null, end: null, days: 0 });
+    expect(aggregate.notes).toContain(
+      "Period A contains no whole released week (Monday to Sunday, released two days after it ends), so it has no values in aggregate privacy mode."
     );
+    expect(aggregate.notes).toContain(
+      "Cannot compare recovery: period A and period B have no whole released week."
+    );
+    expect(aggregate).not.toHaveProperty("training");
 
     const standard = (await callTool("standard", oneDayEach)).structuredContent as Result;
     expect(standard.recovery).toMatchObject({ period_a_avg: 61, period_b_avg: 70 });
   });
 
-  it("labels aggregate periods with the local days counted, not the raw bounds", async () => {
+  it("labels aggregate periods with the whole released weeks inside them, not the raw bounds", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     const result = await callTool("aggregate", {
-      period_a_start: "2026-09-01",
-      period_a_end: "2026-09-07",
-      // A date-time end is exclusive: 09-10 is not counted
-      period_b_start: "2026-09-08T12:00:00+02:00",
-      period_b_end: "2026-09-10T00:00:00+02:00",
+      period_a_start: "2026-08-19",
+      period_a_end: "2026-09-02",
+      // Counted days 09-04..09-15: only the week 09-07..09-13 is whole and released
+      period_b_start: "2026-09-03T12:00:00+02:00",
+      period_b_end: "2026-09-16",
     });
 
     expect(result.isError).toBeFalsy();
     const structured = result.structuredContent as {
       period_a: Record<string, unknown>;
       period_b: Record<string, unknown>;
+      notes: string[];
     };
-    expect(structured.period_a).toMatchObject({ start: "2026-09-01", end: "2026-09-07", days: 7 });
-    // 09-08 from noon is half a day, so only 09-09 is counted
-    expect(structured.period_b).toMatchObject({ start: "2026-09-09", end: "2026-09-09", days: 1 });
+    expect(structured.period_a).toEqual({
+      start: "2026-08-24",
+      end: "2026-08-30",
+      days: 7,
+      first_day: "2026-08-24",
+      last_day: "2026-08-30",
+    });
+    expect(structured.period_b).toEqual({
+      start: "2026-09-07",
+      end: "2026-09-13",
+      days: 7,
+      first_day: "2026-09-07",
+      last_day: "2026-09-13",
+    });
+    expect(structured.notes).toEqual(
+      expect.arrayContaining([
+        "Aggregate privacy mode uses whole released weeks: 1 week ending 2026-08-30 for period A.",
+        "Aggregate privacy mode uses whole released weeks: 1 week ending 2026-09-13 for period B.",
+      ])
+    );
+  });
+
+  it("checks overlap after snapping to released weeks in aggregate mode", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    // The raw periods share 08-24..08-26, but their whole weeks do not overlap.
+    const apart = await callTool("aggregate", {
+      period_a_start: "2026-08-10",
+      period_a_end: "2026-08-26",
+      period_b_start: "2026-08-24",
+      period_b_end: "2026-09-06",
+    });
+    expect(apart.isError).toBeFalsy();
+    expect(
+      (apart.structuredContent as { period_b: { first_day: string } }).period_b.first_day
+    ).toBe("2026-08-24");
+
+    const shared = await callTool("aggregate", {
+      period_a_start: "2026-08-10",
+      period_a_end: "2026-08-30",
+      period_b_start: "2026-08-24",
+      period_b_end: "2026-09-06",
+    });
+    expect(shared.isError).toBe(true);
+    const content = shared.content as Array<{ type: string; text: string }>;
+    expect(content[0]!.text).toMatch(/share the week starting 2026-08-24/);
   });
 
   it("returns the local validation message for a reversed period", async () => {
@@ -1254,5 +1336,331 @@ describe("compare_periods over MCP", () => {
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
     expect(content[0]!.text).toMatch(/end of period A must be after its start/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Training block
+// ---------------------------------------------------------------------------
+
+interface ExpectedTraining {
+  sessions: number;
+  worn_days: number;
+  minutes: number;
+  trimpDays: number[];
+  afterMidnight: number;
+}
+
+/**
+ * Training totals computed independently from the whole fixture: workouts on
+ * the placed day of their cycle, TRIMP as zone minutes weighted 1-5, days with
+ * a workout recorded below 90% or not scored left out of the TRIMP mean.
+ */
+function expectedTraining(data: WhoopUserFixture, first: string, last: string): ExpectedTraining {
+  const today = new Date(data.now.getTime() + 60 * 60_000).toISOString().slice(0, 10);
+  const placement = placeDays({
+    cycles: data.cycles,
+    sleeps: data.sleeps,
+    recoveries: data.recoveries,
+    sleepsAvailable: true,
+    today,
+    utcOffset: data.offset,
+  });
+  const placed = assignWorkouts(data.workouts, placement, data.cycles);
+  const result: ExpectedTraining = {
+    sessions: 0,
+    worn_days: 0,
+    minutes: 0,
+    trimpDays: [],
+    afterMidnight: 0,
+  };
+  for (
+    let ms = Date.parse(`${first}T00:00:00Z`);
+    ms <= Date.parse(`${last}T00:00:00Z`);
+    ms += DAY_MS
+  ) {
+    const day = new Date(ms).toISOString().slice(0, 10);
+    if (!placement.cycleByDay.has(day)) continue;
+    result.worn_days += 1;
+    let trimp = 0;
+    let known = true;
+    for (const workout of data.workouts) {
+      const placement = placed.get(workout.id)!;
+      if (placement.day !== day) continue;
+      if (workout.score_state !== "SCORED" || !workout.score) {
+        known = false;
+        continue;
+      }
+      result.sessions += 1;
+      if (placement.after_midnight_in_previous_cycle) result.afterMidnight += 1;
+      result.minutes += (Date.parse(workout.end) - Date.parse(workout.start)) / 60_000;
+      const zones = workout.score.zone_durations;
+      trimp +=
+        (zones.zone_one_milli +
+          2 * zones.zone_two_milli +
+          3 * zones.zone_three_milli +
+          4 * zones.zone_four_milli +
+          5 * zones.zone_five_milli) /
+        60_000;
+      if (workout.score.percent_recorded < 0.9) known = false;
+    }
+    if (known) result.trimpDays.push(trimp);
+  }
+  return result;
+}
+
+const round = (value: number, digits: number): number =>
+  Math.round(value * 10 ** digits) / 10 ** digits;
+
+describe("comparePeriods — training", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const A = { first: "2026-08-17", last: "2026-08-30" };
+  const B = { first: "2026-08-31", last: "2026-09-13" };
+
+  async function compare(
+    data: WhoopUserFixture,
+    periods: ComparePeriodsParams,
+    failures: FixtureFailure[] = []
+  ): Promise<Awaited<ReturnType<typeof comparePeriods>>> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    return comparePeriods(createWhoopFixtureClient({ ...data, failures }), periods, data.now);
+  }
+
+  it("compares sessions, minutes and TRIMP per worn day for two 14-day periods of a mature account", async () => {
+    const data = matureUser();
+    const result = await compare(data, {
+      period_a_start: A.first,
+      period_a_end: A.last,
+      period_b_start: B.first,
+      period_b_end: B.last,
+    });
+
+    const a = expectedTraining(data, A.first, A.last);
+    const b = expectedTraining(data, B.first, B.last);
+    const mean = (values: number[]): number =>
+      values.reduce((sum, value) => sum + value, 0) / values.length;
+    expect(a.worn_days).toBe(14);
+    expect(result.training).toEqual({
+      period_a: {
+        sessions: a.sessions,
+        worn_days: a.worn_days,
+        sessions_per_week: round((a.sessions / a.worn_days) * 7, 2),
+        workout_minutes_per_worn_day: round(a.minutes / a.worn_days, 1),
+        trimp_per_worn_day: round(mean(a.trimpDays), 1),
+      },
+      period_b: {
+        sessions: b.sessions,
+        worn_days: b.worn_days,
+        sessions_per_week: round((b.sessions / b.worn_days) * 7, 2),
+        workout_minutes_per_worn_day: round(b.minutes / b.worn_days, 1),
+        trimp_per_worn_day: round(mean(b.trimpDays), 1),
+      },
+      change_pct: {
+        sessions_per_week: expect.any(Number),
+        workout_minutes_per_worn_day: expect.any(Number),
+        trimp_per_worn_day: round(
+          ((mean(b.trimpDays) - mean(a.trimpDays)) / mean(a.trimpDays)) * 100,
+          1
+        ),
+      },
+      direction: expect.stringMatching(/^(increased|decreased|unchanged)$/),
+    });
+    const change = ((mean(b.trimpDays) - mean(a.trimpDays)) / mean(a.trimpDays)) * 100;
+    expect(result.training!.direction).toBe(
+      Math.abs(change) <= 5 ? "unchanged" : change > 0 ? "increased" : "decreased"
+    );
+    // Days with a workout recorded below 90% are counted in a note, never as 0.
+    const leftOut = a.worn_days - a.trimpDays.length;
+    if (leftOut)
+      expect(result.notes).toContainEqual(
+        expect.stringMatching(/in period A had a workout recorded below 90% or not scored/)
+      );
+    assertNeutralText(result);
+  });
+
+  it("counts an after-midnight workout on the last day of a period through the extended fetch window", async () => {
+    const data = matureUser();
+    const today = "2026-09-16";
+    const placement = placeDays({
+      cycles: data.cycles,
+      sleeps: data.sleeps,
+      recoveries: data.recoveries,
+      sleepsAvailable: true,
+      today,
+      utcOffset: data.offset,
+    });
+    const placed = assignWorkouts(data.workouts, placement, data.cycles);
+    const late = data.workouts
+      .map((workout) => placed.get(workout.id)!)
+      .filter((entry) => entry.after_midnight_in_previous_cycle && entry.day < "2026-09-10")
+      .sort((left, right) => (left.day < right.day ? 1 : -1))[0]!;
+    const first = new Date(Date.parse(`${late.day}T00:00:00Z`) - 13 * DAY_MS)
+      .toISOString()
+      .slice(0, 10);
+    const result = await compare(data, {
+      period_a_start: "2026-06-01",
+      period_a_end: "2026-06-14",
+      period_b_start: first,
+      period_b_end: late.day,
+    });
+
+    const expected = expectedTraining(data, first, late.day);
+    expect(expected.afterMidnight).toBeGreaterThan(0);
+    expect(result.training?.period_b.sessions).toBe(expected.sessions);
+  });
+
+  it("reports insufficient data below 7 worn days in either period", async () => {
+    const data = matureUser();
+    const result = await compare(data, {
+      period_a_start: "2026-08-17",
+      period_a_end: "2026-08-21",
+      period_b_start: "2026-08-31",
+      period_b_end: "2026-09-13",
+    });
+
+    expect(result.training).toMatchObject({
+      period_a: {
+        worn_days: 5,
+        sessions_per_week: null,
+        workout_minutes_per_worn_day: null,
+        trimp_per_worn_day: null,
+      },
+      period_b: { worn_days: 14, sessions_per_week: null, trimp_per_worn_day: null },
+      change_pct: {
+        sessions_per_week: null,
+        workout_minutes_per_worn_day: null,
+        trimp_per_worn_day: null,
+      },
+      direction: "insufficient_data",
+    });
+    expect(result.notes).toContain(
+      "Not enough data yet to compare training: period A has 5 worn days and period B has 14; at least 7 per period are needed."
+    );
+  });
+
+  it("nulls only the training block, with a warning, when workouts cannot be loaded", async () => {
+    const data = matureUser();
+    const periods = {
+      period_a_start: A.first,
+      period_a_end: A.last,
+      period_b_start: B.first,
+      period_b_end: B.last,
+    };
+    const healthy = await compare(data, periods);
+    const failed = await compare(data, periods, [
+      { path: /^\/v2\/activity\/workout/, error: new WhoopApiError(503, "Unavailable", null) },
+    ]);
+
+    expect(failed.training).toBeNull();
+    expect(failed.warnings).toEqual([
+      "Workout data for period A could not be loaded (WHOOP API returned 503), so training is not compared.",
+      "Workout data for period B could not be loaded (WHOOP API returned 503), so training is not compared.",
+    ]);
+    expect(failed.recovery).toEqual(healthy.recovery);
+    expect(failed.sleep).toEqual(healthy.sleep);
+    expect(failed.strain).toEqual(healthy.strain);
+  });
+
+  it("does not throw when the workout scope is missing (authorization error on workouts only)", async () => {
+    const data = matureUser();
+    const result = await compare(
+      data,
+      {
+        period_a_start: A.first,
+        period_a_end: A.last,
+        period_b_start: B.first,
+        period_b_end: B.last,
+      },
+      [{ path: /^\/v2\/activity\/workout/, error: new WhoopAuthError(new Error("scope")) }]
+    );
+
+    expect(result.training).toBeNull();
+    expect(result.recovery.period_a_n).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shared fixture users, both privacy modes
+// ---------------------------------------------------------------------------
+
+describe("compare_periods on the shared fixture users", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function call(
+    data: WhoopUserFixture,
+    privacyMode: "standard" | "aggregate",
+    args: ComparePeriodsParams
+  ): Promise<{ isError: boolean; text: string; structured: Record<string, unknown> | null }> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      privacyMode,
+      disableResources: true,
+    });
+    try {
+      return await connection.callTool("compare_periods", { ...args });
+    } finally {
+      await connection.close();
+    }
+  }
+
+  it("reports the live-shaped user's first days with a training block and neutral notes", async () => {
+    const result = await call(liveShapedUser(), "standard", SPARSE_PERIODS);
+    expect(result.isError, result.text).toBe(false);
+    expect(result.structured?.training).toMatchObject({
+      period_a: { sessions: 0, worn_days: 0 },
+      period_b: { sessions: 8, worn_days: 3 },
+      direction: "insufficient_data",
+    });
+    assertNeutralText(result.structured);
+  });
+
+  it("snaps a mature account's months to released weeks with rounded averages in aggregate mode", async () => {
+    const result = await call(matureUser(), "aggregate", {
+      period_a_start: "2026-07-01",
+      period_a_end: "2026-07-31",
+      period_b_start: "2026-08-15",
+      period_b_end: "2026-09-16",
+    });
+    expect(result.isError, result.text).toBe(false);
+    const structured = result.structured as {
+      period_a: Record<string, unknown>;
+      period_b: Record<string, unknown>;
+      recovery: Record<string, number | null>;
+      sleep: Record<string, number | null>;
+      strain: Record<string, number | null>;
+    };
+    expect(structured.period_a).toMatchObject({ first_day: "2026-07-06", last_day: "2026-07-26" });
+    // 09-14..09-16 are not released yet, so period B ends with the week of 09-07.
+    expect(structured.period_b).toMatchObject({ first_day: "2026-08-17", last_day: "2026-09-13" });
+    expect(structured).not.toHaveProperty("training");
+    expect(Number.isInteger(structured.recovery.period_a_avg)).toBe(true);
+    expect(Number.isInteger(structured.recovery.change_pct)).toBe(true);
+    expect(round(structured.sleep.period_b_avg_hours!, 1)).toBe(
+      structured.sleep.period_b_avg_hours
+    );
+    // Whole weeks only: every count is a sum of weeks with at least 3 samples.
+    expect(Number(structured.recovery.period_b_n)).toBe(28);
+    expect(result.text).not.toMatch(/T\d{2}:\d{2}/);
+    assertNeutralText(result.structured);
+  });
+
+  it("stays within the text size limit for two 90-day periods on the stress user in both modes", async () => {
+    for (const mode of ["standard", "aggregate"] as const) {
+      const result = await call(stressUser(), mode, {
+        period_a_start: "2026-03-20",
+        period_a_end: "2026-06-17",
+        period_b_start: "2026-06-18",
+        period_b_end: "2026-09-15",
+      });
+      expect(result.isError, result.text.slice(0, 300)).toBe(false);
+      expect(result.text.length).toBeLessThan(MAX_TOOL_TEXT_CHARS);
+    }
   });
 });

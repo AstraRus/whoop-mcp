@@ -8,6 +8,15 @@ import { createWhoopServer } from "../../src/server.js";
 import { InvalidDateExpression } from "../../src/tools/date-utils.js";
 import { aggregateOutputSchemas } from "../../src/tools/output-contracts.js";
 import { analyticsClient, ANALYTICS_NOW, sleepFixture } from "../helpers/analytics-fixtures.js";
+import { MAX_TOOL_TEXT_CHARS } from "../../src/tools/tool-definition.js";
+import { assertNeutralText, connectServer } from "../helpers/contract.js";
+import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
+import {
+  liveShapedUser,
+  matureUser,
+  stressUser,
+  type WhoopUserFixture,
+} from "../helpers/whoop-users.js";
 
 // ---------------------------------------------------------------------------
 // Live-shaped fixtures: a new user at +02:00 who started wearing WHOOP on
@@ -492,19 +501,32 @@ describe("get_sleep_debt through the MCP server", () => {
     expect(result.isError, result.text).toBeFalsy();
     const data = result.structuredContent as Record<string, unknown>;
     expect(aggregateOutputSchemas.get_sleep_debt!.safeParse(data).success).toBe(true);
-    expect(data).toMatchObject({ status: "insufficient_data", nights_required: 3 });
-    expect(data.notes).toEqual([expect.stringContaining("Not enough data yet: 2 of 3")]);
+    // Both nights are in the current week, which is not released yet.
+    expect(data).toMatchObject({
+      status: "insufficient_data",
+      nights_analyzed: 0,
+      nights_required: 3,
+    });
+    expect(data.notes).toEqual([
+      "Aggregate privacy mode uses whole released weeks: 2 weeks ending 2026-09-13.",
+      "Not enough data yet: 0 of 3 required scored main sleeps in released weeks with at least 3 each, so deficit totals and bedtime/wake consistency are not calculated.",
+    ]);
     for (const hidden of ['"nights"', "standing_debt", "summary", "T05:13", "2026-09-15"])
       expect(result.text).not.toContain(hidden);
   });
 
   it.each([
-    [{ start: "2026-09-14", days: 3 }, LIVE_NOW, { start: "2026-09-14", end: "2026-09-16" }],
-    [{ start: "yesterday", days: 3 }, LIVE_NOW, { start: "2026-09-15", end: "2026-09-16" }],
-    [{ days: 3 }, new Date("2026-09-16T23:30:00.000Z"), { start: "2026-09-14", end: "2026-09-17" }],
-    [{ start: "last week" }, LIVE_NOW, { start: "2026-09-07", end: "2026-09-13" }],
+    // days snap to 2, 4, 8 or 12 released weeks; start is ignored.
+    [{ start: "2026-09-14", days: 3 }, LIVE_NOW, { start: "2026-08-31", end: "2026-09-13" }],
+    [{ start: "yesterday", days: 3 }, LIVE_NOW, { start: "2026-08-31", end: "2026-09-13" }],
+    [{ days: 3 }, new Date("2026-09-16T23:30:00.000Z"), { start: "2026-08-31", end: "2026-09-13" }],
+    [{ start: "last week" }, LIVE_NOW, { start: "2026-08-31", end: "2026-09-13" }],
+    [{ days: 30 }, LIVE_NOW, { start: "2026-07-20", end: "2026-09-13" }],
+    [{ days: 90 }, LIVE_NOW, { start: "2026-06-22", end: "2026-09-13" }],
+    // Tuesday 23:30 local: the week of 09-07 is not released until Wednesday.
+    [{}, new Date("2026-09-15T21:30:00.000Z"), { start: "2026-08-24", end: "2026-09-06" }],
   ])(
-    "labels the aggregate period for %j with the user's local days",
+    "labels the aggregate period for %j with whole released weeks",
     async (args, now, expected) => {
       const result = await call(
         liveClient({ "/v2/activity/sleep": [liveSleeps()] }),
@@ -532,9 +554,101 @@ describe("get_sleep_debt through the MCP server", () => {
       status: "unavailable",
       // Every request fails here, so the time-zone fallback note is added too
       notes: expect.arrayContaining([
-        expect.stringContaining("Sleep data could not be read"),
+        expect.stringContaining("Sleep or cycle data for these weeks could not be read completely"),
         expect.stringContaining("time zone could not be read"),
       ]),
     });
+  });
+});
+
+describe("get_sleep_debt on the shared fixture users", () => {
+  async function call(
+    data: WhoopUserFixture,
+    privacyMode: "standard" | "aggregate",
+    args: Record<string, unknown> = {}
+  ): Promise<{ isError: boolean; text: string; structured: Record<string, unknown> | null }> {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(data.now);
+    const connection = await connectServer(createWhoopFixtureClient(data), {
+      privacyMode,
+      disableResources: true,
+    });
+    try {
+      return await connection.callTool("get_sleep_debt", args);
+    } finally {
+      await connection.close();
+    }
+  }
+
+  it("reports rounded deficits over two released weeks of a mature account in aggregate mode", async () => {
+    const data = matureUser();
+    const aggregate = await call(data, "aggregate");
+    expect(aggregate.isError, aggregate.text).toBe(false);
+    const report = aggregate.structured as {
+      nights_analyzed: number;
+      total_debt_hours: number;
+      avg_nightly_debt_hours: number;
+      consistency: Record<string, number>;
+      data_quality: { sources: Record<string, { records_used: number }> };
+    };
+    expect(report).toMatchObject({
+      period: { start: "2026-08-31", end: "2026-09-13" },
+      nights_analyzed: 14,
+      status: "available",
+    });
+    expect(Math.round(report.total_debt_hours * 10) / 10).toBe(report.total_debt_hours);
+    for (const value of Object.values(report.consistency))
+      expect(Number.isInteger(value)).toBe(true);
+    expect(report.data_quality.sources.sleep!.records_used).toBe(14);
+    expect(aggregate.text).not.toMatch(/T\d{2}:\d{2}|standing_debt|"nights"/);
+    assertNeutralText(aggregate.structured);
+
+    // Standard mode over the same local days lists nights with the same total (unrounded).
+    const standard = await call(data, "standard", { start: "2026-08-31", days: 14 });
+    const nights = standard.structured!.nights as Array<{ date: string; debt_hours: number }>;
+    const total = nights
+      .filter((night) => night.date >= "2026-08-31" && night.date <= "2026-09-13")
+      .reduce((sum, night) => sum + night.debt_hours, 0);
+    expect(report.total_debt_hours).toBe(Math.round(total * 10) / 10);
+  });
+
+  it("leaves out a released week with fewer than 3 scored nights", async () => {
+    const data = matureUser();
+    // Keep only 2 main sleeps waking in the week of 2026-08-31.
+    let kept = 0;
+    const sleeps = data.sleeps.filter((sleep) => {
+      const wake = new Date(Date.parse(sleep.end) + 60 * 60_000).toISOString().slice(0, 10);
+      if (sleep.nap || wake < "2026-08-31" || wake > "2026-09-06") return true;
+      kept += 1;
+      return kept <= 2;
+    });
+    const result = await call({ ...data, sleeps }, "aggregate");
+    expect(result.structured).toMatchObject({ nights_analyzed: 7 });
+    expect(result.structured!.notes).toContain(
+      "1 week with fewer than 3 scored nights is left out."
+    );
+  });
+
+  it("still rejects an unrecognized start in aggregate mode", async () => {
+    const result = await call(matureUser(), "aggregate", { start: "banana" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/^Unrecognized date expression/);
+  });
+
+  it("explains the calibrating live-shaped user in both modes with neutral wording", async () => {
+    for (const mode of ["standard", "aggregate"] as const) {
+      const result = await call(liveShapedUser(), mode);
+      expect(result.isError, result.text).toBe(false);
+      expect(result.structured?.status).toBe("insufficient_data");
+      assertNeutralText(result.structured);
+    }
+  });
+
+  it("stays within the text size limit at 90 days on the stress user in both modes", async () => {
+    for (const mode of ["standard", "aggregate"] as const) {
+      const result = await call(stressUser(), mode, { days: 90 });
+      expect(result.isError, result.text.slice(0, 200)).toBe(false);
+      expect(result.text.length).toBeLessThan(MAX_TOOL_TEXT_CHARS);
+    }
   });
 });

@@ -40,8 +40,14 @@ import {
 } from "./tools/output-contracts.js";
 import type { MemoryCache } from "./cache/memory-cache.js";
 import type { Logger } from "./logging/logger.js";
+import {
+  argKeysOf,
+  logToolOutcome,
+  rememberToolError,
+  toolErrorOf,
+} from "./logging/tool-events.js";
 import { packageVersion, type RuntimeStatus } from "./runtime-status.js";
-import { buildServerInstructions } from "./guide.js";
+import { buildGuideMarkdown, buildServerInstructions } from "./guide.js";
 import { ADDITIONAL_TOOLS } from "./tools/registry/index.js";
 import { MAX_TOOL_TEXT_CHARS, type ToolContext } from "./tools/tool-definition.js";
 
@@ -175,7 +181,7 @@ async function safeTool<T>(fn: () => Promise<T>, compact = false): Promise<CallT
   try {
     return jsonContent(await fn(), compact);
   } catch (error: unknown) {
-    return errorResponse(error);
+    return rememberToolError(errorResponse(error), error);
   }
 }
 
@@ -283,29 +289,57 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
       name,
       { ...config, inputSchema: config.inputSchema ?? z.object({}), outputSchema },
       async (args) => {
-        const result = await handler(args as z.infer<z.ZodObject<Shape>>);
-        if (result.isError) return result;
-        const validated = outputSchema.safeParse(result.structuredContent);
-        if (!validated.success)
-          return {
-            isError: true,
-            content: [
+        // One log line per call: debug on success, the classified failure
+        // otherwise (names, statuses and field paths only; see tool-events).
+        const startedAt = performance.now();
+        const event = {
+          tool: name,
+          requestId: options?.requestContext?.requestId,
+          argKeys: argKeysOf(args),
+          privacyMode,
+        };
+        const finish = (
+          response: CallToolResult,
+          failure: { error?: unknown; contractError?: z.ZodError; outputChars?: number } = {}
+        ): CallToolResult => {
+          logToolOutcome(logger, {
+            ...event,
+            durationMs: performance.now() - startedAt,
+            result: response,
+            ...failure,
+          });
+          return response;
+        };
+        try {
+          const result = await handler(args as z.infer<z.ZodObject<Shape>>);
+          if (result.isError) return finish(result, { error: toolErrorOf(result) });
+          const validated = outputSchema.safeParse(result.structuredContent);
+          if (!validated.success)
+            return finish(
               {
-                type: "text",
-                text: `WHOOP data did not match the expected output contract (${describeContractIssues(validated.error)}).`,
+                isError: true,
+                content: [
+                  {
+                    type: "text",
+                    text: `WHOOP data did not match the expected output contract (${describeContractIssues(validated.error)}).`,
+                  },
+                ],
               },
-            ],
-          };
-        const data = contract.project ? contract.project(validated.data) : validated.data;
-        const response = jsonContent(data, contract.compact === true);
-        if (contract.sizeGuard === true) {
-          const chars = textLength(response);
-          if (chars > MAX_TOOL_TEXT_CHARS) {
-            logger?.warn("tool output too large", { tool: name, chars });
-            return tooLargeResponse(chars);
+              { contractError: validated.error }
+            );
+          const data = contract.project ? contract.project(validated.data) : validated.data;
+          const response = jsonContent(data, contract.compact === true);
+          if (contract.sizeGuard === true) {
+            const chars = textLength(response);
+            if (chars > MAX_TOOL_TEXT_CHARS) {
+              return finish(tooLargeResponse(chars), { outputChars: chars });
+            }
           }
+          return finish(response);
+        } catch (error: unknown) {
+          logToolOutcome(logger, { ...event, durationMs: performance.now() - startedAt, error });
+          throw error;
         }
-        return response;
       }
     );
   }
@@ -476,7 +510,9 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_weekly_summary",
     {
       description:
-        "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Each record counts in exactly one week by its local day; today's in-progress strain is excluded. Values that cannot be computed yet are null (never 0) and notes say why; workout count/strain/calories are also null for a week with no WHOOP data at all (strap not worn yet, or a week that has not started), while a worn week without workouts gives 0. The recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average.",
+        privacyMode === "aggregate"
+          ? "Summarize one released Monday-to-Sunday week in the user's local time (aggregate privacy mode): average recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Windows snap to whole released weeks: a week is released two days after it ends (Wednesday, local time), so the current week, last week before Wednesday and later weeks return only nulls with a note. A week with a record still open or being scored is withheld. Each average needs at least 3 samples in the week (workout totals at least 3 workouts); calibrating recoveries are not used; values are rounded. Days, workouts and cycles are placed as get_calendar places them. sample_sizes gives the counts behind each average."
+          : "Summarize one Monday-to-Sunday week in the user's local time: average/min/max recovery, HRV, resting heart rate, sleep (hours asleep on main sleeps, naps excluded; performance; efficiency), workout count/strain/calories and average daily strain, plus the recovery trend. Records are placed on local days as get_calendar shows them; a workout counts on the day of the WHOOP cycle containing its start, so one after midnight before the next sleep counts toward the previous day (a workout without a cycle uses its local start day, noted). Today's in-progress strain and a partial first day of wear are excluded from daily strain. total_strain sums per-workout strain and is not comparable to day strain. Values that cannot be computed yet are null (never 0) and notes say why; workout count/strain/calories are also null for a week with no WHOOP data at all (strap not worn yet, or a week that has not started), while a worn week without workouts gives 0. The recovery trend needs at least 4 scored days. Calibrating recoveries are included and flagged by calibrating=true. sample_sizes gives the counts behind each average; averages are rounded.",
       inputSchema: z.object({
         week_start: z
           .string()
@@ -487,7 +523,8 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
       }),
       annotations: { readOnlyHint: true },
     },
-    async (args: { week_start?: string }) => safeTool(() => getWeeklySummary(client, args))
+    async (args: { week_start?: string }) =>
+      safeTool(() => getWeeklySummary(client, args, undefined, { privacyMode }))
   );
 
   // -------------------------------------------------------------------------
@@ -497,7 +534,9 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "compare_periods",
     {
       description:
-        'Compare average recovery, sleep and strain between two non-overlapping periods (up to 90 days each); change_pct is period B relative to period A. Dates are the user\'s local days and each day counts in exactly one period: with date-time bounds a local day counts when most of it lies inside the period (an end at or after now keeps today). period_a/period_b.first_day and last_day give the local days actually counted (null, with a note, when a period covers most of no day). Sleep hours are time asleep (light + deep + REM) on main sleeps, naps excluded; strain uses completed cycles only. With fewer than 3 scored days in either period (e.g. while WHOOP is still calibrating), existing averages are still returned but change_pct is null, direction is "insufficient_data" and notes explain why; warnings report data that could not be loaded or was truncated.',
+        privacyMode === "aggregate"
+          ? 'Compare average recovery, sleep and strain between two periods (up to 90 days each; aggregate privacy mode); change_pct is period B relative to period A in whole percent. Windows snap to released weeks: each period is snapped inward to the whole Monday-to-Sunday local weeks inside it that are released (two days after they end, i.e. from Wednesday local time); period_a/period_b.start and end give the weeks used (null, with a note, when a period contains none), and the periods must not share a week. Each week counts toward a metric only with at least 3 samples, a week with a record still open or being scored is withheld, and calibrating recoveries are not used. Sleep hours are time asleep on main sleeps; strain uses completed cycles. With fewer than 3 samples in either period, change_pct is null and direction is "insufficient_data". Averages are rounded.'
+          : 'Compare average recovery, sleep and strain between two non-overlapping periods (up to 90 days each); change_pct is period B relative to period A. Dates are the user\'s local days and each day counts in exactly one period: with date-time bounds a local day counts when most of it lies inside the period (an end at or after now keeps today). period_a/period_b.first_day and last_day give the local days actually counted (null, with a note, when a period covers most of no day). Sleep hours are time asleep (light + deep + REM) on main sleeps, naps excluded; strain uses completed cycles only. With fewer than 3 scored days in either period (e.g. while WHOOP is still calibrating), existing averages are still returned but change_pct is null, direction is "insufficient_data" and notes explain why. training compares workouts per worn day (a local day with a WHOOP cycle; a workout counts on the day of the cycle containing its start): sessions, sessions_per_week, workout_minutes_per_worn_day and trimp_per_worn_day (Edwards TRIMP from WHOOP %max-HR zones), with direction from TRIMP; the means need at least 7 worn days in both periods, and training is null when workouts could not be loaded. warnings report data that could not be loaded or was truncated.',
       inputSchema: z.object({
         period_a_start: isoDateString.describe(
           "Start of the first (baseline) period: YYYY-MM-DD starts at local midnight; a date-time may include an offset."
@@ -519,7 +558,7 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
       period_a_end: string;
       period_b_start: string;
       period_b_end: string;
-    }) => safeTool(() => comparePeriods(client, args))
+    }) => safeTool(() => comparePeriods(client, args, undefined, { privacyMode }))
   );
 
   // -------------------------------------------------------------------------
@@ -529,10 +568,28 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_trend",
     {
       description:
-        "Analyze one health metric over the last N local days (today included): values oldest first with their local dates, statistics, a linear-regression slope per day, and anomalies. trend.change is the raw direction (increasing/decreasing/stable); trend.direction says whether that is improving or declining for this metric (better_when: higher for recovery, HRV and sleep; lower for resting heart rate; strain has no better direction, so direction is null). Confidence rates how well a sloped line fits the values (R²), capped by sample size (low below 7 points, at most medium below 14). Identical values are stable and rated on sample size alone. A stable trend from values that vary usually has low confidence: no consistent upward or downward direction was found, which does not mean the stability finding is unreliable. With fewer than 4 data points (e.g. while WHOOP is still calibrating) status is insufficient_data, trend fields are null, anomalies are empty and notes say why; statistics are still given for the data that exists. sleep_duration is hours asleep on main sleeps (naps excluded); strain uses completed cycles only.",
+        privacyMode === "aggregate"
+          ? "Analyze one health metric in aggregate privacy mode: sample size, mean, standard deviation and a linear-regression trend (per-day values, dates, extremes and anomalies are not returned). Windows snap to whole released weeks: days is rounded up to 1, 2, 4, 8 or 13 Monday-to-Sunday local weeks ending with the latest released week (a week is released two days after it ends, i.e. from Wednesday local time); period gives the weeks used. A week with a record still open or being scored is withheld, a week counts toward the metric only with at least 3 samples, and calibrating recoveries are not used. Statistics and the trend need at least 4 samples. Values are rounded. Metrics as in standard mode: recovery, hrv, rhr, sleep_duration (hours asleep), sleep_performance, strain (completed cycles), sleep_efficiency, respiratory_rate, rem_share, deep_share, disturbances_per_hour, sleep_consistency, sleep_debt, spo2, skin_temp."
+          : "Analyze one health metric over the last N local days (today included): values oldest first with their local dates, statistics, a linear-regression slope per day, and anomalies. trend.change is the raw direction (increasing/decreasing/stable); trend.direction says whether that is improving or declining for this metric (better_when: higher for recovery, HRV, sleep_duration, sleep_performance, sleep_efficiency and sleep_consistency; lower for resting heart rate and sleep_debt; strain, respiratory_rate, rem_share, deep_share, disturbances_per_hour, spo2 and skin_temp have no better direction, so direction is null). Confidence rates how well a sloped line fits the values (R²), capped by sample size (low below 7 points, at most medium below 14). Identical values are stable and rated on sample size alone. A stable trend from values that vary usually has low confidence: no consistent upward or downward direction was found, which does not mean the stability finding is unreliable. With fewer than 4 data points (e.g. while WHOOP is still calibrating) status is insufficient_data, trend fields are null, anomalies are empty and notes say why; statistics are still given for the data that exists. sleep_duration is hours asleep on main sleeps (naps excluded); strain uses completed cycles only. rem_share and deep_share are % of time asleep; disturbances_per_hour skips nights under 1 hour asleep; sleep_consistency skips WHOOP's 0 while calibrating; sleep_debt is WHOOP's sleep-debt need in hours; spo2 and skin_temp come from recoveries and are reported only by WHOOP 4.0 or later. sleep_efficiency, rem_share, deep_share, disturbances_per_hour and sleep_debt skip nights with low data coverage (counted in notes).",
       inputSchema: z.object({
         metric: z
-          .enum(["recovery", "hrv", "rhr", "sleep_duration", "sleep_performance", "strain"])
+          .enum([
+            "recovery",
+            "hrv",
+            "rhr",
+            "sleep_duration",
+            "sleep_performance",
+            "strain",
+            "sleep_efficiency",
+            "respiratory_rate",
+            "rem_share",
+            "deep_share",
+            "disturbances_per_hour",
+            "sleep_consistency",
+            "sleep_debt",
+            "spo2",
+            "skin_temp",
+          ])
           .describe("The health metric to analyze."),
         days: z
           .number()
@@ -541,15 +598,14 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
           .max(90)
           .optional()
           .describe(
-            "Number of local calendar days to analyze, today included (7–90). Default: 30."
+            privacyMode === "aggregate"
+              ? "Number of local calendar days to cover (7–90), rounded up to 1, 2, 4, 8 or 13 whole released weeks. Default: 30."
+              : "Number of local calendar days to analyze, today included (7–90). Default: 30."
           ),
       }),
       annotations: { readOnlyHint: true },
     },
-    async (args: {
-      metric: "recovery" | "hrv" | "rhr" | "sleep_duration" | "sleep_performance" | "strain";
-      days?: number;
-    }) => safeTool(() => getTrend(client, args))
+    async (args) => safeTool(() => getTrend(client, args, undefined, { privacyMode }))
   );
 
   // -------------------------------------------------------------------------
@@ -562,8 +618,8 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
         "Get today's complete health snapshot — recovery score, last night's sleep, current strain, and last workout in one call. " +
         "Today is the current WHOOP cycle, which starts at last night's sleep onset and stays open until WHOOP processes the next sleep (it can run longer than a day); sleep and recovery are the ones linked to that cycle. " +
         "If no newer sleep has been processed yet (wake-up not synced, or no sleep detected), the most recent sleep and recovery are still returned with status stale in data_quality.sources and a note giving their date: do not present them as last night's. A cycle WHOOP has not updated for a day is shown with cycle status stale and a possibly-not-synced note. " +
-        "Sleep hours are time asleep (time_in_bed_hours is separate). recovery.user_calibrating=true means WHOOP is still learning the user's baselines and the score is provisional. " +
-        "A section is null when its data is not available yet or could not be fetched; `notes` explains why in plain language and data_quality.sources gives each source's status.",
+        "Sleep hours are time asleep (time_in_bed_hours is separate); sleep also gives disturbances, sleep_cycles, no_data_hours, consistency_pct (null while WHOOP is still calibrating and reports 0) and need_hours_including_debt (WHOOP's sleep need). recovery.user_calibrating=true means WHOOP is still learning the user's baselines and the score is provisional; recovery.zone is WHOOP's green/yellow/red band. " +
+        "A section is null when its data is not available yet or could not be fetched; `notes` explains why in plain language and data_quality.sources gives each source's status, fetch time and cache status. data_quality periods are local times with their UTC offset.",
       annotations: { readOnlyHint: true },
     },
     async () => safeTool(() => getToday(client))
@@ -604,21 +660,25 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
     "get_baselines",
     {
       description:
-        "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time) and recovery. Excludes the latest observation and today from baselines, so it reads baseline_days + 2 days of history; not medical advice. `period` gives the local days the baselines cover. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data' or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
+        privacyMode === "aggregate"
+          ? "Personal distributions (aggregate privacy mode) for HRV, RHR, respiratory rate, sleep hours (asleep time), recovery, SpO2, skin temperature, sleep efficiency, disturbances per hour, REM share and deep sleep share: sample size, mean, median, standard deviation and p25-p75 (no latest observation, no p10/p90); not medical advice. Windows snap to whole released weeks: baseline_days is rounded up to 2, 4, 8, 13 or 26 Monday-to-Sunday local weeks ending with the latest released week (released two days after it ends); `period` gives the weeks used. Each week counts toward a metric only with at least 3 samples; calibrating recoveries and nights with low data coverage (for the newer sleep metrics) are not used; values are rounded. Each baseline needs 14 samples: until then metric_status says 'calibrating', 'insufficient_data', 'not_reported' (WHOOP reported no value, e.g. SpO2 before WHOOP 4.0) or 'unavailable', with a reason in `notes`."
+          : "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time), recovery, SpO2, skin temperature, sleep efficiency, disturbances per hour, REM share and deep sleep share (% of time asleep). Excludes the latest observation and today from baselines, so it reads baseline_days + 2 days of history; not medical advice. `period` gives the local days the baselines cover. Recoveries WHOOP flags as calibrating are not used; nights with low data coverage are not used for sleep efficiency, disturbances per hour, REM share and deep sleep share. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data', 'not_reported' (WHOOP reported no value on any scored record, e.g. SpO2 and skin temperature need WHOOP 4.0 or later) or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
       inputSchema: baselinesInputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => safeTool(() => getBaselines(client, args))
+    async (args) => safeTool(() => getBaselines(client, args, undefined, { privacyMode }))
   );
   registerTool(
     "get_sleep_debt",
     {
       description:
-        "Observed nightly sleep deficits, standing debt and local clock consistency. A range expression in `start` (e.g. \"last week\", \"this month\") covers that whole range unless `days` is also given; `period` is written in the user's UTC offset. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data' and the nights that exist are still listed. status 'unavailable' means the sleep data could not be read. `notes` explains either case.",
+        privacyMode === "aggregate"
+          ? "Observed nightly sleep deficits and local clock consistency (aggregate privacy mode; no per-night data, standing debt or summary). Windows snap to whole released weeks: `days` (default 14) is rounded up to 2, 4, 8 or 12 Monday-to-Sunday local weeks ending with the latest released week (released two days after it ends), and `start` is ignored; `period` gives the weeks used. Each week counts only with at least 3 scored main sleeps, and a week with a record still open or being scored is withheld. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data'. status 'unavailable' means the data could not be read completely. Values are rounded; `notes` explains every case."
+          : "Observed nightly sleep deficits, standing debt and local clock consistency. A range expression in `start` (e.g. \"last week\", \"this month\") covers that whole range unless `days` is also given; `period` is written in the user's UTC offset. Deficit sum is not outstanding debt or a recovery prediction. Totals and consistency need 3 scored main sleeps (nights_required); with fewer, status is 'insufficient_data' and the nights that exist are still listed. status 'unavailable' means the sleep data could not be read. `notes` explains either case.",
       inputSchema: sleepDebtInputSchema,
       annotations: { readOnlyHint: true },
     },
-    async (args) => safeTool(() => getSleepDebt(client, args))
+    async (args) => safeTool(() => getSleepDebt(client, args, undefined, { privacyMode }))
   );
 
   // -------------------------------------------------------------------------
@@ -650,9 +710,28 @@ export function createWhoopServer(client: WhoopClient, options?: CreateServerOpt
   }
 
   // -------------------------------------------------------------------------
-  // MCP Prompts (none in aggregate mode)
+  // MCP Prompts (aggregate mode: aggregate_overview only)
   // -------------------------------------------------------------------------
   registerPrompts(server, { privacyMode });
+
+  // -------------------------------------------------------------------------
+  // Server guide resource (both modes, unless resources are disabled)
+  // -------------------------------------------------------------------------
+  const guide = options?.disableResources ? null : buildGuideMarkdown(privacyMode);
+  if (guide !== null) {
+    server.registerResource(
+      "Server Guide",
+      "whoop://server/guide",
+      {
+        description:
+          "How to use this server: which tool answers which question, how WHOOP cycles map to local days, how missing and calibrating data is reported, privacy modes, rate limits and history loading, and what the WHOOP API does not provide.",
+        mimeType: "text/markdown",
+      },
+      async (uri: URL) => ({
+        contents: [{ uri: uri.href, mimeType: "text/markdown", text: guide }],
+      })
+    );
+  }
 
   return { server };
 }

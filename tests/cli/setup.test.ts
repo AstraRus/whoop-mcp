@@ -5,8 +5,9 @@
  * stub filesystem + auth, so nothing touches the real disk or network.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 
 import {
   claudeDesktopConfigPath,
@@ -62,7 +63,7 @@ describe("mergeClaudeDesktopConfig", () => {
       mcpServers: {
         github: { command: "node", args: ["x"], env: { TOKEN: "t" } },
       },
-    } as Parameters<typeof mergeClaudeDesktopConfig>[0];
+    } as unknown as Parameters<typeof mergeClaudeDesktopConfig>[0];
     const merged = mergeClaudeDesktopConfig(existing, entry);
     expect(merged.mcpServers?.github).toBeDefined();
     expect(merged.mcpServers?.whoop).toEqual(entry);
@@ -284,6 +285,62 @@ function makeIo(): {
   return { io: { input, output: writable }, output: () => captured };
 }
 
+describe("runSetup — WHOOP_MCP_TOKEN_DIR note", () => {
+  const original = process.env.WHOOP_MCP_TOKEN_DIR;
+
+  beforeEach(() => {
+    delete process.env.WHOOP_CLIENT_ID;
+    delete process.env.WHOOP_CLIENT_SECRET;
+  });
+
+  afterEach(() => {
+    if (original === undefined) delete process.env.WHOOP_MCP_TOKEN_DIR;
+    else process.env.WHOOP_MCP_TOKEN_DIR = original;
+    delete process.env.WHOOP_CLIENT_ID;
+    delete process.env.WHOOP_CLIENT_SECRET;
+  });
+
+  async function runClaudeCode(): Promise<string> {
+    const { io, output } = makeIo();
+    await runSetup({ clientId: "id", clientSecret: "s", client: "claude-code" }, { io });
+    return output();
+  }
+
+  it("says nothing about the token folder when WHOOP_MCP_TOKEN_DIR is unset", async () => {
+    delete process.env.WHOOP_MCP_TOKEN_DIR;
+    expect(await runClaudeCode()).not.toContain("WHOOP_MCP_TOKEN_DIR");
+  });
+
+  it("names the token folder and that the server needs the same variable", async () => {
+    // Outside the home directory, so it is shown as is
+    const folder = resolve("/srv/whoop-volume");
+    process.env.WHOOP_MCP_TOKEN_DIR = folder;
+
+    const text = await runClaudeCode();
+
+    expect(text).toContain(`WHOOP tokens are stored in ${folder} (WHOOP_MCP_TOKEN_DIR)`);
+    expect(text).toContain("Set the same WHOOP_MCP_TOKEN_DIR in the server's environment");
+  });
+
+  it("shows a folder under the home directory with ~", async () => {
+    process.env.WHOOP_MCP_TOKEN_DIR = join(homedir(), "whoop-tokens");
+
+    const text = await runClaudeCode();
+
+    expect(text).toContain(`stored in ${join("~", "whoop-tokens")}`);
+    expect(text).not.toContain(homedir());
+  });
+
+  it("warns about a relative WHOOP_MCP_TOKEN_DIR and still prints the command", async () => {
+    process.env.WHOOP_MCP_TOKEN_DIR = "relative/tokens";
+
+    const text = await runClaudeCode();
+
+    expect(text).toContain("Warning: WHOOP_MCP_TOKEN_DIR must be an absolute path");
+    expect(text).toContain("claude mcp add");
+  });
+});
+
 describe("runSetup — non-interactive", () => {
   beforeEach(() => {
     delete process.env.WHOOP_CLIENT_ID;
@@ -309,7 +366,7 @@ describe("runSetup — non-interactive", () => {
     const parsed = JSON.parse(written ?? "{}") as {
       mcpServers: Record<string, { env: { WHOOP_CLIENT_ID: string } }>;
     };
-    expect(parsed.mcpServers.whoop.env.WHOOP_CLIENT_ID).toBe("id-1");
+    expect(parsed.mcpServers.whoop?.env.WHOOP_CLIENT_ID).toBe("id-1");
     expect(fake.files.has("/fake/config.json.bak")).toBe(false);
     expect(output()).toContain("Claude Desktop config written");
   });

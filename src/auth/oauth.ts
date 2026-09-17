@@ -6,7 +6,7 @@
  */
 
 import type { OAuthTokens } from "./token-store.js";
-import { loadTokens, saveTokens, isTokenExpired } from "./token-store.js";
+import { loadTokens, saveTokens, isTokenExpired, resolveTokenDir } from "./token-store.js";
 import { startCallbackServer } from "./callback-server.js";
 import {
   WHOOP_AUTH_URL,
@@ -15,7 +15,7 @@ import {
   WHOOP_REQUIRED_SCOPES,
 } from "../api/endpoints.js";
 import { WhoopNetworkError } from "../api/client.js";
-import { TokenRefreshError } from "./token-refresh-error.js";
+import { parseOAuthErrorCode, TokenRefreshError } from "./token-refresh-error.js";
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -29,7 +29,7 @@ export interface OAuthConfig {
   clientSecret: string;
   /** Override the default redirect URI. Default: WHOOP_REDIRECT_URI */
   redirectUri?: string;
-  /** Token storage directory. Default: ~/.whoop-mcp/ */
+  /** Token storage directory. Default: resolveTokenDir() (WHOOP_MCP_TOKEN_DIR, else ~/.whoop-mcp/) */
   tokenDir?: string;
   /** Callback server port. Default: 3000 */
   port?: number;
@@ -47,6 +47,31 @@ export interface TokenResponse {
 interface PkcePair {
   codeVerifier: string;
   codeChallenge: string;
+}
+
+/** What a token endpoint error response says, read without logging it */
+interface TokenErrorBody {
+  /** error_description, or "unknown error" */
+  description: string;
+  /** The OAuth error code (e.g. "invalid_grant"), when present and well formed */
+  oauthError: string | undefined;
+}
+
+/**
+ * Read a token endpoint error response. A body that is not a JSON object
+ * (unreadable, non-JSON, null or an array) yields "unknown error".
+ */
+async function readTokenErrorBody(response: Response): Promise<TokenErrorBody> {
+  const parsed: unknown = await response.json().catch(() => null);
+  const body =
+    typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  return {
+    description:
+      typeof body.error_description === "string" ? body.error_description : "unknown error",
+    oauthError: parseOAuthErrorCode(body.error),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -112,11 +137,7 @@ export async function exchangeCodeForTokens(
   });
 
   if (!response.ok) {
-    const errorBody = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    const description =
-      typeof errorBody.error_description === "string"
-        ? errorBody.error_description
-        : "unknown error";
+    const { description } = await readTokenErrorBody(response);
     throw new Error(`Token exchange failed (${response.status}): ${description}`);
   }
 
@@ -135,7 +156,10 @@ export async function exchangeCodeForTokens(
 /**
  * Use the refresh token to obtain a new access token.
  *
- * POSTs to the WHOOP token endpoint with `grant_type=refresh_token`.
+ * POSTs to the WHOOP token endpoint with `grant_type=refresh_token`. A non-2xx answer
+ * throws TokenRefreshError carrying the status and the OAuth `error` code
+ * (invalid_grant: the refresh token is dead; invalid_client: the client
+ * credentials are wrong). The response body is never logged.
  */
 export async function refreshAccessToken(
   refreshToken: string,
@@ -161,12 +185,8 @@ export async function refreshAccessToken(
   }
 
   if (!response.ok) {
-    const errorBody = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-    const description =
-      typeof errorBody.error_description === "string"
-        ? errorBody.error_description
-        : "unknown error";
-    throw new TokenRefreshError(response.status, description);
+    const { description, oauthError } = await readTokenErrorBody(response);
+    throw new TokenRefreshError(response.status, description, oauthError);
   }
 
   try {
@@ -285,7 +305,12 @@ async function saveIssuedTokens(tokens: OAuthTokens, tokenDir: string | undefine
  *
  * - If valid (non-expired) tokens exist on disk → returns `access_token`
  * - If tokens exist but are expired → refreshes and returns new `access_token`
- * - If no tokens or WHOOP rejects the refresh → starts full OAuth flow
+ * - If no tokens or WHOOP rejects the refresh token (invalid_grant) → starts
+ *   full OAuth flow
+ * - If the refresh cannot reach WHOOP (WhoopNetworkError), or WHOOP answers
+ *   429/5xx or rejects the client credentials (invalid_client) → rethrows, so
+ *   the caller can retry: signing in again would not help, and on a hosted
+ *   server nobody is there to complete it
  *
  * A failure to save refreshed tokens does not start the OAuth flow: the new
  * tokens are returned (and passed to `options.onTokens`) anyway.
@@ -302,8 +327,12 @@ export async function authenticate(
     throw new Error("Missing WHOOP_CLIENT_SECRET. Set it in your environment variables.");
   }
 
+  // Resolved once, so a relative WHOOP_MCP_TOKEN_DIR fails here with guidance
+  // and every read and write of this run uses the same folder.
+  const tokenDir = resolveTokenDir(config.tokenDir);
+
   // 1. Check for existing tokens
-  const existing = await loadTokens(config.tokenDir);
+  const existing = await loadTokens(tokenDir);
 
   if (existing) {
     // 2a. If valid, return immediately
@@ -319,20 +348,27 @@ export async function authenticate(
     try {
       refreshed = await refreshAccessToken(existing.refresh_token, config);
     } catch (error: unknown) {
-      // Network failures shouldn't force the user through a fresh OAuth flow — let the caller retry.
-      if (error instanceof WhoopNetworkError) {
+      // Network failures, transient 429/5xx answers and rejected client
+      // credentials leave the stored sign-in valid: never force a fresh OAuth
+      // flow for them — let the caller retry.
+      if (
+        error instanceof WhoopNetworkError ||
+        (error instanceof TokenRefreshError && !error.rejected)
+      ) {
         throw error;
       }
-      // Log the refresh failure so it's diagnosable, then fall through to full OAuth flow
-      const message = error instanceof Error ? error.message : "unknown error";
-      console.error(`Token refresh failed, starting full OAuth flow: ${message}`);
+      // Log the refresh failure so it's diagnosable (status and OAuth error code
+      // only, never the response body), then fall through to full OAuth flow
+      console.error(
+        `Token refresh failed (${describeRefreshFailure(error)}), starting full OAuth flow.`
+      );
     }
     if (refreshed !== undefined) {
       // Outside the try above: the refresh token is already rotated, so a save
       // failure must never fall through to a full OAuth flow.
       const tokens = toOAuthTokens(refreshed, existing.refresh_token);
       options.onTokens?.(tokens);
-      await saveIssuedTokens(tokens, config.tokenDir);
+      await saveIssuedTokens(tokens, tokenDir);
       console.error("Token refresh successful.");
       return tokens.access_token;
     }
@@ -341,16 +377,26 @@ export async function authenticate(
   }
 
   // 3. Full OAuth flow
-  const tokens = await performOAuthFlow(config);
+  const tokens = await performOAuthFlow(config, tokenDir);
   options.onTokens?.(tokens);
   return tokens.access_token;
+}
+
+/** A refresh failure for logs: HTTP status and OAuth error code, or the error class */
+function describeRefreshFailure(error: unknown): string {
+  if (error instanceof TokenRefreshError) {
+    return error.oauthError === undefined
+      ? `HTTP ${error.statusCode}`
+      : `HTTP ${error.statusCode} ${error.oauthError}`;
+  }
+  return error instanceof Error ? error.name : "unknown error";
 }
 
 /**
  * Run the full OAuth Authorization Code flow:
  * start callback server → open browser → wait for code → exchange → save.
  */
-async function performOAuthFlow(config: OAuthConfig): Promise<OAuthTokens> {
+async function performOAuthFlow(config: OAuthConfig, tokenDir: string): Promise<OAuthTokens> {
   const state = randomBytes(16).toString("hex");
   const pkce = generatePkcePair();
   const port = config.port ?? 3000;
@@ -378,7 +424,7 @@ async function performOAuthFlow(config: OAuthConfig): Promise<OAuthTokens> {
   // Exchange the code for tokens
   const tokenResponse = await exchangeCodeForTokens(code, config, pkce.codeVerifier);
   const tokens = toOAuthTokens(tokenResponse);
-  await saveIssuedTokens(tokens, config.tokenDir);
+  await saveIssuedTokens(tokens, tokenDir);
 
   return tokens;
 }

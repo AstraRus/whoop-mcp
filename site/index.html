@@ -7,7 +7,7 @@
     <title>whoop-mcp: Your WHOOP data, in any AI assistant</title>
     <meta
       name="description"
-      content="Connect WHOOP to AI assistants. Version 0.7.0: personal baselines, sleep debt, structured results, and optional aggregate-only access."
+      content="Connect WHOOP to AI assistants. Version 0.8.0: day details, training load, sleep and recovery analysis on your local days, and aggregate-only access by released week."
     />
     <meta property="og:title" content="whoop-mcp" />
     <meta property="og:description" content="Your WHOOP data, in any AI assistant." />
@@ -569,7 +569,7 @@
       <header class="nav">
         <a class="wordmark" href="./">whoop-mcp</a>
         <nav class="nav-links">
-          <a href="#release">0.7.0 release</a>
+          <a href="#release">0.8.0 release</a>
           <a href="https://github.com/shashankswe2020-ux/whoop-mcp#readme">Docs</a>
           <a class="opt" href="https://www.npmjs.com/package/whoop-ai-mcp">npm</a>
           <a href="https://github.com/shashankswe2020-ux/whoop-mcp">GitHub</a>
@@ -582,7 +582,7 @@
       <main>
         <section class="hero">
           <div class="hero-left">
-            <p class="release-label">Version 0.7.0 / Trustworthy Personal Analytics</p>
+            <p class="release-label">Version 0.8.0 / Training, Sleep and Recovery Analysis</p>
             <h1>Your WHOOP data, in any AI assistant</h1>
             <p class="lede">
               An MCP server that wraps the WHOOP REST API, so Claude, Cursor, and any MCP client can
@@ -610,7 +610,7 @@
                 </svg>
               </button>
             </div>
-            <p class="stat">16 tools · 4 resources · 5 prompts in standard mode</p>
+            <p class="stat">28 tools · 6 resources · 13 prompts in standard mode</p>
           </div>
 
           <div class="hero-right">
@@ -684,7 +684,7 @@
             <h2>Recovery, sleep &amp; strain</h2>
             <p>
               Read recovery scores, HRV, resting heart rate, sleep stages, daily strain, and
-              workouts, plus weekly summaries, trends, and period comparisons.
+              workouts, plus day details, training load, trends, and sleep and recovery analysis.
             </p>
           </article>
 
@@ -722,67 +722,70 @@
             <h2>Private by design</h2>
             <p>
               Read-only tools with OAuth and PKCE. Tokens stay on the server host with 0600
-              permissions. Health results reach your assistant provider; version 0.7.0 adds optional
-              aggregate-only access.
+              permissions. Health results reach your assistant provider; optional aggregate-only
+              access releases whole weeks only.
             </p>
           </article>
         </section>
 
         <section class="release" id="release" aria-labelledby="release-title">
-          <p class="release-label">Release 0.7.0 / September 10, 2026</p>
-          <h2 id="release-title">Personal analytics, grounded in your history</h2>
+          <p class="release-label">Release 0.8.0 / September 17, 2026</p>
+          <h2 id="release-title">Training, sleep and recovery, on your local days</h2>
           <p class="release-intro">
-            Two new tools join the existing fourteen, with clearer data quality and control over
-            what your assistant receives. Built for read-only workflows over stdio and HTTP, with
-            explicit missing-data states and no persistent health-data store.
+            Twelve new tools join the existing sixteen. Every day-based result places cycles, sleeps
+            and workouts on your local days the same way, keeps unknown values null instead of zero,
+            and loads long histories within WHOOP's rate limit.
           </p>
           <div class="release-grid">
             <article class="release-item">
-              <h3>What is typical for you?</h3>
+              <h3>One day, in detail</h3>
               <p>
-                <code>get_baselines</code> compares HRV, resting heart rate, sleep and recovery with
-                your own history. Percentile bands exclude the latest observation and current local
-                day. Fewer than 14 historical points returns an insufficient-data result, not a
-                guessed normal range.
+                <code>get_day</code> shows a local day's cycle, recovery, sleep stages and need,
+                naps and workouts with zones and TRIMP. After midnight, strain still counts toward
+                the previous day until the next sleep syncs. <code>get_sync_status</code> explains
+                why today's data may be missing.
               </p>
             </article>
             <article class="release-item">
-              <h3>Sleep deficit, without double counting</h3>
+              <h3>Training load and sports</h3>
               <p>
-                <code>get_sleep_debt</code> separates observed nightly deficits from WHOOP's
-                standing debt. It uses scored asleep stages, accounts for naps, and describes local
-                sleep consistency. These are observations, not recovery forecasts or medical advice.
+                <code>get_training_load</code> reports acute and chronic load, EWMA and monotony as
+                descriptions, with the day they become available. <code>get_sport_breakdown</code>,
+                <code>get_workout_log</code>, <code>get_workout_context</code> and
+                <code>get_personal_records</code> cover sessions, pace and bests per sport.
               </p>
             </article>
             <article class="release-item">
-              <h3>Current data, clearly labeled</h3>
+              <h3>Sleep and recovery analysis</h3>
               <p>
-                <code>get_today</code> matches recovery with the current cycle and primary sleep.
-                Pending or invalid sleep never substitutes an older score. All 16 tools return
-                validated structured results alongside compatible JSON text; missing measurements
-                stay distinct from zero.
+                <code>get_sleep_analysis</code>, <code>get_recovery_analysis</code> and
+                <code>get_sleep_need</code> describe your nights and baselines.
+                <code>get_recovery_drivers</code> tests which behaviours moved together with the
+                next morning, with effective sample sizes and false-discovery control. These are
+                observations, not medical advice.
               </p>
             </article>
             <article class="release-item">
-              <h3>Choose aggregate-only access</h3>
+              <h3>Aggregate-only access, by released week</h3>
               <p>
-                <code>WHOOP_MCP_PRIVACY_MODE=aggregate</code> exposes five summary and analytics
-                tools, with no raw resources or prompts. Record arrays, latest observations,
-                identity fields and exact activity timestamps are omitted. Aggregates remain
-                sensitive data, not anonymous data.
+                <code>WHOOP_MCP_PRIVACY_MODE=aggregate</code> now exposes eight tools, a guide and
+                one prompt. Windows snap to whole local weeks released two days after they end,
+                small samples are withheld, and released values are tested against differencing
+                across tools. Aggregates remain sensitive data, not anonymous data.
               </p>
             </article>
           </div>
           <p class="release-note">
-            Local diagnostics: <code>whoop-ai-mcp doctor --json</code> checks configuration and
-            token-file metadata without calling WHOOP or launching OAuth. Included in version 0.7.0.
+            Export: <code>export_health_data</code> writes daily, workout and sleep rows as CSV or
+            JSON for up to 180 days. Hosted servers gain a request-rate limiter, optional WHOOP
+            webhooks and a non-root container.
           </p>
           <p class="release-note">
             <a href="https://github.com/shashankswe2020-ux/whoop-mcp/blob/main/CHANGELOG.md"
               >Changelog</a
             >
             ·
-            <a href="https://github.com/shashankswe2020-ux/whoop-mcp#structured-results-and-privacy"
+            <a href="https://github.com/shashankswe2020-ux/whoop-mcp#privacy-modes"
               >Privacy and compatibility notes</a
             >
           </p>

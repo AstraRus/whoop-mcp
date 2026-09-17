@@ -2092,7 +2092,7 @@
       "result": {
         "isError": true,
         "text_format": "text",
-        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_trend: Invalid option: expected one of \"recovery\"|\"hrv\"|\"rhr\"|\"sleep_duration\"|\"sleep_performance\"|\"strain\" at metric",
+        "text": "MCP error -32602: Input validation error: Invalid arguments for tool get_trend: Invalid option: expected one of \"recovery\"|\"hrv\"|\"rhr\"|\"sleep_duration\"|\"sleep_performance\"|\"strain\"|\"sleep_efficiency\"|\"respiratory_rate\"|\"rem_share\"|\"deep_share\"|\"disturbances_per_hour\"|\"sleep_consistency\"|\"sleep_debt\"|\"spo2\"|\"skin_temp\" at metric",
         "structuredContent": null
       }
     },

@@ -1,6 +1,6 @@
 {
   "name": "get_baselines",
-  "description": "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time) and recovery. Excludes the latest observation and today from baselines, so it reads baseline_days + 2 days of history; not medical advice. `period` gives the local days the baselines cover. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data' or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
+  "description": "Personal rolling distributions for HRV, RHR, respiratory rate, sleep hours (asleep time), recovery, SpO2, skin temperature, sleep efficiency, disturbances per hour, REM share and deep sleep share (% of time asleep). Excludes the latest observation and today from baselines, so it reads baseline_days + 2 days of history; not medical advice. `period` gives the local days the baselines cover. Recoveries WHOOP flags as calibrating are not used; nights with low data coverage are not used for sleep efficiency, disturbances per hour, REM share and deep sleep share. Each baseline needs 14 earlier data points: until then metric_status says 'calibrating' (WHOOP still calibrating), 'insufficient_data', 'not_reported' (WHOOP reported no value on any scored record, e.g. SpO2 and skin temperature need WHOOP 4.0 or later) or 'unavailable' (data could not be read), with a reason and counts in `notes`.",
   "inputSchema": {
     "type": "object",
     "properties": {
@@ -48,7 +48,13 @@
             "rhr",
             "respiratory_rate",
             "sleep_hours",
-            "recovery_score"
+            "recovery_score",
+            "spo2",
+            "skin_temp",
+            "sleep_efficiency",
+            "disturbances_per_hour",
+            "rem_share",
+            "deep_share"
           ]
         },
         "additionalProperties": {
@@ -135,7 +141,13 @@
           "rhr",
           "respiratory_rate",
           "sleep_hours",
-          "recovery_score"
+          "recovery_score",
+          "spo2",
+          "skin_temp",
+          "sleep_efficiency",
+          "disturbances_per_hour",
+          "rem_share",
+          "deep_share"
         ]
       },
       "metric_status": {
@@ -147,7 +159,13 @@
             "rhr",
             "respiratory_rate",
             "sleep_hours",
-            "recovery_score"
+            "recovery_score",
+            "spo2",
+            "skin_temp",
+            "sleep_efficiency",
+            "disturbances_per_hour",
+            "rem_share",
+            "deep_share"
           ]
         },
         "additionalProperties": {
@@ -159,7 +177,8 @@
                 "available",
                 "insufficient_data",
                 "calibrating",
-                "unavailable"
+                "unavailable",
+                "not_reported"
               ]
             },
             "sample_size": {
@@ -200,7 +219,13 @@
           "rhr",
           "respiratory_rate",
           "sleep_hours",
-          "recovery_score"
+          "recovery_score",
+          "spo2",
+          "skin_temp",
+          "sleep_efficiency",
+          "disturbances_per_hour",
+          "rem_share",
+          "deep_share"
         ]
       },
       "notes": {

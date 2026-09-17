@@ -22,7 +22,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 function fsError(code: string): NodeJS.ErrnoException {
   return Object.assign(new Error(`${code}: simulated`), { code });
 }
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OAuthTokens } from "../../src/auth/token-store.js";
 import {
@@ -30,7 +30,15 @@ import {
   saveTokens,
   loadTokens,
   deleteTokens,
+  resolveTokenDir,
+  TOKEN_DIR_ENV,
 } from "../../src/auth/token-store.js";
+
+/**
+ * Windows has no POSIX file modes: chmod cannot make a folder unwritable and
+ * stat reports 0666/0777. The permission tests below still run on Linux CI.
+ */
+const POSIX_PERMISSIONS_UNSUPPORTED = process.platform === "win32";
 
 // ---------------------------------------------------------------------------
 // Task 3a: Token types + expiry check
@@ -122,6 +130,93 @@ describe("isTokenExpired", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Token folder: WHOOP_MCP_TOKEN_DIR
+// ---------------------------------------------------------------------------
+
+describe("resolveTokenDir", () => {
+  const original = process.env[TOKEN_DIR_ENV];
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "whoop-mcp-dir-"));
+    delete process.env[TOKEN_DIR_ENV];
+  });
+
+  afterEach(async () => {
+    if (original === undefined) delete process.env[TOKEN_DIR_ENV];
+    else process.env[TOKEN_DIR_ENV] = original;
+    vi.restoreAllMocks();
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  const tokens: OAuthTokens = {
+    access_token: "access_env",
+    refresh_token: "refresh_env",
+    expires_at: Date.now() + 3600_000,
+    token_type: "Bearer",
+  };
+
+  it("defaults to ~/.whoop-mcp when WHOOP_MCP_TOKEN_DIR is unset or blank", () => {
+    expect(TOKEN_DIR_ENV).toBe("WHOOP_MCP_TOKEN_DIR");
+    expect(resolveTokenDir()).toBe(join(homedir(), ".whoop-mcp"));
+    process.env[TOKEN_DIR_ENV] = "   ";
+    expect(resolveTokenDir()).toBe(join(homedir(), ".whoop-mcp"));
+  });
+
+  it("honours an absolute WHOOP_MCP_TOKEN_DIR, read at call time", () => {
+    process.env[TOKEN_DIR_ENV] = tempDir;
+    expect(resolveTokenDir()).toBe(tempDir);
+    const other = join(tempDir, "other");
+    process.env[TOKEN_DIR_ENV] = other;
+    expect(resolveTokenDir()).toBe(other);
+  });
+
+  it("prefers an explicit folder over WHOOP_MCP_TOKEN_DIR", () => {
+    process.env[TOKEN_DIR_ENV] = tempDir;
+    expect(resolveTokenDir("/explicit")).toBe("/explicit");
+  });
+
+  it.each(["tokens", "./data/whoop", "data\\whoop", "~/.whoop-mcp"])(
+    "rejects the relative path %j with guidance",
+    (value) => {
+      process.env[TOKEN_DIR_ENV] = value;
+      expect(() => resolveTokenDir()).toThrow(/WHOOP_MCP_TOKEN_DIR must be an absolute path/);
+      expect(() => resolveTokenDir()).toThrow(/\/data/);
+    }
+  );
+
+  it("saves, loads and deletes tokens in WHOOP_MCP_TOKEN_DIR when no folder is passed", async () => {
+    const dir = join(tempDir, "volume", "whoop");
+    process.env[TOKEN_DIR_ENV] = dir;
+
+    await saveTokens(tokens);
+    expect(JSON.parse(await readFile(join(dir, "tokens.json"), "utf-8"))).toEqual(tokens);
+    expect(await loadTokens()).toEqual(tokens);
+
+    await deleteTokens();
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  it("rejects token file operations for a relative WHOOP_MCP_TOKEN_DIR", async () => {
+    process.env[TOKEN_DIR_ENV] = "relative/dir";
+    await expect(saveTokens(tokens)).rejects.toThrow(/absolute path/);
+    await expect(loadTokens()).rejects.toThrow(/absolute path/);
+    await expect(deleteTokens()).rejects.toThrow(/absolute path/);
+  });
+
+  it("logs a folder under the home directory with ~, never the user name", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    process.env[TOKEN_DIR_ENV] = join(homedir(), ".whoop-mcp-test-missing-folder");
+
+    expect(await loadTokens()).toBeNull();
+
+    const logged = errSpy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(logged).toContain(join("~", ".whoop-mcp-test-missing-folder"));
+    expect(logged).not.toContain(homedir());
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Task 3b: Save tokens to disk
 // ---------------------------------------------------------------------------
 
@@ -163,23 +258,29 @@ describe("saveTokens", () => {
     expect(dirStat.isDirectory()).toBe(true);
   });
 
-  it("creates the directory with 0700 permissions", async () => {
-    const nestedDir = join(tempDir, "nested");
-    await saveTokens(sampleTokens, nestedDir);
+  it.skipIf(POSIX_PERMISSIONS_UNSUPPORTED)(
+    "creates the directory with 0700 permissions",
+    async () => {
+      const nestedDir = join(tempDir, "nested");
+      await saveTokens(sampleTokens, nestedDir);
 
-    const dirStat = await stat(nestedDir);
-    // 0o700 = owner rwx, group/other none. mode & 0o777 masks file type bits.
-    const dirMode = dirStat.mode & 0o777;
-    expect(dirMode).toBe(0o700);
-  });
+      const dirStat = await stat(nestedDir);
+      // 0o700 = owner rwx, group/other none. mode & 0o777 masks file type bits.
+      const dirMode = dirStat.mode & 0o777;
+      expect(dirMode).toBe(0o700);
+    }
+  );
 
-  it("creates the token file with 0600 permissions", async () => {
-    await saveTokens(sampleTokens, tempDir);
+  it.skipIf(POSIX_PERMISSIONS_UNSUPPORTED)(
+    "creates the token file with 0600 permissions",
+    async () => {
+      await saveTokens(sampleTokens, tempDir);
 
-    const fileStat = await stat(join(tempDir, "tokens.json"));
-    const fileMode = fileStat.mode & 0o777;
-    expect(fileMode).toBe(0o600);
-  });
+      const fileStat = await stat(join(tempDir, "tokens.json"));
+      const fileMode = fileStat.mode & 0o777;
+      expect(fileMode).toBe(0o600);
+    }
+  );
 
   it("overwrites existing token file", async () => {
     await saveTokens(sampleTokens, tempDir);
@@ -371,19 +472,22 @@ describe("deleteTokens", () => {
     expect(after).toBeNull();
   });
 
-  it("rethrows non-ENOENT errors (e.g., permission denied)", async () => {
-    await saveTokens(sampleTokens, tempDir);
+  it.skipIf(POSIX_PERMISSIONS_UNSUPPORTED)(
+    "rethrows non-ENOENT errors (e.g., permission denied)",
+    async () => {
+      await saveTokens(sampleTokens, tempDir);
 
-    // Make the directory non-writable so unlink fails with EACCES, not ENOENT
-    await chmod(tempDir, 0o444);
+      // Make the directory non-writable so unlink fails with EACCES, not ENOENT
+      await chmod(tempDir, 0o444);
 
-    try {
-      await expect(deleteTokens(tempDir)).rejects.toThrow();
-    } finally {
-      // Restore permissions so afterEach cleanup works
-      await chmod(tempDir, 0o755);
+      try {
+        await expect(deleteTokens(tempDir)).rejects.toThrow();
+      } finally {
+        // Restore permissions so afterEach cleanup works
+        await chmod(tempDir, 0o755);
+      }
     }
-  });
+  );
 });
 
 // ---------------------------------------------------------------------------

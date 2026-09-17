@@ -35,6 +35,11 @@ export const HKDF_KEY_LENGTH = 32;
  *
  * If MCP_JWT_SECRET is explicitly set, callers should use that instead and
  * skip this derivation.
+ *
+ * The key signs connector JWTs and derives the stateless DCR client ids and
+ * secrets. Rotating MCP_AUTH_TOKEN without a fixed MCP_JWT_SECRET therefore
+ * revokes every OAuth session (access and refresh tokens) and every
+ * dynamically registered client id; connectors must register and sign in again.
  */
 export function deriveJwtSecret(authToken: string): Promise<Buffer> {
   return new Promise((resolve, reject) => {
@@ -87,9 +92,84 @@ export function validatePublicUrl(publicUrl: string): URL {
  * Performs exact string match — no normalization, no scheme/host rewriting.
  * Returns true if allowed, false otherwise.
  */
-export function isAllowedRedirectUri(redirectUri: string, allowed: string[]): boolean {
+export function isAllowedRedirectUri(redirectUri: string, allowed: readonly string[]): boolean {
   if (!redirectUri) return false;
   return allowed.includes(redirectUri);
+}
+
+/**
+ * The unique origins of the allowlisted redirect URIs (invalid URLs are
+ * skipped), for the authorize page's CSP form-action.
+ */
+export function redirectUriOrigins(allowed: readonly string[]): string[] {
+  const origins = new Set<string>();
+  for (const uri of allowed) {
+    try {
+      const { origin } = new URL(uri);
+      if (/^https?:\/\/[A-Za-z0-9.:[\]-]+$/.test(origin)) origins.add(origin);
+    } catch {
+      // Not a URL: it can never match a registered redirect either.
+    }
+  }
+  return [...origins];
+}
+
+// ---------------------------------------------------------------------------
+// MCP resource identity (RFC 8707 / RFC 9728)
+// ---------------------------------------------------------------------------
+
+/** The only scope the connector issues. */
+export const CONNECTOR_SCOPE = "mcp";
+
+/** Public URLs identifying this MCP server as an OAuth protected resource. */
+export interface McpResourceUrls {
+  /** PUBLIC_URL's origin, e.g. https://whoop.example.com */
+  origin: string;
+  /** The canonical resource identifier: `${origin}/mcp` */
+  canonicalResource: string;
+  /** Protected resource metadata: `${origin}/.well-known/oauth-protected-resource/mcp` */
+  resourceMetadataUrl: string;
+}
+
+/**
+ * Resource URLs for a PUBLIC_URL. The MCP endpoint is always served at /mcp on
+ * the root of the host, so any path in PUBLIC_URL (and a trailing slash) is
+ * ignored, exactly as the SDK derives its /authorize and /token endpoints.
+ *
+ * @throws Error when publicUrl is not a valid https:// URL
+ */
+export function mcpResourceUrls(publicUrl: string): McpResourceUrls {
+  const { origin } = validatePublicUrl(publicUrl);
+  return {
+    origin,
+    canonicalResource: `${origin}/mcp`,
+    resourceMetadataUrl: `${origin}/.well-known/oauth-protected-resource/mcp`,
+  };
+}
+
+/** A resource indicator without trailing slashes, for comparison. */
+export function normalizeResource(resource: string | URL): string {
+  return String(resource).replace(/\/+$/, "");
+}
+
+/**
+ * True when `resource` names this server: the canonical /mcp resource or the
+ * bare origin, ignoring trailing slashes.
+ */
+export function isAcceptedResource(
+  resource: string | URL,
+  urls: Pick<McpResourceUrls, "origin" | "canonicalResource">
+): boolean {
+  let normalized: string;
+  try {
+    normalized = normalizeResource(new URL(String(resource)).href);
+  } catch {
+    return false;
+  }
+  return (
+    normalized === normalizeResource(urls.canonicalResource) ||
+    normalized === normalizeResource(urls.origin)
+  );
 }
 
 /**
@@ -252,6 +332,10 @@ interface UsedJtiRecord {
  * the underlying JWT's natural exp passes — after that, the JWT signature
  * check would fail anyway, so we can drop the record without losing
  * reuse-detection coverage.
+ *
+ * The store lives only in this process: after a restart or redeploy a refresh
+ * token that was already rotated can be exchanged once more (until its own
+ * 30-day expiry). This is an accepted residual risk of the stateless design.
  */
 export class UsedJtiStore {
   private readonly used = new Map<string, UsedJtiRecord>();

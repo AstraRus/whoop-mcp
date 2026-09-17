@@ -1,14 +1,16 @@
 /**
  * File-based OAuth token storage.
  *
- * Stores tokens at ~/.whoop-mcp/tokens.json with secure file permissions.
+ * Stores tokens at <token dir>/tokens.json with secure file permissions. The
+ * token dir is WHOOP_MCP_TOKEN_DIR when set, else ~/.whoop-mcp (see
+ * resolveTokenDir).
  * Pure I/O module — no dependencies on API client or OAuth flow.
  */
 
 import { mkdir, writeFile, readFile, rename, unlink } from "node:fs/promises";
 import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,8 +30,11 @@ export interface OAuthTokens {
 // Constants
 // ---------------------------------------------------------------------------
 
-/** Default token storage directory */
-const DEFAULT_TOKEN_DIR = join(homedir(), ".whoop-mcp");
+/** Environment variable that overrides the token storage directory */
+export const TOKEN_DIR_ENV = "WHOOP_MCP_TOKEN_DIR";
+
+/** Name of the default token directory under the home directory */
+const DEFAULT_TOKEN_DIR_NAME = ".whoop-mcp";
 
 /** Token filename */
 const TOKEN_FILENAME = "tokens.json";
@@ -42,7 +47,7 @@ const EXPIRY_BUFFER_MS = 60_000;
 // ---------------------------------------------------------------------------
 
 /** Replace the home directory prefix with ~ for safe logging (avoids disclosing usernames). */
-function redactHomePath(filePath: string): string {
+export function redactHomePath(filePath: string): string {
   const home = homedir();
   if (filePath.startsWith(home)) {
     return "~" + filePath.slice(home.length);
@@ -53,6 +58,30 @@ function redactHomePath(filePath: string): string {
 // ---------------------------------------------------------------------------
 // Pure functions
 // ---------------------------------------------------------------------------
+
+/**
+ * The directory that holds tokens.json.
+ *
+ * `explicit` when given; else WHOOP_MCP_TOKEN_DIR, which must be an absolute
+ * path (unset or blank means not set); else ~/.whoop-mcp. The environment and
+ * home directory are read at call time.
+ *
+ * @throws Error with guidance when WHOOP_MCP_TOKEN_DIR is a relative path.
+ */
+export function resolveTokenDir(explicit?: string): string {
+  if (explicit !== undefined) return explicit;
+  const fromEnv = process.env[TOKEN_DIR_ENV];
+  if (fromEnv !== undefined && fromEnv.trim() !== "") {
+    if (!isAbsolute(fromEnv)) {
+      throw new Error(
+        `${TOKEN_DIR_ENV} must be an absolute path, got ${JSON.stringify(fromEnv)}. ` +
+          `Set it to a directory such as /data/whoop-mcp (e.g. a mounted volume), or unset it to use ~/${DEFAULT_TOKEN_DIR_NAME}.`
+      );
+    }
+    return fromEnv;
+  }
+  return join(homedir(), DEFAULT_TOKEN_DIR_NAME);
+}
 
 /**
  * Check whether the given tokens are expired (or within the 60s safety buffer).
@@ -69,7 +98,7 @@ export function isTokenExpired(tokens: OAuthTokens): boolean {
 
 /** Resolve the full path to the tokens file */
 function tokenFilePath(tokenDir?: string): string {
-  return join(tokenDir ?? DEFAULT_TOKEN_DIR, TOKEN_FILENAME);
+  return join(resolveTokenDir(tokenDir), TOKEN_FILENAME);
 }
 
 /**
@@ -79,9 +108,9 @@ function tokenFilePath(tokenDir?: string): string {
  * the token file with 0600 (user-only read/write) permissions.
  */
 export async function saveTokens(tokens: OAuthTokens, tokenDir?: string): Promise<void> {
-  const dir = tokenDir ?? DEFAULT_TOKEN_DIR;
+  const dir = resolveTokenDir(tokenDir);
   await mkdir(dir, { recursive: true, mode: 0o700 });
-  const target = tokenFilePath(tokenDir);
+  const target = tokenFilePath(dir);
   const data = JSON.stringify(tokens, null, 2);
   const temp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   // Write-then-rename so a crash mid-write can never leave a truncated file

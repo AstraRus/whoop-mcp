@@ -8,16 +8,28 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import type { WhoopClient } from "../../src/api/client.js";
-import { WhoopApiError, WhoopAuthError, WhoopNetworkError } from "../../src/api/client.js";
+import type { WhoopClient, WhoopFetchResult, WhoopGetOptions } from "../../src/api/client.js";
+import {
+  cacheKey,
+  createWhoopClient,
+  WhoopApiError,
+  WhoopAuthError,
+  WhoopNetworkError,
+} from "../../src/api/client.js";
+import { MemoryCache } from "../../src/cache/memory-cache.js";
+import { CYCLE_TTL_MS } from "../../src/resources/index.js";
+import { recoveryZone } from "../../src/tools/analytics-utils.js";
 import {
   getToday,
   LONG_CYCLE_MS,
   MAX_SYNC_GAP_MS,
   STALE_SLEEP_MS,
+  TODAY_LIST_PATHS,
 } from "../../src/tools/get-today.js";
 import { outputSchemas } from "../../src/tools/output-contracts.js";
 import type { Recovery, Sleep, Cycle, Workout } from "../../src/api/types.js";
+import { createWhoopFixtureClient } from "../helpers/whoop-fixture-client.js";
+import { LIVE_SHAPED_IDS, liveShapedUser } from "../helpers/whoop-users.js";
 
 // ---------------------------------------------------------------------------
 // Fixtures — user at +02:00 who started wearing WHOOP on Monday evening
@@ -295,18 +307,24 @@ describe("getToday", () => {
       expectValidContract(result);
     });
 
-    it("reports the current cycle as the requested period", async () => {
+    it("reports the current cycle as the requested period, in local time", async () => {
       const result = await getToday(createMockClient());
 
       expect(result.data_quality.requested_period).toEqual({
-        start: CURRENT_CYCLE_START,
-        end: FIXED_NOW.toISOString(),
+        start: "2026-09-15T23:13:31.460+02:00",
+        end: "2026-09-16T12:00:00.000+02:00",
       });
       expect(result.data_quality.observed_period).toEqual({
-        start: CURRENT_CYCLE_START,
-        end: latestWorkout.end,
+        start: "2026-09-15T23:13:31.460+02:00",
+        end: "2026-09-16T10:00:00.000+02:00",
       });
-      expect(result.data_quality.method_version).toBe("today-4");
+      expect(Date.parse(result.data_quality.requested_period.start)).toBe(
+        Date.parse(CURRENT_CYCLE_START)
+      );
+      expect(Date.parse(result.data_quality.observed_period!.end)).toBe(
+        Date.parse(latestWorkout.end)
+      );
+      expect(result.data_quality.method_version).toBe("today-5");
     });
 
     it("keeps today's sleep, recovery and strain after local midnight until the next sleep", async () => {
@@ -333,7 +351,10 @@ describe("getToday", () => {
       expect(result.strain?.day_strain).toBe(14.2);
       expect(result.recovery?.score).toBe(50);
       expect(result.sleep).not.toBeNull();
-      expect(result.data_quality.requested_period.start).toBe(PREVIOUS_CYCLE_START);
+      expect(result.data_quality.requested_period.start).toBe("2026-09-15T00:39:47.770+02:00");
+      expect(Date.parse(result.data_quality.requested_period.start)).toBe(
+        Date.parse(PREVIOUS_CYCLE_START)
+      );
     });
 
     it("handles a bedtime after local midnight at a negative offset", async () => {
@@ -410,7 +431,7 @@ describe("getToday", () => {
         status: "available",
         source_updated_at: cycle.updated_at,
       });
-      expect(result.data_quality.requested_period.start).toBe(CURRENT_CYCLE_START);
+      expect(result.data_quality.requested_period.start).toBe("2026-09-15T23:13:31.460+02:00");
       expect(result.summary).not.toContain("No data available");
       expect(result.notes).toContain(
         "The current WHOOP cycle started 2026-09-15 23:13 (UTC+02:00), about 48 hours ago. A cycle only ends when WHOOP detects the next sleep, so the strain shown covers that whole period."
@@ -599,6 +620,12 @@ describe("getToday", () => {
         performance_pct: 85,
         efficiency_pct: 92,
         respiratory_rate: 15.2,
+        disturbances: 2,
+        sleep_cycles: 4,
+        no_data_hours: 0,
+        // WHOOP reports 0 while calibrating: not a value
+        consistency_pct: null,
+        need_hours_including_debt: 8,
       });
       expect(result.data_quality.sources.sleep?.source_updated_at).toBe(currentSleep.updated_at);
     });
@@ -945,7 +972,10 @@ describe("getToday", () => {
       expect(result.sleep).not.toBeNull();
       expect(result.recovery?.score).toBe(72);
       // Fallback window: today's local calendar day in the sleep's offset
-      expect(result.data_quality.requested_period.start).toBe("2026-09-15T22:00:00.000Z");
+      expect(result.data_quality.requested_period.start).toBe("2026-09-16T00:00:00.000+02:00");
+      expect(Date.parse(result.data_quality.requested_period.start)).toBe(
+        Date.parse("2026-09-15T22:00:00.000Z")
+      );
       expectValidContract(result);
     });
 
@@ -1081,6 +1111,568 @@ describe("getToday", () => {
       const error = await getToday(client).catch((caught: unknown) => caught);
       expect(error).toBe(first);
       expect(error).not.toBeInstanceOf(WhoopNetworkError);
+    });
+  });
+
+  describe("local time periods", () => {
+    /** Every record of every list moved to `offset` (same instants). */
+    function inOffset(offset: string, responses = liveResponses()): Required<Responses> {
+      const move = (value: unknown): unknown => {
+        const { records } = value as { records: Array<Record<string, unknown>> };
+        return page(records.map((record) => ({ ...record, timezone_offset: offset })));
+      };
+      return {
+        recovery: responses.recovery,
+        sleep: move(responses.sleep),
+        cycle: move(responses.cycle),
+        workout: move(responses.workout),
+      };
+    }
+
+    function expectSameInstants(
+      periods: { start: string; end: string },
+      expected: { start: string; end: string }
+    ): void {
+      expect(Date.parse(periods.start)).toBe(Date.parse(expected.start));
+      expect(Date.parse(periods.end)).toBe(Date.parse(expected.end));
+    }
+
+    it("writes the cycle start 21:13:31.460Z as 23:13:31.460+02:00 and keeps UTC timestamps", async () => {
+      const result = await getToday(createMockClient());
+      const quality = result.data_quality;
+
+      expect(quality.requested_period.start).toBe("2026-09-15T23:13:31.460+02:00");
+      expect(quality.requested_period.end).toBe("2026-09-16T12:00:00.000+02:00");
+      expectSameInstants(quality.requested_period, {
+        start: CURRENT_CYCLE_START,
+        end: FIXED_NOW.toISOString(),
+      });
+      expectSameInstants(quality.observed_period!, {
+        start: CURRENT_CYCLE_START,
+        end: latestWorkout.end,
+      });
+      expect(result.timestamp).toBe("2026-09-16T10:00:00.000Z");
+      expect(quality.evaluated_at).toBe("2026-09-16T10:00:00.000Z");
+      expectValidContract(result);
+    });
+
+    it("writes the same instants at -05:00", async () => {
+      const result = await getToday(createMockClient(inOffset("-05:00")));
+      const quality = result.data_quality;
+
+      expect(quality.requested_period).toEqual({
+        start: "2026-09-15T16:13:31.460-05:00",
+        end: "2026-09-16T05:00:00.000-05:00",
+      });
+      expect(quality.observed_period).toEqual({
+        start: "2026-09-15T16:13:31.460-05:00",
+        end: "2026-09-16T03:00:00.000-05:00",
+      });
+      expectSameInstants(quality.requested_period, {
+        start: CURRENT_CYCLE_START,
+        end: FIXED_NOW.toISOString(),
+      });
+      expectSameInstants(quality.observed_period!, {
+        start: CURRENT_CYCLE_START,
+        end: latestWorkout.end,
+      });
+      expect(result.strain?.day_strain).toBe(8.4);
+      expect(result.sleep?.asleep_hours).toBe(6.5);
+    });
+
+    it("uses local midnight in the latest sleep's offset without an open cycle", async () => {
+      // Cycles stay at +02:00 and are closed; sleeps are at -05:00.
+      const closed = page([{ ...currentCycle, end: "2026-09-16T09:00:00.000Z" }, previousCycle]);
+      const result = await getToday(
+        createMockClient({ ...inOffset("-05:00"), cycle: closed, workout: page([]) })
+      );
+      const quality = result.data_quality;
+
+      // 10:00Z is 05:00 on 09-16 at -05:00
+      expect(quality.requested_period).toEqual({
+        start: "2026-09-16T00:00:00.000-05:00",
+        end: "2026-09-16T05:00:00.000-05:00",
+      });
+      expectSameInstants(quality.requested_period, {
+        start: "2026-09-16T05:00:00.000Z",
+        end: FIXED_NOW.toISOString(),
+      });
+      // The latest sleep ended on 09-15 local, so nothing is shown.
+      expect(quality.observed_period).toBeNull();
+    });
+
+    it("uses the latest cycle's offset when there is neither an open cycle nor a sleep", async () => {
+      const closed = page([
+        { ...currentCycle, end: "2026-09-16T09:00:00.000Z", timezone_offset: "+05:30" },
+      ]);
+      const result = await getToday(
+        createMockClient({ cycle: closed, sleep: page([]), workout: page([]) })
+      );
+
+      expect(result.data_quality.requested_period).toEqual({
+        start: "2026-09-16T00:00:00.000+05:30",
+        end: "2026-09-16T15:30:00.000+05:30",
+      });
+    });
+
+    it("writes each observed bound in its own record's offset", async () => {
+      const workout = { ...latestWorkout, timezone_offset: "+01:00" };
+      const result = await getToday(createMockClient({ workout: page([workout]) }));
+
+      expect(result.data_quality.observed_period).toEqual({
+        start: "2026-09-15T23:13:31.460+02:00",
+        end: "2026-09-16T09:00:00.000+01:00",
+      });
+    });
+  });
+
+  describe("sleep and recovery detail", () => {
+    it("adds the WHOOP sleep detail, zone and recorded percent on the live-shaped account", async () => {
+      const data = liveShapedUser();
+      vi.setSystemTime(data.now);
+      const result = await getToday(createWhoopFixtureClient(data), data.now);
+
+      const sleep = data.sleeps.find((record) => record.id === LIVE_SHAPED_IDS.sleeps.second)!;
+      const need = sleep.score!.sleep_needed;
+      const recovery = data.recoveries.find(
+        (record) => record.cycle_id === LIVE_SHAPED_IDS.cycles.open
+      )!;
+      expect(result.sleep).toMatchObject({
+        disturbances: sleep.score!.stage_summary.disturbance_count,
+        sleep_cycles: sleep.score!.stage_summary.sleep_cycle_count,
+        no_data_hours: 0,
+        consistency_pct: null,
+        need_hours_including_debt:
+          Math.round(
+            ((need.baseline_milli +
+              need.need_from_sleep_debt_milli +
+              need.need_from_recent_strain_milli +
+              need.need_from_recent_nap_milli) /
+              3_600_000) *
+              10
+          ) / 10,
+      });
+      expect(sleep.score!.sleep_consistency_percentage).toBe(0);
+      expect(result.recovery).toMatchObject({
+        user_calibrating: true,
+        zone: recoveryZone(recovery.score!.recovery_score),
+      });
+      expect(result.strain?.last_workout).toMatchObject({
+        sport_name: "running",
+        percent_recorded: 100,
+      });
+      expect(result.data_quality.sources.sleep?.status).toBe("available");
+      expect(result.data_quality.sources.recovery?.status).toBe("calibrating");
+      expectValidContract(result);
+    });
+
+    it.each([
+      { label: "a 0 while calibrating", consistency: 0, calibrating: true, expected: null },
+      { label: "a 0 after calibration", consistency: 0, calibrating: false, expected: 0 },
+      { label: "a value while calibrating", consistency: 85, calibrating: true, expected: 85 },
+      { label: "no value", consistency: null, calibrating: false, expected: null },
+    ])("reports consistency for $label", async ({ consistency, calibrating, expected }) => {
+      const result = await getToday(
+        createMockClient({
+          sleep: page([
+            {
+              ...currentSleep,
+              score: { ...sleepScore, sleep_consistency_percentage: consistency },
+            },
+          ]),
+          recovery: page([
+            {
+              ...currentRecovery,
+              score: { ...currentRecovery.score!, user_calibrating: calibrating },
+            },
+          ]),
+        })
+      );
+
+      expect(result.sleep?.consistency_pct).toBe(expected);
+      expectValidContract(result);
+    });
+
+    it("judges a 0 consistency by the newest scored recovery when today's is still pending", async () => {
+      const result = await getToday(
+        createMockClient({
+          recovery: page([
+            { ...currentRecovery, score_state: "PENDING_SCORE", score: null },
+            previousRecovery,
+          ]),
+        })
+      );
+
+      expect(result.recovery).toBeNull();
+      expect(result.sleep?.consistency_pct).toBeNull();
+    });
+
+    it("lowers the sleep need by a recent nap (WHOOP reports nap need as 0 or negative)", async () => {
+      const result = await getToday(
+        createMockClient({
+          sleep: page([
+            {
+              ...currentSleep,
+              score: {
+                ...sleepScore,
+                sleep_needed: {
+                  baseline_milli: 28_800_000,
+                  need_from_sleep_debt_milli: 2_700_000,
+                  need_from_recent_strain_milli: 900_000,
+                  need_from_recent_nap_milli: -1_800_000,
+                },
+                stage_summary: { ...sleepScore.stage_summary, total_no_data_time_milli: 540_000 },
+              },
+            },
+          ]),
+        })
+      );
+
+      // 8 + 0.75 + 0.25 - 0.5
+      expect(result.sleep?.need_hours_including_debt).toBe(8.5);
+      expect(result.sleep?.no_data_hours).toBe(0.2);
+    });
+
+    it.each([
+      [33, "red"],
+      [34, "yellow"],
+      [66, "yellow"],
+      [67, "green"],
+    ] as const)("puts a recovery of %i in the %s zone", async (score, zone) => {
+      const result = await getToday(
+        createMockClient({
+          recovery: page([
+            { ...currentRecovery, score: { ...currentRecovery.score!, recovery_score: score } },
+          ]),
+        })
+      );
+
+      expect(result.recovery?.zone).toBe(zone);
+      expect(result.summary).toContain(`Recovery ${score}% (${zone}, calibrating)`);
+    });
+
+    it("reports percent_recorded from a 0-1 fraction and from a percentage", async () => {
+      for (const [value, expected] of [
+        [0.99975777, 100],
+        [0.87, 87],
+        [1, 100],
+        [87, 87],
+      ] as const) {
+        const workout = {
+          ...latestWorkout,
+          score: { ...latestWorkout.score!, percent_recorded: value },
+        };
+        const result = await getToday(createMockClient({ workout: page([workout]) }));
+        expect(result.strain?.last_workout?.percent_recorded).toBe(expected);
+      }
+    });
+  });
+
+  describe("fetch metadata", () => {
+    /** A mock client that also reports fetch metadata, recording every request's options. */
+    function metaClient(
+      meta: Partial<Record<keyof typeof PATHS, { fetchedAt: number; cacheStatus: "hit" | "miss" }>>
+    ): WhoopClient & { requests: Array<[string, WhoopGetOptions | undefined]> } {
+      const base = createMockClient();
+      const requests: Array<[string, WhoopGetOptions | undefined]> = [];
+      return {
+        requests,
+        get: base.get,
+        async getWithMeta<T>(
+          path: string,
+          options?: WhoopGetOptions
+        ): Promise<WhoopFetchResult<T>> {
+          requests.push([path, options]);
+          const data = await base.get<T>(path, options);
+          const name = (Object.keys(PATHS) as Array<keyof typeof PATHS>).find((key) =>
+            path.startsWith(PATHS[key])
+          )!;
+          const entry = meta[name] ?? { fetchedAt: FIXED_NOW.getTime(), cacheStatus: "miss" };
+          return { data, fetchedAt: entry.fetchedAt, cacheStatus: entry.cacheStatus };
+        },
+      };
+    }
+
+    it("reports unknown fetch time and cache status for a client without metadata", async () => {
+      const result = await getToday(createMockClient());
+
+      for (const quality of Object.values(result.data_quality.sources)) {
+        expect(quality).toMatchObject({ fetched_at: null, cache_status: "unknown" });
+      }
+      expect(result.data_quality.limitations).toContain(
+        "Fetch time and cache status are not available from the client."
+      );
+    });
+
+    it("reads all four lists with the cycle TTL and reports when each was fetched", async () => {
+      const fetchedAt = FIXED_NOW.getTime() - 60_000;
+      const client = metaClient({
+        sleep: { fetchedAt, cacheStatus: "hit" },
+        cycle: { fetchedAt, cacheStatus: "hit" },
+      });
+      const result = await getToday(client);
+
+      expect(client.requests).toHaveLength(4);
+      for (const [path, options] of client.requests) {
+        expect(Object.values(TODAY_LIST_PATHS)).toContain(path);
+        expect(options).toEqual({ cache: true, ttlMs: CYCLE_TTL_MS });
+      }
+      expect(result.data_quality.sources.sleep).toMatchObject({
+        fetched_at: "2026-09-16T09:59:00.000Z",
+        cache_status: "hit",
+      });
+      expect(result.data_quality.sources.recovery).toMatchObject({
+        fetched_at: "2026-09-16T10:00:00.000Z",
+        cache_status: "miss",
+      });
+      const limitations = result.data_quality.limitations.join(" ");
+      expect(limitations).not.toContain("not available from the client");
+      expect(limitations).toContain("fetched_at and cache_status per source");
+      expect(vi.mocked(client.get)).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ refresh: true })
+      );
+    });
+
+    it("does not re-read when the current cycle's sleep is in the cached list", async () => {
+      const client = metaClient({
+        sleep: { fetchedAt: FIXED_NOW.getTime() - 90_000, cacheStatus: "hit" },
+        recovery: { fetchedAt: FIXED_NOW.getTime() - 90_000, cacheStatus: "hit" },
+      });
+      await getToday(client);
+
+      expect(client.requests).toHaveLength(4);
+    });
+
+    it("marks a failed list as a cache miss without a fetch time", async () => {
+      const base = metaClient({});
+      const client: WhoopClient = {
+        get: base.get,
+        async getWithMeta<T>(path: string, options?: WhoopGetOptions) {
+          if (path.startsWith(PATHS.workout)) throw new WhoopApiError(503, "Unavailable", null);
+          return base.getWithMeta!<T>(path, options);
+        },
+      };
+      const result = await getToday(client);
+
+      expect(result.data_quality.sources.workout).toMatchObject({
+        status: "fetch_failed",
+        fetched_at: null,
+        cache_status: "miss",
+      });
+    });
+  });
+
+  describe("cache desync between the cycle, sleep and recovery lists (real client and cache)", () => {
+    const MINUTE = 60_000;
+
+    /** Before the morning sync: the previous cycle is still open. */
+    function preSync(): Required<Responses> {
+      return {
+        recovery: page([previousRecovery]),
+        sleep: page([previousSleep]),
+        cycle: page([{ ...previousCycle, end: null }, firstCycle]),
+        workout: page([olderWorkout]),
+      };
+    }
+
+    type ListName = keyof typeof PATHS;
+
+    interface Harness {
+      client: WhoopClient;
+      cache: MemoryCache;
+      state: { synced: Set<ListName>; failing: Set<ListName> };
+      counts: Record<ListName, number>;
+      syncAll(): void;
+      reset(): void;
+    }
+
+    function harness(cacheOptions: { maxEntries?: number } = {}): Harness {
+      const state = {
+        synced: new Set<ListName>(),
+        failing: new Set<ListName>(),
+      };
+      const counts: Record<ListName, number> = { recovery: 0, sleep: 0, cycle: 0, workout: 0 };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((input: string | URL) => {
+          const url = new URL(String(input));
+          const name = (Object.keys(PATHS) as ListName[]).find(
+            (key) => url.pathname === PATHS[key]
+          )!;
+          counts[name] += 1;
+          if (state.failing.has(name)) {
+            return Promise.resolve(new Response("{}", { status: 503, statusText: "Unavailable" }));
+          }
+          const body = state.synced.has(name) ? liveResponses()[name] : preSync()[name];
+          return Promise.resolve(
+            new Response(JSON.stringify(body), {
+              status: 200,
+              headers: { "content-type": "application/json" },
+            })
+          );
+        })
+      );
+      const cache = new MemoryCache(cacheOptions);
+      const client = createWhoopClient({
+        accessToken: "test-token",
+        baseUrl: "https://api.test",
+        cache,
+      });
+      const syncAll = (): void => {
+        for (const name of Object.keys(PATHS) as ListName[]) state.synced.add(name);
+      };
+      const reset = (): void => {
+        for (const name of Object.keys(counts) as ListName[]) counts[name] = 0;
+      };
+      return { client, cache, state, counts, syncAll, reset };
+    }
+
+    function at(offsetMs: number): Date {
+      vi.setSystemTime(FIXED_NOW.getTime() + offsetMs);
+      return new Date(FIXED_NOW.getTime() + offsetMs);
+    }
+
+    const listKey = (name: ListName): string => cacheKey(TODAY_LIST_PATHS[name]);
+
+    function expectToday(result: Awaited<ReturnType<typeof getToday>>): void {
+      expect(result.strain?.day_strain).toBe(8.4);
+      expect(result.sleep?.asleep_hours).toBe(6.5);
+      expect(result.recovery?.score).toBe(72);
+      expect(result.data_quality.sources.sleep).toMatchObject({
+        status: "available",
+        cache_status: "miss",
+      });
+      expect(result.notes.join(" ")).not.toContain("No main sleep is linked");
+      expectValidContract(result);
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("re-reads sleep and recovery cached before a new cycle appeared (earlier partial failure)", async () => {
+      const h = harness();
+      // T: the sleep and recovery requests fail, so only the cycle and workout lists are cached.
+      h.state.failing.add("sleep").add("recovery");
+      await getToday(h.client, at(0));
+      // T+1.5 min: sleep and recovery are read (before the sync) and cached.
+      h.state.failing.clear();
+      await getToday(h.client, at(1.5 * MINUTE));
+      // The strap syncs; at T+3 min the cycle entry has expired, sleep and recovery have not.
+      h.syncAll();
+      h.reset();
+      const result = await getToday(h.client, at(3 * MINUTE));
+
+      expectToday(result);
+      expect(h.counts).toEqual({ recovery: 1, sleep: 1, cycle: 1, workout: 1 });
+      expect(result.data_quality.sources.cycle?.cache_status).toBe("miss");
+
+      // Without fetch metadata the same timeline shows the stale pairing.
+      const control = harness();
+      control.state.failing.add("sleep").add("recovery");
+      const plain: WhoopClient = { get: control.client.get.bind(control.client) };
+      await getToday(plain, at(0));
+      control.state.failing.clear();
+      await getToday(plain, at(1.5 * MINUTE));
+      control.syncAll();
+      const stale = await getToday(plain, at(3 * MINUTE));
+      expect(stale.sleep).toBeNull();
+      expect(stale.notes).toContain("No main sleep is linked to the current cycle yet.");
+    });
+
+    it("re-reads them when the cycle entry was evicted from the LRU cache", async () => {
+      const h = harness({ maxEntries: 4 });
+      await getToday(h.client, at(0));
+      // The cycle list becomes the least recently used entry and is evicted.
+      for (const name of ["recovery", "sleep", "workout"] as const) h.cache.get(listKey(name));
+      h.cache.set("GET:/v2/user/profile/basic", {});
+      expect(h.cache.has(listKey("cycle"))).toBe(false);
+      expect(h.cache.has(listKey("sleep"))).toBe(true);
+
+      h.syncAll();
+      h.reset();
+      const result = await getToday(h.client, at(MINUTE));
+
+      expectToday(result);
+      expect(h.counts.sleep).toBe(1);
+      expect(h.counts.recovery).toBe(1);
+      expect(h.counts.workout).toBe(0);
+    });
+
+    it("re-reads them after a webhook-style invalidation of the cycle prefix only", async () => {
+      const h = harness();
+      await getToday(h.client, at(0));
+      h.syncAll();
+      h.cache.deleteWhere((key) => key.startsWith("GET:/v2/cycle"));
+      h.reset();
+
+      const result = await getToday(h.client, at(MINUTE));
+
+      expectToday(result);
+      expect(h.counts).toEqual({ recovery: 1, sleep: 1, cycle: 1, workout: 0 });
+    });
+
+    it("re-reads when only the recovery list predates the new cycle", async () => {
+      const h = harness();
+      await getToday(h.client, at(0));
+      h.syncAll();
+      h.cache.deleteWhere((key) => key.startsWith("GET:/v2/cycle") || key.includes("/sleep"));
+      h.reset();
+
+      const result = await getToday(h.client, at(MINUTE));
+
+      expectToday(result);
+      expect(h.counts).toEqual({ recovery: 1, sleep: 1, cycle: 1, workout: 0 });
+    });
+
+    it("re-reads at most once per call, and not again once the lists are newer than the cycle", async () => {
+      const h = harness();
+      await getToday(h.client, at(0));
+      // Only the cycle has synced: WHOOP has not processed last night's sleep yet.
+      h.state.synced.add("cycle");
+      h.cache.deleteWhere((key) => key.startsWith("GET:/v2/cycle"));
+      h.reset();
+
+      const first = await getToday(h.client, at(MINUTE));
+      expect(first.sleep).toBeNull();
+      expect(first.notes).toContain("No main sleep is linked to the current cycle yet.");
+      expect(h.counts).toEqual({ recovery: 1, sleep: 1, cycle: 1, workout: 0 });
+
+      h.reset();
+      const second = await getToday(h.client, at(1.2 * MINUTE));
+      expect(second.sleep).toBeNull();
+      expect(h.counts).toEqual({ recovery: 0, sleep: 0, cycle: 0, workout: 0 });
+    });
+
+    it("makes no extra requests when the cached lists are in step", async () => {
+      const h = harness();
+      h.syncAll();
+      await getToday(h.client, at(0));
+      h.reset();
+
+      const result = await getToday(h.client, at(MINUTE));
+
+      expect(h.counts).toEqual({ recovery: 0, sleep: 0, cycle: 0, workout: 0 });
+      expect(result.data_quality.sources.sleep?.cache_status).toBe("hit");
+      expect(result.data_quality.sources.sleep?.fetched_at).toBe(FIXED_NOW.toISOString());
+    });
+
+    it("keeps the cached lists and says so when the re-read fails", async () => {
+      const h = harness();
+      await getToday(h.client, at(0));
+      h.syncAll();
+      h.state.failing.add("sleep");
+      h.cache.deleteWhere((key) => key.startsWith("GET:/v2/cycle"));
+
+      const result = await getToday(h.client, at(MINUTE));
+
+      expect(result.sleep).toBeNull();
+      expect(result.data_quality.sources.sleep?.status).not.toBe("fetch_failed");
+      expect(result.notes).toContain(
+        "WHOOP has a newer cycle than the cached sleep and recovery lists, and they could not be read again right now, so the sleep and recovery shown may not include the latest ones yet."
+      );
+      expectValidContract(result);
     });
   });
 
