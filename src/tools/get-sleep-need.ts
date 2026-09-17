@@ -51,6 +51,7 @@ import {
   DISCLAIMER,
   finishQuality,
   formatLocalTimestamp,
+  HOUR_MS,
   localDay,
   localMidnightMs,
   mostRelevantError,
@@ -76,6 +77,7 @@ import {
   plural,
   roundNeed,
 } from "./get-sleep-analysis.js";
+import { STALE_SLEEP_MS } from "./get-today.js";
 import { needBreakdown, stageBreakdown, type NeedBreakdown } from "./sleep-metrics.js";
 import { kNearestMedian, mean, median, percentile, roundTo } from "./stats-utils.js";
 import { defineTool, type ToolContext } from "./tool-definition.js";
@@ -969,10 +971,19 @@ export async function runSleepNeed(
       `The component model's backtest error (${roundTo(backtest.componentMaeMin!, 1)} min mean absolute error over ${plural(backtest.pairs, "pair")}) is larger than repeating the previous night's WHOOP need (${roundTo(backtest.persistenceMaeMin!, 1)} min), so the estimate is last night's WHOOP need including debt (selected_model persistence).`
     );
   }
-  if (openCycle && lastNight)
+  if (openCycle && lastNight) {
+    // get_today's and get_sync_status's rule: a linked sleep that ended more than
+    // STALE_SLEEP_MS ago means no newer sleep has been processed (the morning
+    // sync race), so "last night" is the night before.
+    const sinceEndMs = nowMs - Date.parse(lastNight.sleep.end);
+    if (sinceEndMs > STALE_SLEEP_MS)
+      notes.push(
+        `last_night is the main sleep that ended ${localStamp(lastNight.sleep.end, lastNight.sleep.timezone_offset)}, about ${Math.round(sinceEndMs / HOUR_MS)} hours ago, and WHOOP has not processed a newer one. A sleep since then is either not processed yet or was not detected, so last_night, today_so_far and any estimate refer to that earlier night and the cycle still open since then.`
+      );
     notes.push(
       "The strain component uses the current cycle's strain so far; strain added later in the cycle is not included, and WHOOP sets its own need only when the next sleep is scored."
     );
+  }
   notes.push(
     "WHOOP's nap component is 0 or negative (a nap lowers the need); the nap component and nap ratio here keep that sign."
   );

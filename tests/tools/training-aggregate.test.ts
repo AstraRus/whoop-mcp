@@ -976,6 +976,30 @@ describe("get_sport_breakdown aggregate", () => {
     expect(breakdown.sports.map((sport) => sport.sport_name)).toEqual(["walking"]);
   });
 
+  it("says when a block has no WHOOP data at all, not only no workouts", async () => {
+    const live = liveShapedUser();
+    // The latest released block on 2026-09-17 ends before the account's first day.
+    const empty = await breakdownAggregate({
+      cycles: live.cycles,
+      workouts: live.workouts,
+      now: live.now,
+    });
+    expect(empty.block.end_week < "2026-09-14").toBe(true);
+    expect(empty.status).toBe("no_workouts");
+    expect(empty.notes).toContain("No WHOOP data for this block.");
+
+    // A released block with worn days but no workouts is only no_workouts.
+    const lastMonday = blockOf("2026-09-14", 4).mondays[3]!;
+    const now = new Date(localMs(addDays(lastMonday, 9), 12 * 60));
+    const cycles = live.cycles.map((cycle) =>
+      cycle.end === null ? { ...cycle, end: "2026-09-16T21:30:00.000Z" } : cycle
+    );
+    const rest = await breakdownAggregate({ cycles, workouts: [], now });
+    expect(rest.block.start_week <= "2026-09-14").toBe(true);
+    expect(rest.status).toBe("no_workouts");
+    expect(rest.notes).not.toContain("No WHOOP data for this block.");
+  });
+
   it("filters one sport without revealing pooled sports", async () => {
     const fixture = matureUser({ days: 120, seed: 2 });
     const all = await breakdownAggregate(fixture);

@@ -400,6 +400,18 @@ describe("live-shaped account", () => {
     expect(report.data_quality.method_version).toBe("sleep-need-1");
   });
 
+  it("says when last night is older than 20 hours because no newer sleep is processed", async () => {
+    const evening = await need(liveShapedUser());
+    expect(evening.notes.join(" ")).not.toContain("WHOOP has not processed a newer one");
+
+    // 07:05 the next morning: the night's sleep has not synced, the cycle is still open.
+    const morning = await need(liveShapedUser({ now: "2026-09-17T07:05:00+02:00" }));
+    expect(morning.last_night?.date).toBe("2026-09-16");
+    expect(morning.notes).toContain(
+      "last_night is the main sleep that ended 2026-09-16 06:58 (UTC+02:00), about 24 hours ago, and WHOOP has not processed a newer one. A sleep since then is either not processed yet or was not detected, so last_night, today_so_far and any estimate refer to that earlier night and the cycle still open since then."
+    );
+  });
+
   it("reports no_current_cycle when the newest cycle is closed", async () => {
     const live = liveShapedUser();
     const user: WhoopUserFixture = {

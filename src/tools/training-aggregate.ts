@@ -1129,6 +1129,13 @@ export async function getSportBreakdownAggregate(
 
   const status: SportBreakdownAggregateOutput["status"] =
     scored.length === 0 ? "no_workouts" : "available";
+  // As in the standard variant: no_workouts without any worn day is an absence
+  // of WHOOP data, not a block without training. (Released per-week worn days
+  // already show this, so the note adds no disclosure.)
+  const wornInBlock = data.days.some(
+    (day) => day.date >= block.start && day.date <= block.end && day.worn === true
+  );
+  if (scored.length === 0 && !wornInBlock) notes.push("No WHOOP data for this block.");
   if (filter === null && pooledNames.length > 0) {
     notes.push(
       pool.length >= AGGREGATE_WEEK_MIN_SAMPLES
