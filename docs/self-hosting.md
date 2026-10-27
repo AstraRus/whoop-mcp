@@ -1,8 +1,9 @@
 # Set up your own WHOOP server for Claude
 
-This guide takes you from nothing to asking Claude _"How am I doing today?"_ and
-getting an answer from your own WHOOP data. It takes about 30 minutes and needs
-no coding: you copy and paste a few values between four websites.
+This guide walks you through setting up your own server and connecting it to
+Claude, up to the point where you ask _"How am I doing today?"_ and get an
+answer from your own WHOOP data. It takes about half an hour. You won't write
+any code; you'll copy a few values between GitHub, Railway, WHOOP and Claude.
 
 ```mermaid
 flowchart LR
@@ -199,6 +200,11 @@ by itself.
 
 The connector is saved to your Claude account, so it also works in the Claude
 desktop app when you're signed in to the same account.
+
+It gets more useful next to your other connectors. With Google Calendar
+switched on as well, you can ask something like _"Based on my WHOOP data and
+my calendar, plan my training for next week"_, and Claude will check both
+(and search the web for research if you ask it to).
 
 **If you've only just started wearing WHOOP:** WHOOP spends the first days
 calibrating. Some values are missing or marked as calibrating until then, and

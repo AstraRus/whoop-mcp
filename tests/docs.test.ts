@@ -296,10 +296,9 @@ function variablesReadByCode(): Set<string> {
 describe("README and setup guide", () => {
   it("names every standard-mode tool in the README and states the counts", () => {
     const standard = inventory.get("standard")!;
-    expect(README).toContain(`**${standard.tools.length} read-only tools**`);
-    expect(README).toContain(
-      `${standard.prompts.length} prompts and ${standard.resources.length} resources`
-    );
+    expect(README).toContain(`${standard.tools.length} tools`);
+    expect(README).toContain(`${standard.prompts.length} prompts`);
+    expect(README).toContain(`${standard.resources.length} resources`);
     const named = new Set([...README.matchAll(/`([a-z][a-z0-9_]+)`/g)].map((match) => match[1]!));
     for (const tool of standard.tools) expect(named.has(tool), tool).toBe(true);
   });

@@ -2,10 +2,7 @@
 
 # whoop-mcp
 
-**Your WHOOP data, in a conversation with Claude.**
-
-Ask about your recovery, sleep, strain and workouts in plain language and get
-answers built from your own numbers.
+Connect your WHOOP to Claude.
 
 [![CI](https://github.com/AstraRus/whoop-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/AstraRus/whoop-mcp/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-yellow.svg)](LICENSE)
@@ -13,114 +10,137 @@ answers built from your own numbers.
 [![MCP server](https://img.shields.io/badge/MCP-server-8A2BE2.svg)](https://modelcontextprotocol.io/)
 [![Self-host on Railway](https://img.shields.io/badge/self--host-Railway-0B0D0E.svg?logo=railway&logoColor=white)](docs/self-hosting.md)
 
-**[Set up your own →](docs/self-hosting.md)** &nbsp;·&nbsp; [What you can ask](#what-you-can-ask) &nbsp;·&nbsp; [What it can do](#what-it-can-do) &nbsp;·&nbsp; [Privacy](#privacy-and-security) &nbsp;·&nbsp; [Reference](docs/reference.md)
+[Set up your own](docs/self-hosting.md) · [Example](#example-a-training-week-that-fits-your-calendar) · [What you can ask](#what-you-can-ask) · [Privacy](#privacy) · [Reference](docs/reference.md)
 
 </div>
 
+whoop-mcp is a small server that gives Claude access to your WHOOP data:
+recovery, HRV, resting heart rate, sleep and sleep stages, strain, workouts
+with heart-rate zones, and your body measurements. That's everything WHOOP
+makes available to outside apps. You run your own copy on Railway, which costs
+well under a dollar a month, and add it to Claude as a connector.
+
+After that you can talk to Claude about your data the way you would with a
+coach who has seen all of it. And since it's an ordinary Claude connector,
+Claude can use it together with everything else it has access to: your
+calendar, your email, web search and any other connector you've added.
+
+## Example: a training week that fits your calendar
+
 <p align="center">
-  <img src="images/Claude-chat-with-whoop-mcp-integrated.png" alt="Claude answering “How was my recovery this week?” with average recovery, HRV and resting heart rate and a chart of daily recovery scores" width="720">
+  <img src="images/example-workout-plan.svg" alt="An example conversation. The user asks Claude to build next week's workout plan from their WHOOP data, goals and calendar. Claude reads the calendar through Google Calendar, reads recovery, sleep and training load through whoop-mcp, searches the web for research, and answers with a day-by-day plan where every line names its source: the calendar, WHOOP data or a cited study." width="760">
 </p>
 
-whoop-mcp is a [Model Context Protocol](https://modelcontextprotocol.io/) (MCP)
-server for the [WHOOP](https://www.whoop.com/) API. You run your own copy (on
-Railway it costs less than a dollar a month), add it to Claude as a custom
-connector, and Claude can then look at your WHOOP data whenever you ask about it.
+To answer this one question, Claude looked at your calendar to see when you
+actually have time, read your recovery, sleep and training load from WHOOP,
+and searched for research on how to arrange the week. In the answer, every
+day of the plan says where it came from, so you can check each part. On your
+own, you'd be switching between your calendar, the WHOOP app and a search
+engine to piece this together.
 
-- **Your own server, your own data.** Each person runs their own copy, signed in to their own WHOOP account. Nobody else's server ever sees your data.
-- **Read-only.** It cannot change anything in your WHOOP account.
-- **Honest numbers.** Missing data stays missing instead of turning into 0, and recoveries from WHOOP's first calibration days are marked as such.
-- **Your days, not UTC days.** Sleep, recovery, strain and workouts are placed on your local days the way the WHOOP app shows them.
+The picture is an illustration: the numbers and events are made up, but the
+steps are what Claude does when these connectors are switched on.
 
 ## What you can ask
 
-> _"How am I doing today?"_
->
-> _"What happened yesterday: sleep, strain and workouts?"_
->
-> _"How did I sleep this week compared with what WHOOP says I needed?"_
->
-> _"Compare my recovery over the last two weeks with the two weeks before."_
->
-> _"How is my training load compared with the last four weeks?"_
->
-> _"Debrief my last run."_
->
-> _"Export the last 30 days as a CSV."_
->
-> _"Why is today's data missing?"_
+About your WHOOP data:
 
-Claude picks the right tools by itself. Ready-made prompts cover a morning
-briefing, an evening briefing, a weekly health review, a workout recap and more.
+- "How am I doing today?"
+- "What happened yesterday? Sleep, strain, workouts."
+- "Did I sleep enough this week compared with what WHOOP said I needed?"
+- "How do the last two weeks of recovery compare with the two weeks before?"
+- "Is my training load going up or down?"
+- "Go through my last run with me."
+- "Export the last 30 days as a CSV."
+- "Why is today's data missing?"
 
-## What it can do
+Together with other connectors and web search:
 
-**28 read-only tools**, grouped by what they answer:
+- "Which days next week have room for a hard session, given my meetings and how I've been sleeping?"
+- "Draft an email to my coach about this week's recovery and training."
+- "My HRV has been dropping. What does the research say, and how does my week compare?"
 
-| Area                  | Tools                                                                                                                                                                                                 | For questions about                                                                     |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Today and single days | `get_today`, `get_day`, `get_calendar`, `get_sync_status`                                                                                                                                             | today's recovery, sleep and strain; one day in detail; a day-by-day view; missing data |
-| Weeks and trends      | `get_weekly_summary`, `compare_periods`, `get_trend`, `get_baselines`                                                                                                                                 | how a week went, two periods side by side, trends, your usual ranges                    |
-| Sleep                 | `get_sleep_debt`, `get_sleep_analysis`, `get_sleep_need`                                                                                                                                              | sleep debt, timing, consistency and stages, an estimate of your next sleep need       |
-| Recovery              | `get_recovery_analysis`, `get_recovery_drivers`                                                                                                                                                       | recovery over time and which habits go along with better or worse recovery             |
-| Training              | `get_training_load`, `get_sport_breakdown`, `get_workout_log`, `get_workout_context`, `get_personal_records`                                                                                          | load against your recent average, time per sport, workout history, debriefs, bests     |
-| Your data             | `export_health_data`, `get_recovery_collection`, `get_sleep_collection`, `get_workout_collection`, `get_cycle_collection`, `get_sleep_by_id`, `get_workout_by_id`, `get_cycle_by_id`, `get_profile`, `get_body_measurement` | CSV or JSON export, raw WHOOP records, profile, height, weight and max heart rate       |
+There are also ready-made prompts, such as a morning briefing, an evening
+briefing and a weekly review.
 
-There are also 13 prompts and 6 resources. Every tool, prompt and resource is
-described in the [reference](docs/reference.md#tools).
+## What Claude can look up
 
-**What WHOOP doesn't share:** WHOOP's API has no Strength Trainer exercises,
-sets or weights, journal entries, stress, steps, VO2 max, continuous heart rate,
-or Sleep Planner and coaching, so no tool can show them.
+The server has 28 tools. Claude chooses them on its own, so you never need to
+name them.
+
+| Topic                 | Tools                                                                                                                                                                                                 | Example question                                  |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| Today and single days | `get_today`, `get_day`, `get_calendar`, `get_sync_status`                                                                                                                                             | "How did I sleep last night?"                     |
+| Weeks and trends      | `get_weekly_summary`, `compare_periods`, `get_trend`, `get_baselines`                                                                                                                                 | "Was this week better than last week?"            |
+| Sleep                 | `get_sleep_debt`, `get_sleep_analysis`, `get_sleep_need`                                                                                                                                              | "Am I building up sleep debt?"                    |
+| Recovery              | `get_recovery_analysis`, `get_recovery_drivers`                                                                                                                                                       | "What usually comes before my best recoveries?"   |
+| Training              | `get_training_load`, `get_sport_breakdown`, `get_workout_log`, `get_workout_context`, `get_personal_records`                                                                                          | "How did my last run compare with my usual?"      |
+| Raw data and export   | `export_health_data`, `get_recovery_collection`, `get_sleep_collection`, `get_workout_collection`, `get_cycle_collection`, `get_sleep_by_id`, `get_workout_by_id`, `get_cycle_by_id`, `get_profile`, `get_body_measurement` | "Export my last 30 days as a CSV."                |
+
+It also has 13 prompts and 6 resources. The [reference](docs/reference.md#tools)
+describes each of them.
+
+WHOOP doesn't share everything with outside apps. Strength Trainer exercises
+and weights, journal answers, stress, steps, VO2 max and continuous heart rate
+aren't available through its API, so Claude can't see them.
 
 ## Set up your own
 
 You need a WHOOP membership, a Claude account (the free plan allows one custom
-connector), free GitHub and Railway accounts, and about 30 minutes. No coding.
+connector), and free GitHub and Railway accounts. Setup takes about half an
+hour and doesn't involve writing code: you fork this repository, deploy it on
+Railway, create a WHOOP developer app, sign in to WHOOP once and add the server
+to Claude.
 
-1. **Copy this repository** to your GitHub account (Fork).
-2. **Create a server on Railway** from your copy and give it an address and storage.
-3. **Create a WHOOP developer app** (free) that points to that address.
-4. **Paste the settings** into Railway and deploy.
-5. **Sign in to WHOOP** once, with the link your server prints.
-6. **Add your server to Claude** as a custom connector.
+**[Follow the setup guide](docs/self-hosting.md)**
 
-**[Open the step-by-step setup guide →](docs/self-hosting.md)**
+Railway's trial gives you $5 for the first 30 days. After that its free plan
+includes $1 of usage a month, and one server running around the clock has used
+about $0.70 a month (October 2026). If you also run servers for other people,
+Railway's Hobby plan ($5 a month) covers several.
 
-**Cost:** Railway's trial includes $5 of credit for 30 days. After that, its free
-plan includes $1 of usage a month, and one server running around the clock used
-about $0.70 a month (measured in October 2026). Railway's $5-a-month Hobby plan
-covers several servers, for example one for each person in a family.
+## Privacy
 
-## Privacy and security
+Each person runs their own server, signed in to their own WHOOP account. Anyone
+who has your server's address and your access token can read your data, so keep
+the token to yourself. If a friend wants to use this, help them set up their
+own server ([how](docs/self-hosting.md#hosting-a-server-for-someone-else)).
 
-- **One server per person.** A server holds one WHOOP sign-in. Anyone with your server's address _and_ its access token can read your data through it, so keep the token private. To share with a friend, help them set up their own server ([how](docs/self-hosting.md#hosting-a-server-for-someone-else)).
-- **Nothing stored but the sign-in.** The only file the server writes is its WHOOP sign-in (`tokens.json` on your Railway volume). Health data is cached in memory only, for minutes to a few hours.
-- **No third parties.** Data goes from WHOOP to your server to Claude when Claude calls a tool. There is no analytics or telemetry, and logs never contain health data, tokens or request contents.
-- **Optional aggregate mode** releases only weekly summaries instead of daily values ([privacy modes](docs/reference.md#privacy-modes)).
+The server can only read from WHOOP and can't change anything there. The one
+thing it saves is its WHOOP sign-in. Health data stays in memory for a short
+while to save requests and is never written to disk. Nothing is sent anywhere
+except to Claude when Claude asks, and the logs contain no health data or
+tokens. If you want even less detail to leave the server, an optional mode
+gives out weekly summaries only ([privacy modes](docs/reference.md#privacy-modes)).
 
 ## Other ways to run it
 
-- **Claude Desktop on your own computer:** no hosting, but it only works on that computer while it's on. See [running on your own computer](docs/reference.md#running-on-your-own-computer-claude-desktop).
-- **Docker, Fly.io or another host:** see [deployment](docs/reference.md#deployment-docker--cloud-hosting).
+- On your own computer with Claude Desktop, without any hosting. It then only
+  works on that computer while it's on. See
+  [running on your own computer](docs/reference.md#running-on-your-own-computer-claude-desktop).
+- With Docker, on Fly.io or on your own server. See
+  [deployment](docs/reference.md#deployment-docker--cloud-hosting).
 
-## Keeping it up to date
+## Updating
 
-On your copy's GitHub page, click **Sync fork → Update branch**. Railway rebuilds
-and restarts your server within a few minutes, and your WHOOP sign-in is kept.
+If you forked this repository, open your fork on GitHub and click
+**Sync fork**, then **Update branch**. Railway notices the change and
+redeploys within a few minutes. Your WHOOP sign-in is kept.
 
 ## Documentation
 
-- [Setup guide](docs/self-hosting.md): your own server, step by step
-- [Reference](docs/reference.md): every tool, resource and prompt, privacy modes, configuration, troubleshooting, development
-- [Railway runbook](docs/deploy-railway.md): running a deployment, verification, secret rotation, rollback
+- [Setup guide](docs/self-hosting.md)
+- [Reference](docs/reference.md): every tool, prompt and setting, troubleshooting and development
+- [Railway runbook](docs/deploy-railway.md): running and maintaining a deployment
 - [Changelog](CHANGELOG.md)
 
-## Credits and license
+## Credits
 
-Based on [whoop-ai-mcp](https://github.com/shashankswe2020-ux/whoop-mcp) by
-[@shashankswe2020-ux](https://github.com/shashankswe2020-ux). This repository
-continues from its version 0.7.0; see the [changelog](CHANGELOG.md) for what
-0.8.0 added. Released under the [MIT license](LICENSE).
+This project started from version 0.7.0 of
+[whoop-ai-mcp](https://github.com/shashankswe2020-ux/whoop-mcp) by
+[@shashankswe2020-ux](https://github.com/shashankswe2020-ux) and has been
+developed separately since. The [changelog](CHANGELOG.md) lists what changed.
+It's released under the [MIT license](LICENSE).
 
-Not affiliated with, endorsed by or supported by WHOOP or Anthropic. WHOOP is a
-trademark of WHOOP, Inc. Claude is a trademark of Anthropic, PBC.
+This project isn't affiliated with WHOOP or Anthropic. WHOOP is a trademark of
+WHOOP, Inc. Claude is a trademark of Anthropic, PBC.
