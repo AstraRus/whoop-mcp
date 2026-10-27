@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Documentation, tests, CI and dependency updates; the server's own code is unchanged.
+
+### Added
+
+- **README for people who want their own server**: what it does, example
+  questions, the 28 tools by area, privacy and security, costs and links.
+- **`docs/self-hosting.md`**: a step-by-step first deploy on Railway without
+  coding (fork, address and volume, WHOOP developer app, access token,
+  variables, one-time WHOOP sign-in, Claude custom connector), with costs,
+  updates, troubleshooting and hosting a server for someone else.
+- `tests/docs.test.ts` checks that the README names every tool and states the
+  counts, that the guide's Railway variables are read by the code, and that the
+  port, volume, sign-in timeout and log lines it quotes match the code.
+
+### Changed
+
+- The former README is now `docs/reference.md` (tools, resources, prompts,
+  privacy modes, environment table, hosting, troubleshooting, development). Its
+  install section runs this repository from source; the npm package and MCP
+  Registry entry belong to the upstream project.
+- npm publishing and the Pages deployment run only in the upstream repository;
+  release notes elsewhere link to the setup guide.
+
+### Security
+
+- Production dependencies updated within their ranges for advisories published
+  since 0.8.0 (`npm audit --omit=dev` is clean again):
+  `@modelcontextprotocol/sdk` 1.30.0 → 1.32.2, `zod` 4.4.3 → 4.6.7, and the
+  SDK's `body-parser`, `proxy-addr`, `hono`, `ip-address`, `fast-uri`, `qs` and
+  `iconv-lite`. The SDK's server-side additions in these versions are opt-in
+  and not used. What clients and logs see changes only slightly:
+  - nullable fields in tool output schemas are written as `"type": [..., "null"]`
+    instead of an equivalent `anyOf`;
+  - WHOOP timestamps must include seconds (zod 4.6's date-time pattern; WHOOP
+    always sends seconds and milliseconds);
+  - prompts whose arguments are all optional can be requested without an
+    `arguments` object (previously an error);
+  - zod errors carry no stack frames, so their log events list only the
+    `path:code` issues.
+  The tools-list and prompt goldens were regenerated for these changes only.
+
+### Fixed
+
+- Two tests (`get_trend` standard statistics, `get_weekly_summary` standard
+  recovery) read the real clock and failed once their fixture week was more
+  than a few weeks old; they now pin the clock.
+- Coverage runs no longer fail with vitest's `Timeout calling "onTaskUpdate"`:
+  a setup file yields to the event loop after every test, so long
+  fixture-backed files cannot starve the worker's RPC.
+- The Docker smoke workflow reads the server's environment as the server's own
+  user; without `CAP_SYS_PTRACE`, root cannot read `/proc/<pid>/environ` of the
+  `node` process.
+
 ## [0.8.0] - 2026-09-17
 
 **Training, sleep and recovery analysis on local days**

@@ -1,15 +1,18 @@
 /**
  * Documentation stays in step with the code:
- * - README has a tool reference heading and a privacy matrix row for every tool
- *   of either privacy mode, and matrix rows for every resource and prompt;
+ * - the reference (docs/reference.md) has a tool heading and a privacy matrix row
+ *   for every tool of either privacy mode, and matrix rows for every resource
+ *   and prompt;
  * - every environment variable read in src/ (process.env.NAME,
  *   process.env["NAME"], getRequiredEnv("NAME"), env.NAME on an injected
  *   environment, env[CONSTANT] resolved through its string constant) and by the
- *   container entrypoint appears in the README environment table, and the
+ *   container entrypoint appears in the reference's environment table, and the
  *   table lists nothing the code does not read;
  * - the CHANGELOG has a heading for the package version, and server.json
  *   carries the same version;
- * - the counts the README and CLAUDE.md state match the server.
+ * - the counts the reference, README and CLAUDE.md state match the server;
+ * - the README and the setup guide link to each other and use the variables
+ *   and paths of a working first deploy.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -24,7 +27,9 @@ const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (path: string): string =>
   readFileSync(join(ROOT, path), "utf8").replace(/\r\n/g, "\n");
 
+const REFERENCE = read("docs/reference.md");
 const README = read("README.md");
+const SELF_HOSTING = read("docs/self-hosting.md");
 const CHANGELOG = read("CHANGELOG.md");
 const CLAUDE = read("CLAUDE.md");
 const RAILWAY = read("docs/deploy-railway.md");
@@ -189,34 +194,36 @@ function union(key: keyof Inventory): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// README tool reference and privacy matrix
+// Reference: tool reference and privacy matrix
 // ---------------------------------------------------------------------------
 
-describe("README tool reference", () => {
+describe("Reference tool reference", () => {
   it("has a heading for every tool of both privacy modes", () => {
     const tools = union("tools");
     expect(tools.length).toBe(28);
     for (const tool of tools) {
-      expect(README, `### \`${tool}\``).toMatch(new RegExp(`^### \`${tool}\`$`, "m"));
+      expect(REFERENCE, `### \`${tool}\``).toMatch(new RegExp(`^### \`${tool}\`$`, "m"));
     }
   });
 
   it("has no heading for a tool the server does not register", () => {
     const tools = new Set(union("tools"));
-    const headings = [...README.matchAll(/^### `([a-z][a-z0-9_]+)`$/gm)].map((match) => match[1]!);
+    const headings = [...REFERENCE.matchAll(/^### `([a-z][a-z0-9_]+)`$/gm)].map(
+      (match) => match[1]!
+    );
     for (const heading of headings) expect(tools.has(heading), heading).toBe(true);
   });
 
   it("lists the WHOOP calls of every tool", () => {
     for (const tool of union("tools")) {
-      const reference = section(README, `### \`${tool}\``);
+      const reference = section(REFERENCE, `### \`${tool}\``);
       expect(reference, tool).toContain("**WHOOP calls:**");
     }
   });
 });
 
-describe("README privacy matrix", () => {
-  const matrix = (): string => section(README, "## Privacy modes");
+describe("Reference privacy matrix", () => {
+  const matrix = (): string => section(REFERENCE, "## Privacy modes");
 
   it("has a row for every tool with its availability per mode", () => {
     const text = matrix();
@@ -249,20 +256,22 @@ describe("README privacy matrix", () => {
   });
 });
 
-describe("README resources and prompts", () => {
+describe("Reference resources and prompts", () => {
   it("documents every resource and prompt", () => {
-    const resources = tableNames(section(README, "## Resources"));
+    const resources = tableNames(section(REFERENCE, "## Resources"));
     expect(resources.sort()).toEqual(union("resources"));
-    const prompts = tableNames(section(README, "## Prompts"));
+    const prompts = tableNames(section(REFERENCE, "## Prompts"));
     expect(prompts.sort()).toEqual(union("prompts"));
   });
 
   it("states the counts the server registers", () => {
     const standard = inventory.get("standard")!;
-    expect(README).toContain(`**${standard.tools.length} read-only tools**`);
-    expect(README).toContain(`**${standard.resources.length} MCP resources**`);
-    expect(README).toContain(`**${standard.prompts.length} MCP prompts**`);
-    expect(README).toContain(`**${inventory.get("aggregate")!.tools.length} tools** that release`);
+    expect(REFERENCE).toContain(`**${standard.tools.length} read-only tools**`);
+    expect(REFERENCE).toContain(`**${standard.resources.length} MCP resources**`);
+    expect(REFERENCE).toContain(`**${standard.prompts.length} MCP prompts**`);
+    expect(REFERENCE).toContain(
+      `**${inventory.get("aggregate")!.tools.length} tools** that release`
+    );
     expect(CLAUDE).toContain(
       `standard mode: ${standard.tools.length} tools, ${standard.resources.length} resources, ${standard.prompts.length} prompts`
     );
@@ -270,10 +279,91 @@ describe("README resources and prompts", () => {
 });
 
 // ---------------------------------------------------------------------------
+// README and setup guide
+// ---------------------------------------------------------------------------
+
+/** Every environment variable read in src/ or by the container entrypoint. */
+function variablesReadByCode(): Set<string> {
+  const texts = sourceFiles("src").map(read);
+  const constants = stringConstants(texts);
+  const names = new Set(texts.flatMap((text) => [...envNamesIn(text, constants)]));
+  for (const match of read("docker/entrypoint.sh").matchAll(new RegExp(`\\$\\{(${NAME}):-`, "g"))) {
+    names.add(match[1]!);
+  }
+  return names;
+}
+
+describe("README and setup guide", () => {
+  it("names every standard-mode tool in the README and states the counts", () => {
+    const standard = inventory.get("standard")!;
+    expect(README).toContain(`**${standard.tools.length} read-only tools**`);
+    expect(README).toContain(
+      `${standard.prompts.length} prompts and ${standard.resources.length} resources`
+    );
+    const named = new Set([...README.matchAll(/`([a-z][a-z0-9_]+)`/g)].map((match) => match[1]!));
+    for (const tool of standard.tools) expect(named.has(tool), tool).toBe(true);
+  });
+
+  it("links the README, the setup guide and the reference to each other", () => {
+    expect(README).toContain("](docs/self-hosting.md)");
+    expect(README).toContain("](docs/reference.md)");
+    expect(SELF_HOSTING).toContain("](../README.md)");
+    expect(SELF_HOSTING).toContain("](reference.md)");
+    expect(REFERENCE).toContain("](self-hosting.md)");
+    expect(REFERENCE).toContain("](../README.md)");
+  });
+
+  it("gives Railway variables the server reads, with the token folder on the /data volume", () => {
+    const readByCode = variablesReadByCode();
+    const blocks = [...SELF_HOSTING.matchAll(/```env\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    expect(blocks).toHaveLength(2);
+    for (const block of blocks) {
+      const lines = block
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line !== "");
+      const names = lines.map((line) => line.slice(0, line.indexOf("=")));
+      for (const name of names)
+        expect(readByCode.has(name), `${name} is read by the code`).toBe(true);
+      for (const name of ["WHOOP_CLIENT_ID", "WHOOP_CLIENT_SECRET", "MCP_AUTH_TOKEN"]) {
+        expect(names, name).toContain(name);
+      }
+      for (const line of [
+        "WHOOP_REDIRECT_URI=https://${{RAILWAY_PUBLIC_DOMAIN}}/callback",
+        "WHOOP_MCP_TOKEN_DIR=/data",
+        "MCP_TRUST_PROXY=1",
+        "CALLBACK_HOST=0.0.0.0",
+        "CALLBACK_TIMEOUT_MS=900000",
+      ]) {
+        expect(lines, line).toContain(line);
+      }
+    }
+    expect(SELF_HOSTING).toContain("Type **`/data`** as the mount path");
+    // The image listens on 3000, which the guide's domain must target.
+    expect(read("Dockerfile")).toMatch(/MCP_PORT=3000\b/);
+    expect(SELF_HOSTING).toContain("Enter port **`3000`**");
+    // CALLBACK_TIMEOUT_MS=900000 is the 15 minutes the guide promises.
+    expect(SELF_HOSTING).toContain("The link works for 15 minutes.");
+  });
+
+  it("quotes log lines the server really prints", () => {
+    const source = sourceFiles("src").map(read).join("\n");
+    for (const line of [
+      "If the browser didn't open, visit:",
+      "whoop authentication complete",
+      "http transport listening",
+    ]) {
+      expect(SELF_HOSTING, line).toContain(line);
+      expect(source, line).toContain(line);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Environment variables
 // ---------------------------------------------------------------------------
 
-describe("README environment table", () => {
+describe("Reference environment table", () => {
   const files = sourceFiles("src");
   const texts = files.map(read);
   const constants = stringConstants(texts);
@@ -282,7 +372,7 @@ describe("README environment table", () => {
   const fromEntrypoint = new Set(
     [...entrypoint.matchAll(new RegExp(`\\$\\{(${NAME}):-`, "g"))].map((match) => match[1]!)
   );
-  const table = (): string[] => tableNames(section(README, "### Environment variables"));
+  const table = (): string[] => tableNames(section(REFERENCE, "### Environment variables"));
 
   it("finds variables through every read pattern", () => {
     // process.env.NAME
@@ -304,7 +394,9 @@ describe("README environment table", () => {
   it("lists every variable read in src/ and by the entrypoint", () => {
     const documented = new Set(table());
     for (const name of [...fromSource, ...fromEntrypoint].sort()) {
-      expect(documented.has(name), `${name} missing from the README environment table`).toBe(true);
+      expect(documented.has(name), `${name} missing from the reference environment table`).toBe(
+        true
+      );
     }
   });
 
@@ -413,9 +505,9 @@ describe("Railway runbook", () => {
     // Docs wrap lines; compare with whitespace collapsed.
     const flat = (text: string): string => text.replace(/\s+/g, " ");
     expect(flat(RAILWAY)).toContain(`entrypoint: running as root (<reason>); ${guidance}`);
-    expect(flat(README)).toContain(`entrypoint: running as root (<reason>); ${guidance}`);
+    expect(flat(REFERENCE)).toContain(`entrypoint: running as root (<reason>); ${guidance}`);
     for (const [name, text] of [
-      ["README", README],
+      ["reference", REFERENCE],
       ["runbook", RAILWAY],
       ["CHANGELOG", CHANGELOG],
     ] as const) {
@@ -424,12 +516,12 @@ describe("Railway runbook", () => {
   });
 
   it("documents HOME for the container token folder", () => {
-    const row = rowFor(section(README, "### Environment variables"), "HOME");
+    const row = rowFor(section(REFERENCE, "### Environment variables"), "HOME");
     expect(row, "HOME row").toBeDefined();
     expect(row![2]).toContain("`$HOME/.whoop-mcp`");
     expect(row![2]).toContain("`/home/node/.whoop-mcp`");
     expect(
-      rowFor(section(README, "### Environment variables"), "WHOOP_MCP_TOKEN_DIR")![1]
+      rowFor(section(REFERENCE, "### Environment variables"), "WHOOP_MCP_TOKEN_DIR")![1]
     ).toContain("`$HOME/.whoop-mcp`");
   });
 });

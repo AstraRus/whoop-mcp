@@ -8,6 +8,10 @@ server, verifying a deploy, secret rotation, degraded startup and rollback.
 The server is single-owner: one WHOOP account, one `tokens.json`, one running
 instance.
 
+> **First time?** The [setup guide](self-hosting.md) walks through a first
+> deploy on Railway step by step, without assuming any technical background.
+> This runbook is the detailed reference for operating a deployment.
+
 > **Never run two instances with the same `tokens.json`.** WHOOP rotates the
 > refresh token on every refresh. When two processes (two replicas, a local copy
 > of the production file, a staging service sharing the volume) refresh with the
@@ -134,7 +138,7 @@ Optional: `WHOOP_WEBHOOKS=1` (section 6), `WHOOP_RATE_LIMIT_PER_MINUTE`
 `WHOOP_MCP_PRIVACY_MODE=aggregate`, `MCP_ALLOWED_ORIGINS`, `LOG_LEVEL`,
 `LOG_FORMAT`. Railway sets `RAILWAY_GIT_COMMIT_SHA` itself; the server reports
 its first 12 characters as `commit`. The full list is in the
-[README](../README.md#environment-variables).
+[reference](reference.md#environment-variables).
 
 ## 4. First WHOOP sign-in on the hosted server
 

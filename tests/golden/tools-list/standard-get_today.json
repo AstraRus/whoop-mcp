@@ -27,23 +27,15 @@
                 "type": "number"
               },
               "spo2_pct": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "type": [
+                  "number",
+                  "null"
                 ]
               },
               "skin_temp_celsius": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "type": [
+                  "number",
+                  "null"
                 ]
               },
               "user_calibrating": {
@@ -102,33 +94,21 @@
                 "type": "number"
               },
               "performance_pct": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "type": [
+                  "number",
+                  "null"
                 ]
               },
               "efficiency_pct": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "type": [
+                  "number",
+                  "null"
                 ]
               },
               "respiratory_rate": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
+                "type": [
+                  "number",
+                  "null"
                 ]
               },
               "disturbances": {
@@ -146,15 +126,11 @@
                 "description": "Time in bed without strap data"
               },
               "consistency_pct": {
-                "anyOf": [
-                  {
-                    "type": "number"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "description": "WHOOP sleep consistency; null when WHOOP reports none or reports 0 while still calibrating"
+                "description": "WHOOP sleep consistency; null when WHOOP reports none or reports 0 while still calibrating",
+                "type": [
+                  "number",
+                  "null"
+                ]
               },
               "need_hours_including_debt": {
                 "type": "number",
@@ -316,23 +292,15 @@
                   ]
                 },
                 "fetched_at": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "source_updated_at": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
+                  "type": [
+                    "string",
+                    "null"
                   ]
                 },
                 "cache_status": {

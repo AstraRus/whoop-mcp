@@ -23,6 +23,8 @@ jobs:
   deploy:
     name: Build & Deploy
     runs-on: ubuntu-latest
+    # The site in site/ is the upstream project's page; forks do not deploy it.
+    if: github.repository == 'shashankswe2020-ux/whoop-mcp'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

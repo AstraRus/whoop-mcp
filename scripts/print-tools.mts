@@ -3,11 +3,12 @@
  * tools/list entries (name, title, description, input schema, whether an
  * output schema is advertised), the resources and the prompts.
  *
- * Used to write and check the README tool reference. It never contacts WHOOP:
+ * Used to write and check the tool reference in docs/reference.md. It never
+ * contacts WHOOP:
  * the server gets a client that refuses every request, and no tool is called.
  *
  *   npx tsx scripts/print-tools.mts              # JSON for both modes
- *   npx tsx scripts/print-tools.mts --markdown   # a README-style outline
+ *   npx tsx scripts/print-tools.mts --markdown   # a reference-style outline
  *   npx tsx scripts/print-tools.mts aggregate    # one mode only
  */
 

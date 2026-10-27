@@ -22,7 +22,7 @@
  *   (the least-squares estimate from released values), the contribution of the
  *   other records, at half the family's value range, exceeds the step.
  *
- * Not linear, and therefore not part of the rank check (see the README's
+ * Not linear, and therefore not part of the rank check (see the reference's
  * privacy notes): standard deviations, baseline medians and quartiles, change
  * percentages and directions, zone shares, weighted heart rate, circular
  * bedtime statistics, counts, and the weekly acute:chronic values, which are

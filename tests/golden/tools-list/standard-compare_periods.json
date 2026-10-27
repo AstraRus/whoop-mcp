@@ -132,23 +132,15 @@
         "type": "object",
         "properties": {
           "period_a_avg": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "period_b_avg": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "period_a_n": {
@@ -162,13 +154,9 @@
             "maximum": 9007199254740991
           },
           "change_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "direction": {
@@ -207,26 +195,18 @@
         "type": "object",
         "properties": {
           "period_a_avg_hours": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Average time asleep per main sleep (naps excluded)"
+            "description": "Average time asleep per main sleep (naps excluded)",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "period_b_avg_hours": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Average time asleep per main sleep (naps excluded)"
+            "description": "Average time asleep per main sleep (naps excluded)",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "period_a_n": {
             "type": "integer",
@@ -239,13 +219,9 @@
             "maximum": 9007199254740991
           },
           "change_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "direction": {
@@ -272,23 +248,15 @@
         "type": "object",
         "properties": {
           "period_a_avg": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "period_b_avg": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "period_a_n": {
@@ -302,13 +270,9 @@
             "maximum": 9007199254740991
           },
           "change_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "direction": {
@@ -352,37 +316,25 @@
                     "description": "Counted local days with a WHOOP cycle placed on them (the strap was worn)"
                   },
                   "sessions_per_week": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "Sessions per 7 worn days; null unless both periods have at least 7 worn days"
+                    "description": "Sessions per 7 worn days; null unless both periods have at least 7 worn days",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   },
                   "workout_minutes_per_worn_day": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "Workout minutes (start to end) per worn day, 0 on worn days without workouts; null unless both periods have at least 7 worn days"
+                    "description": "Workout minutes (start to end) per worn day, 0 on worn days without workouts; null unless both periods have at least 7 worn days",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   },
                   "trimp_per_worn_day": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "Edwards TRIMP (WHOOP heart-rate zone 1-5 minutes weighted 1-5) per worn day; days with a workout recorded below 90% or not scored are left out; null unless both periods have at least 7 worn days"
+                    "description": "Edwards TRIMP (WHOOP heart-rate zone 1-5 minutes weighted 1-5) per worn day; days with a workout recorded below 90% or not scored are left out; null unless both periods have at least 7 worn days",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
@@ -410,37 +362,25 @@
                     "description": "Counted local days with a WHOOP cycle placed on them (the strap was worn)"
                   },
                   "sessions_per_week": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "Sessions per 7 worn days; null unless both periods have at least 7 worn days"
+                    "description": "Sessions per 7 worn days; null unless both periods have at least 7 worn days",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   },
                   "workout_minutes_per_worn_day": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "Workout minutes (start to end) per worn day, 0 on worn days without workouts; null unless both periods have at least 7 worn days"
+                    "description": "Workout minutes (start to end) per worn day, 0 on worn days without workouts; null unless both periods have at least 7 worn days",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   },
                   "trimp_per_worn_day": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ],
-                    "description": "Edwards TRIMP (WHOOP heart-rate zone 1-5 minutes weighted 1-5) per worn day; days with a workout recorded below 90% or not scored are left out; null unless both periods have at least 7 worn days"
+                    "description": "Edwards TRIMP (WHOOP heart-rate zone 1-5 minutes weighted 1-5) per worn day; days with a workout recorded below 90% or not scored are left out; null unless both periods have at least 7 worn days",
+                    "type": [
+                      "number",
+                      "null"
+                    ]
                   }
                 },
                 "required": [
@@ -456,33 +396,21 @@
                 "type": "object",
                 "properties": {
                   "sessions_per_week": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
+                    "type": [
+                      "number",
+                      "null"
                     ]
                   },
                   "workout_minutes_per_worn_day": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
+                    "type": [
+                      "number",
+                      "null"
                     ]
                   },
                   "trimp_per_worn_day": {
-                    "anyOf": [
-                      {
-                        "type": "number"
-                      },
-                      {
-                        "type": "null"
-                      }
+                    "type": [
+                      "number",
+                      "null"
                     ]
                   }
                 },
