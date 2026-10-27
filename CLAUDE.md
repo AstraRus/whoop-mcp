@@ -73,10 +73,13 @@ src/
     └── get-*.ts, compare-periods.ts, export-health-data.ts, training-aggregate.ts   # One file per tool
 
 tests/                        # Mirrors src/, plus:
-├── helpers/                  # whoop-fixture-client.ts, whoop-users.ts (liveShapedUser, matureUser, stressUser), contract.ts
+├── helpers/                  # whoop-fixture-client.ts, whoop-users.ts (liveShapedUser, matureUser, stressUser), contract.ts, yield-between-tests.ts (setup file)
 ├── golden/                   # Golden JSON of every legacy tool, resource and prompt (prettier-ignored)
 ├── inventory.test.ts, guide.test.ts, docs.test.ts, size-guard.test.ts, aggregate-cross-tool.test.ts, aggregate-privacy.test.ts
 docker/entrypoint.sh          # Token-folder preparation, switch to the node user
+README.md                     # Landing page: what it does, what you can ask, privacy, links
+docs/self-hosting.md          # Step-by-step first deploy on Railway (no coding)
+docs/reference.md             # Tools, resources, prompts, privacy modes, env table, hosting, troubleshooting
 docs/deploy-railway.md        # Railway runbook
 scripts/print-tools.mts       # tools/list, resources, prompts, instructions per mode
 ```

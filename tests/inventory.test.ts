@@ -2,7 +2,8 @@
  * The final client-visible inventory of the 0.8.0 server: exact tools,
  * resources and prompts per privacy mode, and the listing rules every tool
  * follows. Adding, removing or renaming anything a client can see must update
- * this file together with the README tool reference (tests/docs.test.ts).
+ * this file together with the tool reference in docs/reference.md
+ * (tests/docs.test.ts).
  */
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

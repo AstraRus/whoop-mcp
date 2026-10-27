@@ -909,13 +909,15 @@ describe("get_weekly_summary output contract", () => {
       );
       // Workout totals from 3 workouts are shown, rounded.
       expect(sparse.workouts).toEqual({ count: 3, total_strain: 26, total_calories_kj: 3800 });
+
+      // Standard mode shows the current week as it stands.
+      vi.setSystemTime(NOW);
+      const standard = (await callWeekly(fakeWhoop(calibratingUser()).client, "standard"))
+        .structuredContent!;
+      expect(standard.recovery).toMatchObject({ min_score: 66, max_score: 95 });
     } finally {
       vi.useRealTimers();
     }
-
-    const standard = (await callWeekly(fakeWhoop(calibratingUser()).client, "standard"))
-      .structuredContent!;
-    expect(standard.recovery).toMatchObject({ min_score: 66, max_score: 95 });
   });
 });
 

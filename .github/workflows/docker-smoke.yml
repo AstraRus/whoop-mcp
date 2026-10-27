@@ -167,12 +167,15 @@ jobs:
             [ -n "$pid" ] || fail "$1: no node server process"
             docker exec "$1" awk '/^Uid:/ {print $2}' "/proc/$pid/status"
           }
-          # The server's environment, one variable per line.
+          # The server's environment, one variable per line. Read as the server's own
+          # user: without CAP_SYS_PTRACE, root cannot read /proc/<pid>/environ of a
+          # process owned by another user.
           node_env() {
-            local pid
+            local pid uid
             pid=$(node_pid "$1")
             [ -n "$pid" ] || fail "$1: no node server process"
-            docker exec "$1" sh -c "tr '\\0' '\\n' < /proc/$pid/environ"
+            uid=$(docker exec "$1" awk '/^Uid:/ {print $2}' "/proc/$pid/status")
+            docker exec -u "$uid" "$1" sh -c "tr '\\0' '\\n' < /proc/$pid/environ"
           }
           # Whether the server's environment has the exact line NAME=value.
           env_has_line() { # container line

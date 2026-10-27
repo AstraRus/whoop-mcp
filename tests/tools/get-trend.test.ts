@@ -844,9 +844,15 @@ describe("get_trend output contract", () => {
   });
 
   it("keeps full statistics for the same sparse data in standard mode", async () => {
-    const result = await callTrend(sparse, "recovery", "standard");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    try {
+      const result = await callTrend(sparse, "recovery", "standard");
 
-    expect(result.structuredContent?.statistics).toMatchObject({ min: 66, max: 95 });
+      expect(result.structuredContent?.statistics).toMatchObject({ min: 66, max: 95 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

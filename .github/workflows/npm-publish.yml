@@ -12,6 +12,8 @@ jobs:
   publish:
     name: Publish to npm
     runs-on: ubuntu-latest
+    # The npm package belongs to the upstream repository; forks never publish it.
+    if: github.repository == 'shashankswe2020-ux/whoop-mcp'
 
     steps:
       - name: Checkout

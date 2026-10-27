@@ -5,6 +5,8 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/**/*.test.ts"],
+    // Lets each worker read vitest's own progress replies between tests (see the file).
+    setupFiles: ["tests/helpers/yield-between-tests.ts"],
     // Fixture-backed tool tests (months of synthetic history through the MCP
     // server) can exceed vitest's 5 s default when the whole suite runs in parallel.
     testTimeout: 30_000,

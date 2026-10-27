@@ -57,6 +57,26 @@ jobs:
           echo "$NOTES" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
 
+      # The npm package is published from the upstream repository only; other
+      # repositories (forks) point to the self-hosting guide instead.
+      - name: Release footer
+        id: footer
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          {
+            echo "text<<EOF"
+            if [ "$GITHUB_REPOSITORY" = "shashankswe2020-ux/whoop-mcp" ]; then
+              echo "📦 **npm:** [\`whoop-ai-mcp@${GITHUB_REF_NAME}\`](https://www.npmjs.com/package/whoop-ai-mcp/v/${VERSION})"
+              echo
+              echo "Install: \`npm install -g whoop-ai-mcp\` or use \`npx whoop-ai-mcp\`"
+            else
+              echo "🚀 **Set up your own server:** [setup guide](https://github.com/${GITHUB_REPOSITORY}/blob/${GITHUB_REF_NAME}/docs/self-hosting.md)"
+              echo
+              echo "Already running one? Click **Sync fork** on your copy's GitHub page; Railway redeploys it automatically."
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -65,7 +85,5 @@ jobs:
 
             ---
 
-            📦 **npm:** [`whoop-ai-mcp@${{ github.ref_name }}`](https://www.npmjs.com/package/whoop-ai-mcp/v/${{ steps.changelog.outputs.version }})
-
-            Install: `npm install -g whoop-ai-mcp` or use `npx whoop-ai-mcp`
+            ${{ steps.footer.outputs.text }}
           generate_release_notes: false
