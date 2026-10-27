@@ -24,53 +24,33 @@
         "type": "object",
         "properties": {
           "average_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "min_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "max_score": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "average_hrv": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "average_rhr": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "trend": {
@@ -103,34 +83,22 @@
         "type": "object",
         "properties": {
           "average_duration_hours": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Average hours asleep (light + slow-wave + REM) per main sleep; naps and time awake in bed excluded"
+            "description": "Average hours asleep (light + slow-wave + REM) per main sleep; naps and time awake in bed excluded",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "average_performance_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "average_efficiency_pct": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           }
         },
@@ -145,35 +113,23 @@
         "type": "object",
         "properties": {
           "count": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Scored workouts in the week; null when workouts could not be loaded or the week has no WHOOP data at all (0 means a worn week without workouts)"
+            "description": "Scored workouts in the week; null when workouts could not be loaded or the week has no WHOOP data at all (0 means a worn week without workouts)",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "total_strain": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Sum of per-workout strain. Strain is non-linear (0-21), so this sum is not comparable to day strain."
+            "description": "Sum of per-workout strain. Strain is non-linear (0-21), so this sum is not comparable to day strain.",
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "total_calories_kj": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "sport_breakdown": {
@@ -198,23 +154,15 @@
         "type": "object",
         "properties": {
           "average_daily_strain": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "max_daily_strain": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           }
         },

@@ -76,13 +76,9 @@
         "maximum": 9007199254740991
       },
       "calibrating": {
-        "anyOf": [
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "null"
-          }
+        "type": [
+          "boolean",
+          "null"
         ]
       },
       "truncated": {
@@ -92,25 +88,17 @@
         "type": "object",
         "properties": {
           "mean": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "std_dev": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Sample standard deviation (n-1)"
+            "description": "Sample standard deviation (n-1)",
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -167,13 +155,9 @@
             ]
           },
           "slope": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
+            "type": [
+              "number",
+              "null"
             ]
           },
           "confidence": {
