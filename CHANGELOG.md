@@ -12,8 +12,8 @@ Documentation, tests, CI and dependency updates; the server's own code is unchan
 ### Added
 
 - **README for people who want their own server**: what it does, an
-  illustrated example of Claude combining WHOOP data with Google Calendar and
-  web search (`images/example-workout-plan.svg`), example questions, the tools
+  example screenshot of Claude combining WHOOP data with Google Calendar and
+  web search (`images/example-workout-plan.png`, a mock-up), example questions, the tools
   by topic, privacy, costs and links.
 - **`docs/self-hosting.md`**: a step-by-step first deploy on Railway without
   coding (fork, address and volume, WHOOP developer app, access token,
