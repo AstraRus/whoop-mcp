@@ -28,18 +28,19 @@ calendar, your email, web search and any other connector you've added.
 ## Example: a training week that fits your calendar
 
 <p align="center">
-  <img src="images/example-workout-plan.svg" alt="An example conversation. The user asks Claude to build next week's workout plan from their WHOOP data, goals and calendar. Claude reads the calendar through Google Calendar, reads recovery, sleep and training load through whoop-mcp, searches the web for research, and answers with a day-by-day plan where every line names its source: the calendar, WHOOP data or a cited study." width="760">
+  <img src="images/example-workout-plan.png" alt="A conversation in Claude. The user writes: I'm ready to train hard again. Plan my training for next week. Claude's steps show it read its memory of the user's goals, used Whoop for today, recovery, sleep and training load, listed next week's calendar events and ran three web searches. The answer summarizes recovery, HRV, sleep and training load, lays out a day-by-day plan around the user's calendar, explains it with three cited studies and offers to add the sessions to the calendar." width="760">
 </p>
 
-To answer this one question, Claude looked at your calendar to see when you
-actually have time, read your recovery, sleep and training load from WHOOP,
-and searched for research on how to arrange the week. In the answer, every
-day of the plan says where it came from, so you can check each part. On your
-own, you'd be switching between your calendar, the WHOOP app and a search
-engine to piece this together.
+For one short question, Claude remembered your goals, checked your calendar for
+the week, read your recovery, sleep and training load from WHOOP, and looked up
+research on how to arrange the sessions. The answer quotes your own numbers and
+links the studies it used, so you can see where each part of the plan comes
+from. Doing this by hand would mean going back and forth between your calendar,
+the WHOOP app and a search engine.
 
-The picture is an illustration: the numbers and events are made up, but the
-steps are what Claude does when these connectors are switched on.
+The screenshot is a mock-up: the numbers and events are made up, but the steps
+are what Claude does with this connector, Google Calendar and web search
+switched on.
 
 ## What you can ask
 
